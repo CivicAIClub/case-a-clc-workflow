@@ -1,129 +1,137 @@
-# Case A: CLC Workflow Automation
+# Case A — AutoPlanner (CLC Workflow Automation)
 
-## Client
+| | |
+|---|---|
+| **Client** | Supported Study Hall staff at the Center for Learning and Collaboration (CLC), Pomfret School |
+| **Developers** | Luke Ryan, Jack Weinberg |
+| **Club lead** | Cayden Auyang |
+| **Status** | 🟢 Multi-student UI, per-student Google Docs with By Class / By Day tables, frontend deployed to GitHub Pages |
+| **Live frontend** | https://civicaiclub.github.io/case-a-clc-workflow/ (static page only; it needs a hosted backend, see step 6) |
 
-Supported Study Hall staff at the Center for Learning and Collaboration (CLC).
+## The problem
 
-## Quick Start
+CLC staff spend hours each week logging into individual student Canvas accounts and transcribing assignment data into to-do lists in Google Docs.
 
-TODO: developers fill in once setup is defined.
+## What AutoPlanner does
 
-## Project Structure
+Teachers collect **each student's** Canvas API token, paste them into the UI (one row per student), fetch everyone's assignments in parallel, preview each schedule on a tab, and export a **separate Google Doc per student**. Each Doc has one nested document tab per week; the **Status** and **Notes** columns the teacher edits are preserved across re-runs (keyed by Canvas assignment URL).
 
-TODO: document the code layout as files are added.
+## Stack
 
-## Environment Variables
-
-This project will need secrets for the Canvas LMS API and Google Workspace APIs. Add a `.env.example` file to this folder listing the variable names (no real values). Copy it to `.env` locally and fill in real credentials. `.env` is git-ignored at the repo root — never commit it.
-
-## Team
-
-- Luke Ryan
-- Jack Weinberg
-
-## Links
-
-- [Main repo README](../../README.md)
-- [Developer onboarding guide](../../docs/developer-onboarding.md)
-
-## Solution: AutoPlanner
-
-**Stack:** Python (FastAPI) + Google Apps Script + Vanilla HTML/JS
-
-**Architecture:**
+- **Backend:** Python 3.11+ / FastAPI (`backend/`). Talks to the Canvas REST API and to the Apps Script web app.
+- **Frontend:** one static HTML page, no build step (`frontend/index.html`). Served by the backend locally, or by GitHub Pages.
+- **Google Apps Script** web app that creates/updates the Google Doc via the Docs API (`apps_script/Code.gs`, manifest in `apps_script/appsscript.json`).
 
 ```
-Frontend (index.html, static — can be GitHub Pages)
-  → GET /api/assignments?canvas_token=…  → Canvas (per-student token from the teacher’s UI)
-  → POST /api/generate-doc              → Apps Script → Google Doc (per student)
+Frontend (index.html, static)
+  → GET  /api/assignments?canvas_token=…   → Canvas (per-student token from the teacher's UI)
+  → POST /api/generate-doc                 → Apps Script → Google Doc (per student)
 ```
 
-Teachers collect **each student’s** Canvas API token, paste them into the UI (one row per student), fetch everyone in parallel, preview on **tabs**, and export a **separate Google Doc** per student (stored in the browser by student row).
-
-**Folder structure:**
+## Repository layout
 
 ```
 case-a-clc-workflow/
 ├── backend/
-│   ├── main.py           FastAPI routes
-│   ├── canvas_api.py     Canvas REST client (pagination handled)
-│   ├── processor.py      Data normalization and grouping
-│   ├── google_docs.py    Apps Script HTTP client
-│   ├── requirements.txt
-│   └── .env.example
+│   ├── main.py            FastAPI routes; also serves frontend/ at /
+│   ├── canvas_api.py      Canvas REST client (pagination handled)
+│   ├── processor.py       Data normalization and weekly grouping
+│   ├── google_docs.py     Apps Script HTTP client (retries, redirects)
+│   ├── requirements.txt   Pinned Python dependencies
+│   └── .env.example       Every environment variable, documented (copy to .env)
 ├── frontend/
-│   ├── index.html        Single-page UI (no build step)
-│   └── .nojekyll         Present for GitHub Pages (static files)
-└── apps_script/
-    └── Code.gs           Google Apps Script (copy into script.google.com)
+│   ├── index.html         Single-page UI (no build step)
+│   └── .nojekyll          Keeps GitHub Pages from running Jekyll
+├── apps_script/
+│   ├── Code.gs            Google Apps Script web app (paste into script.google.com)
+│   └── appsscript.json    Apps Script manifest (Docs API advanced service + scopes)
+├── .cursor/rules/         Committed Cursor rules for this repo (nothing to paste into your IDE)
+└── .github/workflows/     Deploys frontend/ to GitHub Pages on every push to main
 ```
 
-## Setup
+## Setup from a fresh clone
 
 ### Prerequisites
 
-- Python 3.11+
-- A Canvas LMS student account with API token access
+- Python 3.11 or newer (`python3 --version`)
 - A Google account to deploy the Apps Script
+- A Canvas LMS account with API-token access (each student generates their own; see "Getting a Canvas API token" below)
 
-### Step 1 — Get your Canvas API Token
-
-1. Log into Canvas at your school's URL
-2. Click your profile picture (top-right) → **Settings**
-3. Scroll to **Approved Integrations** → click **+ New Access Token**
-4. Give it a purpose (e.g. "AutoPlanner") — leave expiration blank for dev use
-5. Copy the token (you will not see it again)
-
-### Step 2 — Deploy the Google Apps Script
-
-1. Go to [script.google.com](https://script.google.com) → click **New project**
-2. Delete the default `myFunction` and paste the entire contents of `apps_script/Code.gs`
-3. Click **Deploy** → **New deployment**
-4. Type: **Web app**
-5. Execute as: **Me**
-6. Who has access: **Anyone**
-7. Click **Deploy** → authorize when prompted → copy the **Web App URL**
-
-### Step 3 — Configure the backend
+### 1. Clone
 
 ```bash
-cd projects/case-a-clc-workflow/backend
-cp .env.example .env
-# Open .env and fill in values:
-#   APPS_SCRIPT_URL    — required (Web App URL from Step 2)
-#   TIMEZONE           — e.g. America/New_York
-#   CANVAS_API_TOKEN   — optional if the UI always sends each student’s token on GET /api/assignments
-#   CANVAS_BASE_URL    — optional for the same reason (UI sends canvas_base_url query param)
+git clone https://github.com/CivicAIClub/case-a-clc-workflow.git
+cd case-a-clc-workflow
 ```
 
-### Step 4 — Install dependencies and run the backend
+### 2. Deploy the Google Apps Script
+
+1. Go to [script.google.com](https://script.google.com) → **New project**.
+2. Delete the default `myFunction` and paste the entire contents of `apps_script/Code.gs`.
+3. **Services (+)** → add **Google Docs API** (or paste `apps_script/appsscript.json` into the manifest via Project Settings → "Show appsscript.json").
+4. **Deploy → New deployment** → type **Web app** → Execute as **Me** → Who has access **Anyone** → **Deploy**, authorize, and copy the **Web App URL** (ends in `/exec`).
+
+After any later change to `Code.gs`, redeploy a **new version** (Manage deployments → ✏️ → New version). The URL stays the same.
+
+### 3. Configure the backend
 
 ```bash
-cd projects/case-a-clc-workflow/backend
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+cp backend/.env.example backend/.env
+```
+
+Open `backend/.env` and fill in:
+
+| Variable | Required | What it is |
+|---|---|---|
+| `APPS_SCRIPT_URL` | yes | Web App URL from step 2 |
+| `TIMEZONE` | yes | IANA timezone for due dates and week grouping, e.g. `America/New_York` |
+| `CANVAS_API_TOKEN` | no | Fallback token, used only if the UI does not send a per-student token |
+| `CANVAS_BASE_URL` | no | Fallback Canvas URL (the UI sends `canvas_base_url` too) |
+
+`.env` is gitignored. Never commit it.
+
+### 4. Install and run the backend
+
+Run these **from the repo root** (the app is imported as `backend.main`):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r backend/requirements.txt
 uvicorn backend.main:app --reload
 ```
 
-The API will be available at `http://localhost:8000`.
-Check `http://localhost:8000/health` — should return `{"status":"ok"}`.
+Check `http://127.0.0.1:8000/health` → `{"status":"ok"}`.
 
-### Step 5 — Open the frontend (local)
+### 5. Use the app locally
 
-With uvicorn running, open **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)** so the UI and API share one origin (leave **AutoPlanner API URL** blank).
+Open **http://127.0.0.1:8000/**. The backend serves the frontend on the same origin, so leave **AutoPlanner API URL** blank. Set your school's **Canvas base URL** (e.g. `https://pomfret.instructure.com`), click **+ Add student**, paste each student's Canvas API token, then **Fetch all students**. Review each schedule on its tab and use **Create / Update Google Doc** per student.
 
-Add students with **+ Add student**, paste each **Canvas API token**, set the shared **Canvas base URL**, then **Fetch all students**. Use the tabs to review each schedule; **Create / Update Google Doc** is per student.
+Tokens and Doc IDs are stored in the browser's localStorage, not on the server.
 
-### Step 6 — Public site (GitHub Pages) + hosted API
+### 6. Public site (GitHub Pages) + hosted API
 
-The UI in `frontend/` is static only. GitHub Pages cannot run Python.
+The frontend is static; GitHub Pages cannot run Python.
 
-1. **Deploy the FastAPI app** somewhere with HTTPS (Render, Railway, Fly.io, your school server, etc.). Set `APPS_SCRIPT_URL` (and optional defaults) in that host’s environment. CORS is already open (`allow_origins=["*"]`) for browser access.
-2. **GitHub Actions:** `.github/workflows/deploy-case-a-pages.yml` uploads `projects/case-a-clc-workflow/frontend` to the repo’s GitHub Pages environment on pushes to `main` (or run **workflow_dispatch** manually). After deploy, open your Pages URL, set **AutoPlanner API URL** to your FastAPI base (no trailing slash required), then use the app as usual.
+1. **Frontend:** `.github/workflows/deploy-pages.yml` publishes `frontend/` to the `gh-pages` branch on every push to `main` (or run it manually from the Actions tab). The site is at https://civicaiclub.github.io/case-a-clc-workflow/.
+2. **Backend:** deploy the FastAPI app somewhere with HTTPS (Render, Railway, Fly.io, a school server). Set `APPS_SCRIPT_URL` and `TIMEZONE` in that host's environment. CORS is already open (`allow_origins=["*"]`).
+3. On the public site, set **AutoPlanner API URL** to your backend's base URL (no trailing slash required). Everything else works as in step 5.
 
-**Note:** This repo may also deploy other projects to the same `github-pages` environment. Only the most recent Pages deploy wins; coordinate with the team or trigger the workflow you need.
+## Getting a Canvas API token (for each student)
 
-## Status
+1. Log into Canvas → profile picture → **Settings**.
+2. Scroll to **Approved Integrations** → **+ New Access Token**.
+3. Purpose: "AutoPlanner"; leave expiry blank for dev use.
+4. Copy the token immediately (Canvas will not show it again) and paste it into the student's row in AutoPlanner.
 
-🟢 Multi-student UI, per-student Docs, and optional GitHub Pages deploy
+## Working on this repo
+
+- Branch from `main` as `feature/<short-description>`, `fix/<short-description>`, or `chore/<short-description>` (lowercase, hyphens).
+- Every change goes through a pull request with at least one approval. `main` cannot be pushed to directly.
+- Never commit secrets. `.env` is ignored; `.env.example` holds only placeholders.
+- Cursor rules for this project are committed in `.cursor/rules/`. You do not need to paste anything into your IDE settings.
+- The full Git walkthrough for beginners is the club's **[Developer Onboarding Guide](https://github.com/CivicAIClub/docs/blob/main/developer-onboarding.md)**.
+
+## History
+
+This repository was split out of the club monorepo (`CivicAIClub/Civic-AI-Github-Repository`, `projects/case-a-clc-workflow/`) on 2026-09-18 with full history preserved.

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Environment & secrets (keep .env.example)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Editors / AI tools
+.vscode/settings.json
+.idea/
+.claude/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / build output
+*.log
+_publish/

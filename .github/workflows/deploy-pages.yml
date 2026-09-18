@@ -1,0 +1,44 @@
+name: Deploy frontend to GitHub Pages
+
+# Publishes the static AutoPlanner frontend to the gh-pages branch of this
+# repo. Live at https://civicaiclub.github.io/case-a-clc-workflow/
+# The Python backend is NOT deployed here (see README step 6).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gh-pages-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage static site
+        run: |
+          set -eu
+          mkdir -p _publish
+          cp -R frontend/. _publish/
+          # SPA fallback for refreshes; harmless for this single-page app.
+          cp _publish/index.html _publish/404.html
+          : > _publish/.nojekyll
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./_publish
+          enable_jekyll: false
+          commit_message: "deploy: ${{ github.sha }}"

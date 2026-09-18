@@ -1,0 +1,31 @@
+---
+description: Project context for Case A AutoPlanner — client, architecture, stack, constraints, and definition of done
+alwaysApply: true
+---
+
+# Case A — AutoPlanner (CLC Workflow Automation)
+
+## Client and problem
+- **Client:** Supported Study Hall staff at the Center for Learning and Collaboration (CLC), Pomfret School.
+- **Problem:** staff spend hours each week logging into individual student Canvas accounts and transcribing assignment data into to-do lists in Google Docs.
+- **Goal:** automate extraction from Canvas LMS and generate one Google Doc per student that advisors can reference without manual entry.
+
+## Team
+- Developers: Luke Ryan, Jack Weinberg. Club lead: Cayden Auyang.
+
+## Stack and architecture
+- `backend/` — Python 3.11+ FastAPI. `main.py` routes (`GET /api/assignments`, `POST /api/generate-doc`, `GET /health`) and serves `frontend/` at `/`. `canvas_api.py` Canvas REST client with pagination. `processor.py` normalizes and groups assignments by week. `google_docs.py` posts to the Apps Script web app with retries.
+- `frontend/index.html` — single static page, vanilla JS, no build step. State (student rows, tokens, Doc IDs, API URL) lives in the browser's localStorage. The UI label for the backend address is exactly "AutoPlanner API URL".
+- `apps_script/Code.gs` — Google Apps Script web app. Creates/updates a Google Doc per student using the **Docs API `batchUpdate`** with one nested document tab per week under a "CLC Planner" parent tab. Each week tab has two stacked tables ("By Class" and "By Day") with editable Status and Notes columns that must be preserved across re-runs (keyed by Canvas assignment URL). `apps_script/appsscript.json` enables the Docs advanced service.
+- Run the backend from the **repo root**: `uvicorn backend.main:app --reload`. Config comes from `backend/.env` (`APPS_SCRIPT_URL`, `TIMEZONE`, optional `CANVAS_API_TOKEN`, `CANVAS_BASE_URL`).
+- Deploy: `.github/workflows/deploy-pages.yml` publishes `frontend/` to GitHub Pages at https://civicaiclub.github.io/case-a-clc-workflow/ on push to `main`. The backend must be hosted separately (no Python on Pages).
+
+## Constraints
+- Per-student Canvas tokens are entered by the teacher in the UI and sent per request; do not add server-side storage of student tokens.
+- Do not commit `backend/.env`. Add any new environment variable to `backend/.env.example` with a comment and to the README table.
+- Keep the frontend a single dependency-free HTML file; do not introduce a bundler.
+- Docs API quota: batch writes (see `BATCH_CHUNK` in `Code.gs`) and reuse the existing `documentId` rather than creating new Docs.
+- After editing `Code.gs`, remind the developer to redeploy a new Apps Script version.
+
+## Definition of done (current phase)
+- A teacher can add students, fetch assignments, and create or update each student's Doc; Status/Notes edits survive a re-run; the Pages site works against a hosted backend.

@@ -1,0 +1,23 @@
+---
+description: Civic AI Club workflow rules that apply to every conversation in this repository (branching, pull requests, secrets, where docs live)
+alwaysApply: true
+---
+
+# Civic AI Club — how we work in this repo
+
+This repository is **standalone**: `CivicAIClub/case-a-clc-workflow`. All paths are relative to the repo root. There is no `projects/` folder anymore; the old monorepo (`Civic-AI-Github-Repository`) is archived and must not be edited.
+
+The developers are high school students learning collaborative coding. Prefer clarity over cleverness. If you generate code the developer cannot explain, say so and summarize what it does in plain English.
+
+## Git rules (non-negotiable)
+
+- **Never push to `main`.** Always work on a branch and open a pull request. Merging requires one approving review.
+- **Branch names:** `feature/<short-description>`, `fix/<short-description>`, or `chore/<short-description>`. Lowercase, hyphens, no spaces. The old `case-a/` prefix is retired.
+- **Never commit secrets.** No API keys, tokens, or `.env` files. `backend/.env` is gitignored; `backend/.env.example` holds placeholders only. If a developer pastes a real credential into a file, stop and tell them.
+- Small, frequent commits with plain-English messages ("Add Status column to By Day table", not "stuff").
+- Pull requests use the template in `.github/pull_request_template.md`: what changed, how it was tested, screenshots for UI.
+
+## Where things live
+
+- Beginner Git walkthrough, common fixes, and the club-wide repository list: **https://github.com/CivicAIClub/docs/blob/main/developer-onboarding.md**. Reference it for any Git, branching, PR, or merge-conflict question instead of improvising.
+- Project context, architecture, and setup for this repo: `README.md` and `.cursor/rules/case-a-autoplanner.mdc`.
