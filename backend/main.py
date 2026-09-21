@@ -6,12 +6,11 @@ Routes:
   POST /api/generate-doc    Call Apps Script to create/update a Google Doc (nested document tabs per week)
   GET  /health              Health check
 
-Run locally:
-  cd projects/case-a-clc-workflow
+Run locally (from the repo root, so `backend` resolves as a package):
   uvicorn backend.main:app --reload
   Open http://127.0.0.1:8000/ — the UI is served from the same server as the API.
 
-You can still open frontend/index.html directly; set “AutoPlanner backend URL” to http://127.0.0.1:8000 if fetch fails.
+You can still open frontend/index.html directly; set “AutoPlanner API URL” to http://127.0.0.1:8000 if fetch fails.
 
 The Canvas API token, Canvas base URL, Apps Script URL, and timezone are all
 read from a .env file in the backend/ directory. Copy .env.example to .env
