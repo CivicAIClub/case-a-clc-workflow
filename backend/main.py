@@ -10,7 +10,8 @@ Run locally (from the repo root, so `backend` resolves as a package):
   uvicorn backend.main:app --reload
   Open http://127.0.0.1:8000/ — the UI is served from the same server as the API.
 
-You can still open frontend/index.html directly; set “AutoPlanner API URL” to http://127.0.0.1:8000 if fetch fails.
+Only the origins in ALLOWED_ORIGINS (default: the GitHub Pages site and localhost:8000) may call the API
+from a browser, so open the UI via the server URL rather than as a local file.
 
 The Canvas API token, Canvas base URL, Apps Script URL, and timezone are all
 read from a .env file in the backend/ directory. Copy .env.example to .env
@@ -38,7 +39,7 @@ from typing import Any, Optional
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -59,18 +60,30 @@ load_dotenv(Path(__file__).parent / ".env", override=True)
 # Everything below attaches "routes" to it: web addresses it knows how to answer.
 app = FastAPI(title="AutoPlanner API", version="1.0.0")
 
-# Allow all origins for local development.
-# In production, restrict to your specific frontend origin.
 # Browsers normally refuse to let a web page on one website talk to a server on a different
-# website. This setting (called CORS) tells browsers "any website may call this server".
-# It is needed because the public page lives on GitHub Pages while this server lives elsewhere.
-# Only reading (GET) and sending (POST) requests are allowed.
+# website. This setting (called CORS) lists the websites whose pages ARE allowed to call this
+# server: by default, the club's public page on GitHub Pages and this server's own address on
+# the computer running it. Any other website's page is turned away by the browser.
+# To allow another address, list it in ALLOWED_ORIGINS in the settings file, separated by commas.
+# (If ALLOWED_ORIGINS is missing or left blank, the default list is used.)
+# (CORS only controls web pages in a browser. It does not stop other programs from calling the
+# server, so a publicly hosted server still needs its own access check.)
+# Only reading (GET) and sending (POST) requests are allowed, and the only extra piece of
+# information a page may attach is the student's Canvas token (the X-Canvas-Token header).
+_DEFAULT_ALLOWED_ORIGINS = (
+    "https://civicaiclub.github.io,http://127.0.0.1:8000,http://localhost:8000"
+)
+ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in (os.getenv("ALLOWED_ORIGINS") or _DEFAULT_ALLOWED_ORIGINS).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "X-Canvas-Token"],
 )
 
 
@@ -101,14 +114,16 @@ def _get_env(key: str) -> str:
 # It is given:
 #   - weeks_ahead: how many calendar weeks to include, counting this week (1 to 12, default 2)
 #   - canvas_token: that student's Canvas token (a long secret password the student made in
-#     Canvas that lets this tool read their classes and assignments on their behalf)
+#     Canvas that lets this tool read their classes and assignments on their behalf). It arrives
+#     in a request "header" (a hidden label on the request) called X-Canvas-Token, not in the
+#     web address, because web addresses are often saved in server logs where others could see them.
 #   - canvas_base_url: the school's Canvas web address, e.g. https://yourschool.instructure.com
 # It gives back the student's schedule, grouped by week and then by day, plus the student's name
 # and their Canvas ID number.
 @app.get("/api/assignments", summary="Fetch and process Canvas assignments")
 async def get_assignments(
     weeks_ahead: int = Query(2, ge=1, le=12, description="Calendar weeks from this Monday"),
-    canvas_token: Optional[str] = None,
+    canvas_token: Optional[str] = Header(default=None, alias="X-Canvas-Token"),
     canvas_base_url: Optional[str] = None,
 ) -> dict[str, Any]:
     """Fetch all upcoming assignments from Canvas, normalize them, and return
@@ -116,10 +131,13 @@ async def get_assignments(
 
     Query params:
       weeks_ahead (int, default 2): how many weeks forward to include
-      canvas_token (str, optional): Canvas API token — overrides CANVAS_API_TOKEN in .env
       canvas_base_url (str, optional): Canvas base URL — overrides CANVAS_BASE_URL in .env
 
-    Credentials passed as query params take priority over .env so the frontend
+    Headers:
+      X-Canvas-Token (str, optional): Canvas API token — overrides CANVAS_API_TOKEN in .env
+      (sent as a header, not a query param, so it doesn't end up in access logs)
+
+    Values sent by the frontend take priority over .env so the frontend
     UI works without any .env Canvas config.
     """
     # Use the token and Canvas address the web page sent. If the page did not send them,

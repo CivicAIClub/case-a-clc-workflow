@@ -1534,10 +1534,13 @@
       });
 
       const tasks = withToken.map(async (r) => {
-        const q = new URLSearchParams(qBase);
-        q.set("canvas_token", r.token.trim());
         try {
-          const res = await fetch(`${apiBase()}/api/assignments?${q}`, { method: "GET" });
+          // The student's Canvas token goes in a request header, not in the web address,
+          // so it doesn't get written into server logs.
+          const res = await fetch(`${apiBase()}/api/assignments?${qBase}`, {
+            method: "GET",
+            headers: { "X-Canvas-Token": r.token.trim() },
+          });
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
             throw new Error(formatApiDetail(body) || `HTTP ${res.status}`);
