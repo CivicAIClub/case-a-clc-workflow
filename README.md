@@ -24,7 +24,7 @@ Teachers collect **each student's** Canvas API token, paste them into the UI (on
 
 ```
 Frontend (index.html, static)
-  → GET  /api/assignments?canvas_token=…   → Canvas (per-student token from the teacher's UI)
+  → GET  /api/assignments (X-Canvas-Token header) → Canvas (per-student token from the teacher's UI)
   → POST /api/generate-doc                 → Apps Script → Google Doc (per student)
 ```
 
@@ -114,7 +114,7 @@ Tokens and Doc IDs are stored in the browser's localStorage, not on the server.
 The frontend is static; GitHub Pages cannot run Python.
 
 1. **Frontend:** `.github/workflows/deploy-pages.yml` publishes `frontend/` to the `gh-pages` branch on every push to `main` (or run it manually from the Actions tab). The site is at https://civicaiclub.github.io/case-a-clc-workflow/.
-2. **Backend:** deploy the FastAPI app somewhere with HTTPS (Render, Railway, Fly.io, a school server). Set `APPS_SCRIPT_URL` and `TIMEZONE` in that host's environment. CORS is already open (`allow_origins=["*"]`).
+2. **Backend:** deploy the FastAPI app somewhere with HTTPS (Render, Railway, Fly.io, a school server). Set `APPS_SCRIPT_URL` and `TIMEZONE` in that host's environment. Browsers may only call it from the origins in `ALLOWED_ORIGINS` (default: `https://civicaiclub.github.io`, `http://127.0.0.1:8000`, `http://localhost:8000`); add others there, comma-separated. CORS doesn't stop non-browser clients, so a publicly hosted backend also needs its own access check.
 3. On the public site, set **AutoPlanner API URL** to your backend's base URL (no trailing slash required). Everything else works as in step 5.
 
 ## Getting a Canvas API token (for each student)
