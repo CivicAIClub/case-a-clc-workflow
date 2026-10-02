@@ -205,11 +205,18 @@ def group_by_weekday(
         if a["day"] in buckets:
             buckets[a["day"]].append(a)
 
-    # Sort each day's assignments: earliest due first, then alphabetically
-    # Note: every assignment in one day's box has the same "days until due" number, so in
-    # practice this puts each day's assignments in alphabetical order by name, not by time.
+    # Sort each day's assignments by the time they are due (for example 8:00 AM before
+    # 11:59 PM). If two are due at the exact same time, put them in alphabetical order.
+    # The due time is text like "9:00 PM", so it is turned back into a real time first;
+    # comparing the text itself would wrongly put "10:00 AM" before "9:00 AM".
     for day in WEEKDAY_NAMES:
-        buckets[day].sort(key=lambda x: (x["days_until_due"], x["assignment"]))
+        buckets[day].sort(
+            key=lambda x: (
+                x["days_until_due"],
+                datetime.strptime(x["due_time"], "%I:%M %p").time(),
+                x["assignment"],
+            )
+        )
 
     # Give back the seven days in order, Monday first, each with its list of assignments.
     return [{"day": day, "assignments": buckets[day]} for day in WEEKDAY_NAMES]
