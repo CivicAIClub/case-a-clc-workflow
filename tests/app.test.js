@@ -48,10 +48,11 @@ function setup(extraProps) {
     if (badTokens.has(token) || !CANVAS[token]) throw authError();
     return CANVAS[token];
   };
-  ctx.fetchStudentSchedule_ = (token) => {
+  ctx.fetchStudentSchedule_ = (token, base, weeks, now, exclude) => {
     if (badTokens.has(token) || !CANVAS[token]) throw authError();
+    ctx.lastExclude = exclude;
     return {
-      weeks: {}, total_assignments: 3, generated_at: '2026-10-04T19:00:00',
+      weeks: {}, total_assignments: 3, generated_at: '2026-10-04T19:00:00', courses: ['Biology'],
       student_full_name: CANVAS[token].name, canvas_user_id: CANVAS[token].id,
     };
   };
@@ -317,25 +318,26 @@ test('scheduleTestRun adds a one-off run that removes itself; the daily triggers
 });
 
 test('checkSetup and selfTest never log a token; selfTest deletes TEST_CANVAS_TOKEN unless asked to keep it', () => {
-  const t = setup({ TEST_CANVAS_TOKEN: TOKEN_A });
+  const t = setup({ TEST_CANVAS_TOKEN: TOKEN_A, COURSE_EXCLUDE: 'advisory, dorm' });
   t.svc.setActive(OWNER);
   t.ctx.checkSetup();
-  // Skip the Doc steps: pretend the Doc has no assignment rows.
+  // Skip the Doc steps: pretend the Doc has no week tabs yet.
   t.ctx.writeDocWithRecovery_ = () => 'DOC-SELF';
   t.ctx.assertDocIsInFolder_ = () => {};
-  t.ctx.findFirstAssignmentRow_ = () => null;
+  t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [] }] });
   t.ctx.selfTestKeepToken();
   assert.strictEqual(t.svc.props.TEST_CANVAS_TOKEN, TOKEN_A);
   t.ctx.selfTest();
   assert.strictEqual(t.svc.props.TEST_CANVAS_TOKEN, undefined);
   const logText = t.sb.logs.join('\n');
   assert.ok(!logText.includes(TOKEN_A), 'token never logged');
-  assert.match(logText, /PASS Canvas: fetch your assignments: Avery Example, 3 assignments/);
+  assert.match(logText, /COURSE_EXCLUDE: advisory, dorm/);
+  assert.match(logText, /PASS Canvas: fetch your assignments and classes: Avery Example, 3 assignments/);
+  assert.match(logText, /FAIL Every class has its own By Class table in every week: (No week tabs found|Found 0 week tabs)/);
+  assert.match(logText, /selfTest: FAILED/);
   t.svc.props.TEST_CANVAS_TOKEN = 'NOT-A-TOKEN';
   t.ctx.selfTest();
-  assert.match(t.sb.logs.join('\n'), /FAIL Canvas: fetch your assignments: Canvas didn't accept TEST_CANVAS_TOKEN/);
-  assert.match(logText, /FAIL Doc: type a test Status and Note.*No assignments/);
-  assert.match(logText, /selfTest: FAILED/);
+  assert.match(t.sb.logs.join('\n'), /FAIL Canvas: fetch your assignments and classes: Canvas didn't accept TEST_CANVAS_TOKEN/);
 });
 
 test('writeStatusAndNote_ edits the Notes cell before the Status cell and keeps the cell newline', () => {

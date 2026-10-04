@@ -23,11 +23,19 @@
 // How long to wait before trying a busy request one more time.
 var CANVAS_RETRY_WAIT_MS = 2000;
 
-// Get one student's planner: their assignments sorted into weeks, plus their name and
-// Canvas ID number. `now` is optional (tests pass a fixed time).
-function fetchStudentSchedule_(token, baseUrl, weeksAhead, now) {
+// Get one student's planner: their assignments sorted into weeks, plus their name, their
+// Canvas ID number, and `courses` (every current class, A to Z, so the Doc can show a table for
+// each one). Classes whose name contains any of `excludeKeywords` (e.g. "advisory") are left
+// out completely. `now` is optional (tests pass a fixed time).
+function fetchStudentSchedule_(token, baseUrl, weeksAhead, now, excludeKeywords) {
   var data = fetchCanvasData_(token, baseUrl, true);
-  var schedule = buildWeeklySchedule_(data.pairs, SCHEDULE_TIME_ZONE, weeksAhead, now);
+  var keep = function (name) { return !canvasCourseExcluded_(name, excludeKeywords); };
+  var pairs = data.pairs.filter(function (pair) { return keep(pair[1]); });
+  var schedule = buildWeeklySchedule_(pairs, SCHEDULE_TIME_ZONE, weeksAhead, now);
+  schedule.courses = data.courseNames.filter(keep).sort(function (a, b) {
+    var x = a.toLowerCase(), y = b.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
   schedule.student_full_name = canvasDisplayName_(data.profile);
   // The Canvas ID lets the web page find the same student's Doc again next time.
   if (data.profile.id !== null && data.profile.id !== undefined) {
@@ -50,7 +58,16 @@ function fetchCanvasAssignmentPairs_(token, baseUrl) {
   return fetchCanvasData_(token, baseUrl, false).pairs;
 }
 
-// The main "gather everything" step. Gives back { profile, pairs }.
+// True if the class name contains one of the keywords (not case-sensitive).
+function canvasCourseExcluded_(name, keywords) {
+  var lower = String(name || '').toLowerCase();
+  return (keywords || []).some(function (k) {
+    var key = String(k || '').trim().toLowerCase();
+    return key && lower.indexOf(key) !== -1;
+  });
+}
+
+// The main "gather everything" step. Gives back { profile, pairs, courseNames }.
 // (profile is only fetched when includeProfile is true.)
 function fetchCanvasData_(token, baseUrl, includeProfile) {
   var client = canvasClient_(token, baseUrl);
@@ -119,7 +136,11 @@ function fetchCanvasData_(token, baseUrl, includeProfile) {
       pairs.push([assignment, c.name]);
     });
   });
-  return { profile: profile, pairs: pairs };
+  var courseNames = [];
+  classes.forEach(function (c) {
+    if (!c.skipped && courseNames.indexOf(c.name) === -1) courseNames.push(c.name);
+  });
+  return { profile: profile, pairs: pairs, courseNames: courseNames };
 }
 
 // Pick the student's name: full name, else short name, else "Student".

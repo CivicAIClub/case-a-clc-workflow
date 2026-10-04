@@ -18,8 +18,8 @@ CLC staff spend hours each week logging into individual student Canvas accounts 
 
 CLC staff open one web page, signed in with their Pomfret Google account. They add each student once by pasting the student's Canvas access token. AutoPlanner then keeps **one Google Doc per student** in a shared Drive folder.
 
-- Each Doc has one tab per week, with a **By Class** and a **By Day** table.
-- The **Status** and **Notes** columns staff type in are kept across updates, keyed by the assignment's Canvas link.
+- Each Doc has one tab per week: a **By Class** table for every class the student takes (including classes with nothing due), then a **By Day** table. Every table uses the same full-width layout, written down at the top of `apps_script/Code.gs`.
+- Staff type **Status** (Not started, In progress or Complete, as plain text) and **Notes**. Both are kept across updates, keyed by the assignment's Canvas link.
 - Updates run automatically every day at about 7 pm and about midnight (New York time), or on demand from the page.
 
 ## How it works
@@ -85,6 +85,7 @@ Only needed for a brand-new project, for example to move AutoPlanner to a CLC st
    | `ALLOWED_USERS` | yes | Comma-separated Pomfret emails allowed to use the page. Nobody else gets in. |
    | `DOCS_FOLDER_ID` | yes | The shared folder's ID or URL. New Docs are created there, and only Docs inside it can be updated. |
    | `CANVAS_BASE_URL` | no | Defaults to `https://pomfret.instructure.com`. |
+   | `COURSE_EXCLUDE` | no | Comma-separated keywords, such as `advisory, dorm`. Classes whose name contains one are left out of the Docs entirely. Empty: every class is shown. |
    | `TEST_CANVAS_TOKEN` | only for `selfTest` | Your own Canvas token. `selfTest` deletes it when it finishes; `selfTestKeepToken` keeps it. |
 
    Properties named `student.*`, `token.*`, `busy.*`, `run.*` and `trigger.*` are written by the app. Don't edit them by hand.

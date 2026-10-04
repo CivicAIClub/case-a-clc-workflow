@@ -9,7 +9,7 @@ A Doc update takes about 2 minutes, so the script starts one early and talks whi
 - [ ] **Chrome profile signed in only to the presenter's Pomfret account.** Other Google accounts in the same window can stop the page from loading.
 - [ ] Open AutoPlanner in that profile. "Signed in as …" shows the right email, and "Automatic updates run every day at about 7 pm and about midnight" is shown.
 - [ ] The demo student (your own Canvas account) is on the list, and **Last update** shows last night's automatic run. That's your proof the schedule works.
-- [ ] In the demo student's Doc, type a Status ("🟡 In progress") and a Note on one assignment **before** the meeting.
+- [ ] In the demo student's Doc, type a Status ("In progress") and a Note on one assignment **before** the meeting.
 - [ ] Open tabs, in order: AutoPlanner, the Drive folder **AutoPlanner – CLC Student Planners**, the demo Doc.
 - [ ] Print the [quick start](CLC-quick-start.md) for each staff member and a stack of [student token guides](student-token-guide.md).
 - [ ] Notifications off, browser zoomed to 125%, no other tabs. Never paste a token while the projector is on.
@@ -29,7 +29,7 @@ A Doc update takes about 2 minutes, so the script starts one early and talks whi
 "Every day at about 7 pm and midnight, AutoPlanner updates every Doc on Google's servers, so no computer needs to be on. Here's last night's run. If a student's token stops working, it says so here and on their row, in plain English. The other students still update."
 
 **3:30–4:45 The Doc** (once the row shows ✅, Driver clicks **Open their Doc ↗**)
-Open the **Document tabs** sidebar: one tab per week, a **By Class** table and a **By Day** table. Point at the Status and Note typed before the meeting: "That update just refreshed everything from Canvas, and your Status and Notes are still here."
+Open the **Document tabs** sidebar: one tab per week. "Every class gets its own table, even when nothing is due, and By Day shows the same work day by day." Point at the reminder line at the top, then at the Status and Note typed before the meeting: "You type Not started, In progress, or Complete, and any notes you like. That update just refreshed everything from Canvas, and your Status and Notes are still here."
 
 **4:45–5:30 Three things to know** (Presenter)
 1. "The Docs live in this Drive folder, already shared with all of you. Keep them in it."

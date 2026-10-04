@@ -14,6 +14,8 @@
  *   ALLOWED_USERS       comma-separated Pomfret emails who may use the page (required)
  *   DOCS_FOLDER_ID      shared Drive folder for the Docs (required for the CLC setup)
  *   CANVAS_BASE_URL     optional; default https://pomfret.instructure.com
+ *   COURSE_EXCLUDE      optional; comma-separated keywords. Classes whose name contains one
+ *                       (e.g. advisory, dorm) are left out of the Docs entirely.
  *   TEST_CANVAS_TOKEN   only while running selfTest
  *   student.<id>, token.<id>, run.current, run.last   written by the app; don't edit by hand
  * Tokens live only in token.<id>. They are never sent to the page, logged, or put in a message.
@@ -319,6 +321,14 @@ function cleanLabel_(label) {
   return String(label || '').trim().substring(0, 60);
 }
 
+/** Keywords from COURSE_EXCLUDE (e.g. "advisory, dorm"); classes containing one are hidden. */
+function courseExcludeKeywords_() {
+  return getScriptProperty_('COURSE_EXCLUDE')
+    .split(',')
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return s; });
+}
+
 function canvasBaseUrl_() {
   return getScriptProperty_('CANVAS_BASE_URL') || APP_DEFAULT_CANVAS_BASE_URL;
 }
@@ -393,7 +403,7 @@ function updateOneStudent_(id) {
   var token = getToken_(id);
   var result;
   try {
-    var schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD);
+    var schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD, undefined, courseExcludeKeywords_());
     if (
       student.canvasUserId !== undefined && student.canvasUserId !== null &&
       schedule.canvas_user_id !== undefined &&
@@ -694,6 +704,8 @@ function checkSetup() {
       : 'FIX  ALLOWED_USERS is empty: nobody can open the page.'
   );
   Logger.log('OK   Canvas: ' + canvasBaseUrl_());
+  var excluded = courseExcludeKeywords_();
+  Logger.log('     COURSE_EXCLUDE: ' + (excluded.length ? excluded.join(', ') : '(none: every class is shown)'));
   var daily = dailyTriggerCount_();
   Logger.log(
     daily === APP_DAILY_HOURS.length
@@ -729,6 +741,10 @@ function runSelfTest_(keepToken) {
   function check(name, fn) {
     try {
       var detail = fn();
+      if (detail && detail.skip) {
+        Logger.log('SKIP ' + name + ': ' + detail.skip);
+        return true;
+      }
       results.push(true);
       Logger.log('PASS ' + name + (detail ? ': ' + detail : ''));
       return true;
@@ -739,8 +755,14 @@ function runSelfTest_(keepToken) {
     }
   }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
-  var schedule, docId, target, stamp;
-  var testStatus, testNote;
+  var schedule, docId, target, testStatus, testNote, doc, firstSeconds;
+  // Only the weeks AutoPlanner just wrote; tabs from earlier weeks are left as they were.
+  var currentWeeks = function () {
+    var titles = Object.keys(schedule.weeks || {}).map(function (k) {
+      return buildWeekTabTitle_(k, schedule.weeks[k].week_label);
+    });
+    return weekTabsOf_(doc).filter(function (w) { return titles.indexOf(w.title) !== -1; });
+  };
 
   var ok =
     check('TEST_CANVAS_TOKEN is set', function () {
@@ -754,32 +776,112 @@ function runSelfTest_(keepToken) {
     check('You are in ALLOWED_USERS', function () {
       if (!isAllowedUser_(requireOwner_())) throw new Error('Add your email to ALLOWED_USERS.');
     }) &&
-    check('Canvas: fetch your assignments', function () {
+    check('Canvas: fetch your assignments and classes', function () {
       try {
-        schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD);
+        schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD, undefined, courseExcludeKeywords_());
       } catch (err) {
         if (err.canvasKind !== 'auth') throw err;
         throw new Error("Canvas didn't accept TEST_CANVAS_TOKEN. Check that the property holds a working token.");
       }
-      return schedule.student_full_name + ', ' + schedule.total_assignments + ' assignments in the next ' + APP_WEEKS_AHEAD + ' weeks';
+      return schedule.student_full_name + ', ' + schedule.total_assignments + ' assignments in the next ' +
+        APP_WEEKS_AHEAD + ' weeks, ' + schedule.courses.length + ' classes: ' + schedule.courses.join('; ');
     }) &&
     check('Doc: create or update yours in the shared folder', function () {
       var reused = findReusableDoc_(schedule.student_full_name, null);
+      var t0 = Date.now();
       docId = writeDocWithRecovery_({ id: 'selftest', docId: reused }, schedule);
+      firstSeconds = Math.round((Date.now() - t0) / 1000);
       assertDocIsInFolder_(docId, getDocsFolder_());
-      return (reused ? 'reused' : 'created') + ' https://docs.google.com/document/d/' + docId + '/edit';
+      doc = docsGet_(docId);
+      return (reused ? 'reused' : 'created') + ' in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
     }) &&
-    check('Doc: type a test Status and Note into the By Class table', function () {
+    check('Every class has its own By Class table in every week', function () {
+      var weeks = currentWeeks();
+      if (weeks.length !== Object.keys(schedule.weeks || {}).length) {
+        throw new Error('Found ' + weeks.length + ' week tabs for the ' + Object.keys(schedule.weeks || {}).length + ' weeks with work due.');
+      }
+      if (!weeks.length) throw new Error('No week tabs found.');
+      weeks.forEach(function (w) {
+        var titles = tablesOfTab_(w).filter(function (t) { return t.kind === 'By Class'; }).map(function (t) { return t.title; });
+        var expected = plannerCourseList_(schedule);
+        if (titles.join('|') !== expected.join('|')) {
+          throw new Error('"' + w.title + '" has [' + titles.join('; ') + '], expected [' + expected.join('; ') + ']');
+        }
+      });
+      return weeks.length + ' week tabs × ' + plannerCourseList_(schedule).length + ' classes';
+    }) &&
+    check('A class with nothing due shows "' + NO_ASSIGNMENTS_TEXT + '"', function () {
+      var seen = 0;
+      currentWeeks().forEach(function (w) {
+        tablesOfTab_(w).forEach(function (t) {
+          if (t.kind !== 'By Class') return;
+          var empty = t.rows.length === 3 && t.rows[2].text === NO_ASSIGNMENTS_TEXT;
+          var hasItems = t.rows.some(function (r) { return r.url; });
+          if (!empty && !hasItems) throw new Error(t.title + ' in "' + w.title + '" has neither assignments nor the empty-week row');
+          if (empty) seen++;
+        });
+      });
+      return seen ? seen + ' empty class tables, each with the single row' : { skip: 'every class had work due in every week' };
+    }) &&
+    check('Status is plain text (no symbols) everywhere', function () {
+      var n = 0;
+      currentWeeks().forEach(function (w) {
+        tablesOfTab_(w).forEach(function (t) {
+          t.rows.forEach(function (r) {
+            if (!r.url) return;
+            n++;
+            if (/[^\x20-\x7E]/.test(r.status) || !/^[A-Za-z0-9]/.test(r.status)) {
+              throw new Error('"' + r.status + '" in ' + t.title);
+            }
+          });
+        });
+      });
+      return n + ' Status cells checked';
+    }) &&
+    check('All By Class tables share one set of column widths, By Day another, all full width', function () {
+      var full = null;
+      var sets = { 'By Class': {}, 'By Day': {} };
+      currentWeeks().forEach(function (w) {
+        if (full === null) full = tabContentWidth_(w.tab);
+        tablesOfTab_(w).forEach(function (t) {
+          if (!sets[t.kind]) return;
+          sets[t.kind][t.widths.join(',')] = true;
+          var sum = t.widths.reduce(function (a, b) { return a + b; }, 0);
+          if (Math.abs(sum - full) > 1) throw new Error(t.title + ' is ' + sum + ' pt wide, page is ' + full + ' pt');
+        });
+      });
+      ['By Class', 'By Day'].forEach(function (k) {
+        var n = Object.keys(sets[k]).length;
+        if (n !== 1) throw new Error(k + ' tables have ' + n + ' different width sets');
+      });
+      return 'By Class ' + Object.keys(sets['By Class'])[0] + ' | By Day ' + Object.keys(sets['By Day'])[0] + ' (pt)';
+    }) &&
+    check('The Status/Notes help line is on every week tab and the CLC Planner tab', function () {
+      var tabs = currentWeeks();
+      var home = findTabJsonById_(doc, findRootTabIdByTitle_(doc, PARENT_TAB_TITLE));
+      tabs.concat([{ title: PARENT_TAB_TITLE, tab: home }]).forEach(function (w) {
+        var body = w.tab && w.tab.documentTab && w.tab.documentTab.body;
+        if (!body || tabBodyPlainText_(body).indexOf(STATUS_HELP_LINE) === -1) throw new Error('missing on "' + w.title + '"');
+      });
+      return (tabs.length + 1) + ' tabs';
+    }) &&
+    check('Doc: type a test Status and Note into a By Class table', function () {
       target = findFirstAssignmentRow_(docId);
       if (!target) throw new Error('No assignments in the next ' + APP_WEEKS_AHEAD + ' weeks to test with.');
-      stamp = Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
-      testStatus = '🟡 selfTest ' + stamp;
-      testNote = 'selfTest note ' + stamp;
+      testStatus = getCellText_(target.status) === 'In progress' ? 'Complete' : 'In progress';
+      testNote = 'selfTest note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
       writeStatusAndNote_(docId, target, testStatus, testNote);
-      return 'row for "' + target.title + '"';
+      return '"' + testStatus + '" and a note on "' + target.title + '"';
     }) &&
-    check('Doc: run an update', function () {
+    check('Doc: run an update (timed)', function () {
+      var t0 = Date.now();
       writeDocWithRecovery_({ id: 'selftest', docId: docId }, schedule);
+      var s = Math.round((Date.now() - t0) / 1000);
+      if (s * 1000 > 6 * 60 * 1000 - APP_BATCH_BUDGET_MS) {
+        throw new Error('took ' + s + ' s: too close to the 6-minute limit for the 2-minute batch budget');
+      }
+      return 'took ' + s + ' s (first write ' + firstSeconds + ' s; each student must fit in the ' +
+        (6 * 60 - APP_BATCH_BUDGET_MS / 1000) + ' s left after the batch budget)';
     }) &&
     check('Status and Note survived in both tables', function () {
       var rows = findRowsByUrl_(docId, target.url);
@@ -803,12 +905,56 @@ function runSelfTest_(keepToken) {
   );
 }
 
-/** First assignment row of the first week's By Class table: its tab, URL and cells. */
+/** The week tabs (children of the CLC Planner tab): [{ title, tab }]. */
+function weekTabsOf_(docJson) {
+  var parent = findTabJsonById_(docJson, findRootTabIdByTitle_(docJson, PARENT_TAB_TITLE));
+  return ((parent && parent.childTabs) || []).map(function (t) {
+    return { title: (t.tabProperties || {}).title || '', tab: t };
+  });
+}
+
+/** "By Class" (a Day column), "By Day" (a Course column) or "other", from the header row. */
+function tableKind_(table) {
+  var rows = table.tableRows || [];
+  for (var r = 0; r < Math.min(rows.length, 2); r++) {
+    var cells = rows[r].tableCells || [];
+    if (cells.length < 6) continue;
+    var name = getCellText_(cells[1]);
+    if (name === 'Day') return 'By Class';
+    if (name === 'Course') return 'By Day';
+  }
+  return 'other';
+}
+
+/** A week tab's tables, summarized: kind, title (first row), column widths, and each row. */
+function tablesOfTab_(week) {
+  var body = week.tab.documentTab && week.tab.documentTab.body;
+  return ((body && body.content) || []).filter(function (el) { return el.table; }).map(function (el) {
+    var rows = (el.table.tableRows || []).map(function (row) {
+      var cells = row.tableCells || [];
+      return {
+        text: cells.length ? getCellText_(cells[0]) : '',
+        url: cells.length >= 6 ? getCellLinkUrl_(cells[0]) : null,
+        status: cells.length >= 6 ? getCellText_(cells[4]) : '',
+        note: cells.length >= 6 ? getCellText_(cells[5]) : '',
+      };
+    });
+    var props = (el.table.tableStyle && el.table.tableStyle.tableColumnProperties) || [];
+    return {
+      kind: tableKind_(el.table),
+      title: rows.length ? rows[0].text : '',
+      rows: rows,
+      widths: props.map(function (p) { return p.width && typeof p.width.magnitude === 'number' ? p.width.magnitude : 0; }),
+    };
+  });
+}
+
+/** First assignment row in a By Class table: its tab, URL and cells. */
 function findFirstAssignmentRow_(docId) {
   var doc = docsGet_(docId);
   var found = null;
-  eachTable_(doc, function (tabId, table, tableIndex) {
-    if (found || tableIndex !== 0) return;
+  eachTable_(doc, function (tabId, table) {
+    if (found || tableKind_(table) !== 'By Class') return;
     (table.tableRows || []).some(function (row) {
       var cells = row.tableCells || [];
       var url = cells.length >= 6 ? getCellLinkUrl_(cells[0]) : null;
@@ -823,29 +969,25 @@ function findFirstAssignmentRow_(docId) {
 /** Every row (in every table) for this Canvas URL, with its Status and Notes text. */
 function findRowsByUrl_(docId, url) {
   var rows = [];
-  eachTable_(docsGet_(docId), function (tabId, table, tableIndex) {
+  eachTable_(docsGet_(docId), function (tabId, table) {
+    var kind = tableKind_(table);
     (table.tableRows || []).forEach(function (row) {
       var cells = row.tableCells || [];
       if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
-        rows.push({
-          table: tableIndex === 0 ? 'By Class' : 'By Day',
-          status: getCellText_(cells[4]),
-          note: getCellText_(cells[5]),
-        });
+        rows.push({ table: kind, status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
       }
     });
   });
   return rows;
 }
 
-/** Calls fn(tabId, table, indexWithinTab) for every table in every tab. */
+/** Calls fn(tabId, table) for every table in every tab. */
 function eachTable_(docJson, fn) {
   function walk(tab) {
     var tabId = tab.tabProperties && tab.tabProperties.tabId;
     var body = tab.documentTab && tab.documentTab.body;
-    var n = 0;
     ((body && body.content) || []).forEach(function (el) {
-      if (el.table) fn(tabId, el.table, n++);
+      if (el.table) fn(tabId, el.table);
     });
     (tab.childTabs || []).forEach(walk);
   }
