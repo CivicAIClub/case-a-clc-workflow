@@ -1,8 +1,8 @@
 name: CI
 
-# Quick checks on every pull request (and on main), so a broken change is caught before
-# Render redeploys the backend or GitHub Pages republishes the frontend.
-# No secrets are used: Canvas and Apps Script are never called.
+# Quick checks on every pull request (and on main). AutoPlanner runs in Google Apps Script,
+# so these run the .gs files in Node with pretend ("mock") Google services. No secrets are
+# used and nothing external is called.
 
 on:
   pull_request:
@@ -18,44 +18,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
+          node-version: "20"
 
-      - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt
+      - name: Apps Script tests (tests/*.test.js)
+        run: node --test tests/*.test.js
 
-      - name: Backend smoke test
+      - name: JavaScript syntax check (.gs files and the page script in Index.html)
         run: |
-          python - <<'EOF'
-          from fastapi.testclient import TestClient
-          from backend.main import app
-
-          client = TestClient(app)
-          assert client.get("/health").json() == {"status": "ok"}
-          assert client.get("/").status_code == 200, "frontend not served"
-          # A Canvas address that can't be reached must give a clean error, not a crash.
-          r = client.get(
-              "/api/assignments",
-              params={"canvas_base_url": "http://127.0.0.1:9"},
-              headers={"X-Canvas-Token": "fake"},
-          )
-          assert r.status_code == 502 and "Could not reach Canvas" in r.json()["detail"], r.text
-          print("Backend smoke test passed.")
-          EOF
-
-      - name: JavaScript syntax check (Code.gs and index.html)
-        run: |
-          # Node won't check a .gs file directly, so check a .js copy.
-          cp apps_script/Code.gs "$RUNNER_TEMP/Code.js"
-          node --check "$RUNNER_TEMP/Code.js"
-          python - <<'EOF' > "$RUNNER_TEMP/index.js"
-          import pathlib, re
-          html = pathlib.Path("frontend/index.html").read_text()
-          scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
-          assert len(scripts) == 1, f"expected 1 inline <script>, found {len(scripts)}"
-          assert "<script src" not in html, "index.html must stay a single dependency-free file"
-          print(scripts[0])
-          EOF
+          # Node won't check a .gs file directly, so check a .js copy of each.
+          for f in apps_script/*.gs; do
+            cp "$f" "$RUNNER_TEMP/$(basename "$f" .gs).js"
+            node --check "$RUNNER_TEMP/$(basename "$f" .gs).js"
+          done
+          node -e '
+            const html = require("fs").readFileSync("apps_script/Index.html", "utf8");
+            const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+            if (scripts.length !== 1) throw new Error("expected 1 inline <script> in Index.html, found " + scripts.length);
+            if (/<script\s+src/.test(html)) throw new Error("Index.html must not load outside scripts");
+            require("fs").writeFileSync(process.env.RUNNER_TEMP + "/index.js", scripts[0]);
+          '
           node --check "$RUNNER_TEMP/index.js"
-          echo "JavaScript syntax check passed."
+          echo "Syntax check passed."

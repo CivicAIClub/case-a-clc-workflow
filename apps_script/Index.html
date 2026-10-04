@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top" />
+  <meta charset="UTF-8" />
+  <title>AutoPlanner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    :root {
+      --bg: #fafaf7;
+      --bg-tint: #f3f1ec;
+      --surface: #ffffff;
+      --surface-soft: #f8fafc;
+      --surface-hover: #f1f5f9;
+      --border: #e5e7eb;
+      --border-strong: #d1d5db;
+      --text: #0f172a;
+      --text-soft: #1e293b;
+      --muted: #64748b;
+      --muted-soft: #94a3b8;
+
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --accent-soft: #eef2ff;
+      --accent-ring: rgba(99, 102, 241, 0.18);
+      --accent-text: #4338ca;
+
+      --success: #10b981;
+      --success-soft: #ecfdf5;
+      --success-text: #047857;
+      --success-ring: rgba(16, 185, 129, 0.18);
+
+      --warn: #f59e0b;
+      --warn-soft: #fffbeb;
+      --warn-text: #92400e;
+      --warn-ring: rgba(245, 158, 11, 0.2);
+
+      --danger: #ef4444;
+      --danger-soft: #fef2f2;
+      --danger-text: #b91c1c;
+      --danger-ring: rgba(239, 68, 68, 0.2);
+
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+      --shadow-md: 0 6px 16px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+      --shadow-lg: 0 18px 36px rgba(15, 23, 42, 0.08), 0 3px 8px rgba(15, 23, 42, 0.04);
+
+      --radius-xs: 8px;
+      --radius-sm: 10px;
+      --radius: 14px;
+      --radius-lg: 20px;
+      --radius-xl: 26px;
+
+      --font-sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-display: "Fraunces", "DM Sans", Georgia, serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-sans);
+      background:
+        radial-gradient(1200px 600px at 90% -10%, rgba(99, 102, 241, 0.10), transparent 60%),
+        radial-gradient(900px 500px at -10% 10%, rgba(16, 185, 129, 0.06), transparent 60%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-tint) 100%);
+      background-attachment: fixed;
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    a { color: var(--accent-text); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    a:focus-visible,
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    [role="tab"]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: var(--radius-xs);
+    }
+
+    .wrap {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 2.25rem 1.25rem 4rem;
+    }
+
+    /* ---------- Hero ---------- */
+    .hero {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }
+
+    .hero-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.9rem;
+    }
+
+    .hero-mark {
+      width: 2.6rem;
+      height: 2.6rem;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #818cf8, #6366f1 55%, #4f46e5);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1.25rem;
+      box-shadow: 0 6px 16px rgba(99, 102, 241, 0.35);
+      letter-spacing: -0.02em;
+    }
+
+    .hero h1 {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: clamp(1.85rem, 4.6vw, 2.6rem);
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .hero-eyebrow {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent-text);
+      background: var(--accent-soft);
+      padding: 0.28rem 0.7rem;
+      border-radius: 999px;
+      margin-bottom: 0.5rem;
+    }
+
+    .hero-help {
+      color: var(--muted);
+      font-size: 1.02rem;
+      max-width: 60ch;
+      line-height: 1.6;
+    }
+    .hero-help strong { color: var(--text-soft); font-weight: 600; }
+
+    /* ---------- Banner ---------- */
+    .banner {
+      display: none;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+      padding: 0.95rem 1.1rem;
+      border-radius: var(--radius);
+      background: var(--warn-soft);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: var(--warn-text);
+      font-size: 0.92rem;
+      line-height: 1.5;
+      box-shadow: var(--shadow-sm);
+    }
+    .banner.visible { display: flex; }
+    .banner::before {
+      content: "!";
+      flex-shrink: 0;
+      width: 1.4rem;
+      height: 1.4rem;
+      border-radius: 999px;
+      background: var(--warn);
+      color: #fff;
+      font-weight: 700;
+      display: grid;
+      place-items: center;
+      font-size: 0.85rem;
+      margin-top: 0.05rem;
+    }
+    /* Neutral "please wait" banner, e.g. while the hosted server wakes up. */
+    .banner.info {
+      background: var(--accent-soft);
+      border-color: var(--accent-ring);
+      color: var(--accent-text);
+    }
+    .banner.info::before {
+      content: "";
+      width: 1rem;
+      height: 1rem;
+      margin-top: 0.15rem;
+      background: transparent;
+      border: 2px solid var(--accent-ring);
+      border-top-color: var(--accent);
+      animation: spin 0.7s linear infinite;
+    }
+
+    /* ---------- Steps strip ---------- */
+    .steps {
+      display: grid;
+      gap: 0.75rem;
+      list-style: none;
+      margin-bottom: 2rem;
+      padding: 1.1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+    }
+    @media (min-width: 760px) {
+      .steps { grid-template-columns: repeat(3, 1fr); gap: 1rem; padding: 1.4rem; }
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+      padding: 0.4rem 0.2rem;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 2rem;
+      height: 2rem;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent-text);
+      font-weight: 700;
+      font-size: 0.92rem;
+      display: grid;
+      place-items: center;
+      font-family: var(--font-display);
+    }
+
+    .step-text strong {
+      display: block;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.96rem;
+      margin-bottom: 0.15rem;
+    }
+    .step-text p {
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.5;
+    }
+
+    /* ---------- Cards ---------- */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 1.6rem 1.6rem 1.4rem;
+      margin-bottom: 1.25rem;
+      box-shadow: var(--shadow-sm);
+      transition: box-shadow 0.2s ease, transform 0.2s ease;
+    }
+    .card:hover { box-shadow: var(--shadow-md); }
+
+    .card-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1.1rem;
+      flex-wrap: wrap;
+    }
+
+    .card h2 {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 1.15rem;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    .card-sub {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    /* ---------- Forms ---------- */
+    .form-row {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .form-row:last-child { margin-bottom: 0; }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 220px;
+    }
+    .form-group.wide { flex: 1 1 100%; min-width: 0; }
+
+    label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-soft);
+      margin-bottom: 0.4rem;
+      letter-spacing: 0;
+    }
+
+    .hint {
+      font-size: 0.83rem;
+      color: var(--muted);
+      margin-top: 0.5rem;
+      line-height: 1.55;
+    }
+    .hint strong { color: var(--text-soft); font-weight: 600; }
+
+    input, select, textarea {
+      padding: 0.7rem 0.85rem;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      font-size: 0.94rem;
+      color: var(--text);
+      background: var(--surface);
+      outline: none;
+      font-family: inherit;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+    input::placeholder, textarea::placeholder { color: var(--muted-soft); }
+    input:hover, select:hover, textarea:hover { border-color: #94a3b8; }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-ring);
+    }
+
+    select {
+      appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'><path d='M1 1.5L6 6.5L11 1.5' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 0.95rem center;
+      padding-right: 2.2rem;
+    }
+
+    textarea.token-field {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.84rem;
+      letter-spacing: 0.01em;
+      min-height: 2.8rem;
+      resize: vertical;
+      background: var(--surface-soft);
+    }
+
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.7rem;
+      align-items: center;
+      margin-top: 0.5rem;
+    }
+
+    button {
+      padding: 0.7rem 1.25rem;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      font-size: 0.92rem;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+                  box-shadow 0.15s ease, transform 0.08s ease, opacity 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      line-height: 1.2;
+    }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #fff;
+      box-shadow: 0 6px 16px rgba(99, 102, 241, 0.28);
+    }
+    .btn-primary:hover:not(:disabled) {
+      box-shadow: 0 10px 22px rgba(99, 102, 241, 0.36);
+      transform: translateY(-1px);
+    }
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+
+    .btn-success {
+      background: linear-gradient(135deg, #34d399, #10b981);
+      color: #fff;
+      box-shadow: 0 6px 16px rgba(16, 185, 129, 0.28);
+    }
+    .btn-success:hover:not(:disabled) {
+      box-shadow: 0 10px 22px rgba(16, 185, 129, 0.36);
+      transform: translateY(-1px);
+    }
+
+    .btn-ghost {
+      background: var(--surface);
+      color: var(--text-soft);
+      border: 1px dashed var(--border-strong);
+    }
+    .btn-ghost:hover:not(:disabled) {
+      background: var(--accent-soft);
+      color: var(--accent-text);
+      border-color: var(--accent);
+      border-style: solid;
+    }
+
+    .btn-danger-ghost {
+      background: transparent;
+      color: var(--danger-text);
+      border: 1px solid transparent;
+      font-size: 0.82rem;
+      padding: 0.4rem 0.7rem;
+      border-radius: var(--radius-xs);
+    }
+    .btn-danger-ghost:hover:not(:disabled) {
+      background: var(--danger-soft);
+      border-color: rgba(239, 68, 68, 0.25);
+    }
+
+    .fetch-cta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .fetch-cta .btn-primary { font-size: 1rem; padding: 0.85rem 1.6rem; }
+    .fetch-cta-meta {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    /* ---------- Status ---------- */
+    .status {
+      margin-top: 0.85rem;
+      font-size: 0.9rem;
+      min-height: 1.25rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0;
+    }
+    .status:empty { display: none; }
+    .status.loading {
+      color: var(--muted);
+    }
+    .status.loading::before {
+      content: "";
+      width: 0.85rem;
+      height: 0.85rem;
+      border-radius: 999px;
+      border: 2px solid var(--border-strong);
+      border-top-color: var(--accent);
+      animation: spin 0.7s linear infinite;
+      display: inline-block;
+    }
+    .status.error {
+      color: var(--danger-text);
+      background: var(--danger-soft);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      padding: 0.5rem 0.75rem;
+      border-radius: var(--radius-xs);
+      font-weight: 500;
+    }
+    .status.success {
+      color: var(--success-text);
+      background: var(--success-soft);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      padding: 0.5rem 0.75rem;
+      border-radius: var(--radius-xs);
+      font-weight: 500;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---------- Student cards ---------- */
+    .student-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      margin-bottom: 1rem;
+    }
+
+    .student-card {
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem 1.2rem 1rem;
+      transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+    }
+    .student-card:hover {
+      border-color: var(--border-strong);
+      background: #fff;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .student-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+    .student-card-head span {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .privacy-note {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.85rem;
+      line-height: 1.55;
+      padding: 0.7rem 0.9rem;
+      background: var(--surface-soft);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+    }
+
+    /* ---------- Responsive tweaks ---------- */
+    @media (max-width: 600px) {
+      .wrap { padding: 1.5rem 1rem 3rem; }
+      .card { padding: 1.25rem 1.1rem 1.1rem; border-radius: var(--radius); }
+      .hero-mark { width: 2.3rem; height: 2.3rem; font-size: 1.1rem; }
+      .fetch-cta { align-items: stretch; }
+      .fetch-cta .btn-primary { width: 100%; justify-content: center; }
+    }
+    /* ---------- AutoPlanner (Apps Script) additions ---------- */
+    .user-chip {
+      display: inline-block;
+      width: fit-content;
+      justify-self: start;
+      align-self: flex-start;
+      margin-top: 1rem;
+      padding: 0.3rem 0.85rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+    }
+    .user-chip strong { color: var(--text-soft); font-weight: 600; }
+    .student-card-head .student-name {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .student-card-head .student-label { font-weight: 500; color: var(--muted); text-transform: none; }
+    .row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .row-actions button { padding: 0.4rem 0.8rem; font-size: 0.84rem; }
+    .student-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 1rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+    .student-meta code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem;
+      color: var(--text-soft);
+    }
+    .last-line { margin-top: 0.45rem; font-size: 0.88rem; }
+    .last-line.ok { color: var(--success-text); }
+    .last-line.bad { color: var(--danger-text); }
+    .edit-form { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px dashed var(--border-strong); }
+    .last-run { margin-top: 1rem; font-size: 0.9rem; color: var(--text-soft); }
+    .last-run ul { margin: 0.4rem 0 0 1.2rem; }
+    .last-run li { margin-top: 0.2rem; }
+    .auto-note { margin-top: 1rem; }
+    .auto-note.off { color: var(--warn-text); }
+    .empty-note { margin: 0 0 1rem; }
+    .foot { margin-top: 2rem; text-align: center; font-size: 0.85rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div class="hero-brand">
+        <span class="hero-mark" aria-hidden="true">A</span>
+        <div>
+          <span class="hero-eyebrow">CLC Study Hall</span>
+          <h1>AutoPlanner</h1>
+        </div>
+      </div>
+      <p class="hero-help">
+        Personal weekly planners for every student, kept up to date in a <strong>Google Doc</strong>
+        in the shared folder. Add each student once; AutoPlanner refreshes their Doc every evening.
+      </p>
+      <p class="user-chip" id="userChip">Loading…</p>
+    </header>
+
+    <div class="banner" id="errorBanner" role="alert"></div>
+
+    <ol class="steps" aria-label="How it works">
+      <li class="step">
+        <span class="step-num">1</span>
+        <div class="step-text">
+          <strong>Add students</strong>
+          <p>Paste each student’s Canvas token once. It’s stored safely in AutoPlanner.</p>
+        </div>
+      </li>
+      <li class="step">
+        <span class="step-num">2</span>
+        <div class="step-text">
+          <strong>Update</strong>
+          <p>Click “Update all students now”, or let the automatic update run in the evening.</p>
+        </div>
+      </li>
+      <li class="step">
+        <span class="step-num">3</span>
+        <div class="step-text">
+          <strong>Open the Docs</strong>
+          <p>Each student’s Doc is in the shared Drive folder, one tab per week.</p>
+        </div>
+      </li>
+    </ol>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Update</h2>
+        <span class="card-sub">Refresh every student’s Doc from Canvas</span>
+      </div>
+      <div class="fetch-cta">
+        <button type="button" class="btn-primary" id="updateAllBtn" disabled>Update all students now</button>
+        <span class="fetch-cta-meta">About a minute per student. You can close this page; it keeps going.</span>
+      </div>
+      <p class="status" id="runStatus"></p>
+      <div class="last-run" id="lastRun"></div>
+      <p class="hint auto-note" id="autoNote"></p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Students</h2>
+        <span class="card-sub" id="studentCount"></span>
+      </div>
+      <p class="hint empty-note" id="emptyNote" hidden>No students yet. Add the first one below.</p>
+      <div class="student-list" id="studentList"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Add a student</h2>
+        <span class="card-sub">Their Doc is made right after</span>
+      </div>
+      <div class="form-row">
+        <div class="form-group wide">
+          <label for="newToken">Canvas access token</label>
+          <textarea id="newToken" class="token-field" rows="2" spellcheck="false" autocomplete="off"
+            placeholder="The student makes it in Canvas: Account → Settings → + New Access Token"></textarea>
+        </div>
+        <div class="form-group" style="min-width: 160px; max-width: 240px;">
+          <label for="newLabel">Label (optional)</label>
+          <input id="newLabel" type="text" maxlength="60" placeholder="e.g. Table 4" autocomplete="off" />
+        </div>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn-primary" id="addBtn">Add student</button>
+      </div>
+      <p class="status" id="addStatus"></p>
+      <p class="privacy-note">
+        Tokens are stored inside AutoPlanner, not in this browser, so any staff computer works.
+        After a token is saved, only its last 4 characters are shown. A token works like a password
+        to the student’s Canvas account: never paste it anywhere else.
+      </p>
+    </section>
+
+    <p class="foot">Questions or problems? Contact <span id="contact">the Civic AI Club</span>.</p>
+  </div>
+
+  <script>
+    /* AutoPlanner page. Every action calls a function in App.gs through google.script.run;
+       nothing is stored in this browser. */
+    var state = { user: '', students: [], run: null, lastRun: null, busy: {}, editing: {} };
+    var pollTimer = null;
+
+    function call(fn) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return new Promise(function (resolve, reject) {
+        var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+        runner[fn].apply(runner, args);
+      });
+    }
+
+    function errText(err) {
+      var msg = String((err && err.message) || err || 'Something went wrong.').replace(/^Error:\s*/, '');
+      if (!/Not authorized/.test(msg) && /authoriz|permission|ScriptError|PERMISSION_DENIED/i.test(msg)) {
+        msg += ' If you are signed in to more than one Google account, open AutoPlanner in a ' +
+          'browser window signed in only to your Pomfret account.';
+      }
+      return msg;
+    }
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function setStatus(id, type, message) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.className = 'status ' + (type || '');
+      el.textContent = message || '';
+    }
+
+    function showBanner(message) {
+      var el = document.getElementById('errorBanner');
+      el.textContent = message || '';
+      el.classList.toggle('visible', !!message);
+    }
+
+    /** "Today 7:02 PM", "Yesterday 12:03 AM", or "Mon, Oct 5, 7:02 PM". */
+    function when(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      var time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      var today = new Date();
+      var yesterday = new Date();
+      yesterday.setDate(today.getDate() - 1);
+      if (d.toDateString() === today.toDateString()) return 'Today ' + time;
+      if (d.toDateString() === yesterday.toDateString()) return 'Yesterday ' + time;
+      return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ', ' + time;
+    }
+
+    function apply(s) {
+      if (!s) return;
+      if (s.students) state.students = s.students;
+      if ('run' in s) state.run = s.run;
+      if ('lastRun' in s) state.lastRun = s.lastRun;
+      render();
+    }
+
+    function render() {
+      renderStudents();
+      renderRun();
+    }
+
+    function studentTitle(s) {
+      return esc(s.name) + (s.label ? ' <span class="student-label">· ' + esc(s.label) + '</span>' : '');
+    }
+
+    function renderStudents() {
+      var root = document.getElementById('studentList');
+      document.getElementById('emptyNote').hidden = state.students.length > 0;
+      document.getElementById('studentCount').textContent =
+        state.students.length === 1 ? '1 student' : state.students.length + ' students';
+      // Keep any in-progress edit text and row messages while re-drawing.
+      var drafts = {};
+      Object.keys(state.editing).forEach(function (id) {
+        var lab = document.getElementById('editLabel-' + id);
+        var tok = document.getElementById('editToken-' + id);
+        if (lab) drafts[id] = { label: lab.value, token: tok ? tok.value : '' };
+      });
+      var messages = {};
+      state.students.forEach(function (s) {
+        var el = document.getElementById('st-' + s.id);
+        if (el && el.textContent) messages[s.id] = { cls: el.className, text: el.textContent };
+      });
+
+      root.innerHTML = '';
+      state.students.forEach(function (s) {
+        var running = !!state.run;
+        var busy = !!state.busy[s.id];
+        var last = s.last
+          ? '<p class="last-line ' + (s.last.ok ? 'ok' : 'bad') + '">' + (s.last.ok ? '✅ ' : '⚠️ ') +
+            esc(when(s.last.at)) + ': ' + esc(s.last.message) + '</p>'
+          : '<p class="last-line">Not updated yet.</p>';
+        var card = document.createElement('div');
+        card.className = 'student-card';
+        card.innerHTML =
+          '<div class="student-card-head">' +
+            '<span class="student-name">' + studentTitle(s) + '</span>' +
+            '<div class="row-actions">' +
+              '<button type="button" class="btn-ghost" data-act="update"' + (running || busy ? ' disabled' : '') + '>' +
+                (busy ? 'Updating…' : 'Update') + '</button>' +
+              '<button type="button" class="btn-ghost" data-act="edit"' + (busy ? ' disabled' : '') + '>Edit</button>' +
+              '<button type="button" class="btn-danger-ghost" data-act="remove"' + (busy ? ' disabled' : '') + '>Remove</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="student-meta">' +
+            '<span>Token <code>••••' + esc(s.tokenEnd) + '</code></span>' +
+            (s.docUrl ? '<a href="' + esc(s.docUrl) + '" target="_blank" rel="noopener">Open their Doc ↗</a>'
+                      : '<span>No Doc yet</span>') +
+          '</div>' +
+          last +
+          '<p class="status" id="st-' + esc(s.id) + '"></p>' +
+          (state.editing[s.id]
+            ? '<div class="edit-form">' +
+                '<div class="form-row">' +
+                  '<div class="form-group" style="min-width: 160px; max-width: 240px;">' +
+                    '<label for="editLabel-' + esc(s.id) + '">Label (optional)</label>' +
+                    '<input id="editLabel-' + esc(s.id) + '" type="text" maxlength="60" value="' + esc(s.label) + '" />' +
+                  '</div>' +
+                  '<div class="form-group wide">' +
+                    '<label for="editToken-' + esc(s.id) + '">New Canvas token (leave blank to keep the current one)</label>' +
+                    '<textarea id="editToken-' + esc(s.id) + '" class="token-field" rows="2" spellcheck="false" autocomplete="off"></textarea>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="btn-row">' +
+                  '<button type="button" class="btn-primary" data-act="save">Save</button>' +
+                  '<button type="button" class="btn-ghost" data-act="cancel">Cancel</button>' +
+                '</div>' +
+              '</div>'
+            : '');
+        card.querySelectorAll('button[data-act]').forEach(function (b) {
+          b.addEventListener('click', function () { onRowAction(s, b.getAttribute('data-act')); });
+        });
+        root.appendChild(card);
+        if (drafts[s.id]) {
+          document.getElementById('editLabel-' + s.id).value = drafts[s.id].label;
+          document.getElementById('editToken-' + s.id).value = drafts[s.id].token;
+        }
+        if (messages[s.id]) {
+          var el = document.getElementById('st-' + s.id);
+          el.className = messages[s.id].cls;
+          el.textContent = messages[s.id].text;
+        }
+      });
+    }
+
+    function renderRun() {
+      var btn = document.getElementById('updateAllBtn');
+      var run = state.run;
+      btn.disabled = !!run || state.students.length === 0;
+      if (run) {
+        var msg = run.current
+          ? 'Updating ' + Math.min(run.done + 1, run.total) + ' of ' + run.total + ': ' + run.current + '…'
+          : 'Updating: ' + run.done + ' of ' + run.total + ' done…';
+        if (run.failed) msg += ' (' + run.failed + ' problem' + (run.failed === 1 ? '' : 's') + ' so far)';
+        if (run.reason === 'scheduled') msg = 'Automatic update running. ' + msg;
+        setStatus('runStatus', 'loading', msg);
+      } else if (document.getElementById('runStatus').classList.contains('loading')) {
+        setStatus('runStatus', '', '');
+      }
+      var lr = state.lastRun;
+      var box = document.getElementById('lastRun');
+      if (!lr) {
+        box.innerHTML = '<span class="hint">No updates yet.</span>';
+        return;
+      }
+      var how = lr.reason === 'scheduled' ? 'automatic' : lr.reason === 'test' ? 'test run' : 'started from this page';
+      var html = '<strong>Last update:</strong> ' + esc(when(lr.finishedAt)) + ' (' + how + '). ' +
+        esc(lr.updated) + ' of ' + esc(lr.total) + ' student' + (lr.total === 1 ? '' : 's') + ' updated.';
+      if (lr.failed && lr.failed.length) {
+        html += '<ul>' + lr.failed.map(function (f) {
+          return '<li>⚠️ <strong>' + esc(f.name) + ':</strong> ' + esc(f.message) + '</li>';
+        }).join('') + '</ul>';
+      }
+      box.innerHTML = html;
+    }
+
+    function startPolling(ms) {
+      stopPolling();
+      pollTimer = setInterval(function () {
+        call('getRunStatus').then(function (s) {
+          apply(s);
+          if (!s.run) {
+            stopPolling();
+            setStatus('runStatus', 'success', 'Update finished.');
+          }
+        }).catch(function () { /* keep polling; the next try usually works */ });
+      }, ms);
+    }
+
+    function stopPolling() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    function updateAll() {
+      showBanner('');
+      document.getElementById('updateAllBtn').disabled = true;
+      setStatus('runStatus', 'loading', 'Starting the update…');
+      startPolling(4000);
+      call('startUpdateAll').then(function (res) {
+        apply(res);
+        if (res.run) {
+          setStatus('runStatus', 'loading',
+            (res.alreadyRunning ? 'An update was already running. ' : '') +
+            'Still going in the background: ' + res.run.done + ' of ' + res.run.total +
+            ' done. You can close this page; it keeps going.');
+          startPolling(10000);
+        } else {
+          stopPolling();
+          setStatus('runStatus', 'success', 'Update finished.');
+        }
+      }).catch(function (err) {
+        stopPolling();
+        setStatus('runStatus', 'error', errText(err));
+        renderRun();
+      });
+    }
+
+    function updateOne(s) {
+      state.busy[s.id] = true;
+      renderStudents();
+      setStatus('st-' + s.id, 'loading', 'Updating ' + s.name + '’s Doc (about 30–90 seconds)…');
+      return call('updateStudentNow', s.id).then(function (fresh) {
+        delete state.busy[s.id];
+        replaceStudent(fresh);
+        var el = document.getElementById('st-' + s.id);
+        if (el) { el.className = 'status'; el.textContent = ''; }
+        renderStudents();
+      }).catch(function (err) {
+        delete state.busy[s.id];
+        renderStudents();
+        setStatus('st-' + s.id, 'error', errText(err));
+      });
+    }
+
+    function replaceStudent(fresh) {
+      var found = false;
+      state.students = state.students.map(function (x) {
+        if (x.id === fresh.id) { found = true; return fresh; }
+        return x;
+      });
+      if (!found) state.students.push(fresh);
+    }
+
+    function onRowAction(s, act) {
+      if (act === 'update') return updateOne(s);
+      if (act === 'edit') { state.editing[s.id] = true; return renderStudents(); }
+      if (act === 'cancel') { delete state.editing[s.id]; return renderStudents(); }
+      if (act === 'save') {
+        var label = document.getElementById('editLabel-' + s.id).value;
+        var token = document.getElementById('editToken-' + s.id).value;
+        setStatus('st-' + s.id, 'loading', token.trim() ? 'Checking the new token with Canvas…' : 'Saving…');
+        return call('editStudent', s.id, label, token).then(function (fresh) {
+          delete state.editing[s.id];
+          replaceStudent(fresh);
+          renderStudents();
+          setStatus('st-' + s.id, 'success', 'Saved.');
+        }).catch(function (err) {
+          setStatus('st-' + s.id, 'error', errText(err));
+        });
+      }
+      if (act === 'remove') {
+        if (!confirm('Remove ' + s.name + ' from AutoPlanner? Their Doc stays in the shared folder.')) return;
+        setStatus('st-' + s.id, 'loading', 'Removing…');
+        return call('removeStudent', s.id).then(function () {
+          state.students = state.students.filter(function (x) { return x.id !== s.id; });
+          delete state.editing[s.id];
+          render();
+        }).catch(function (err) {
+          setStatus('st-' + s.id, 'error', errText(err));
+        });
+      }
+    }
+
+    function addStudent() {
+      var tokenEl = document.getElementById('newToken');
+      var labelEl = document.getElementById('newLabel');
+      var btn = document.getElementById('addBtn');
+      if (!tokenEl.value.trim()) {
+        setStatus('addStatus', 'error', 'Paste the student’s Canvas token first.');
+        return;
+      }
+      btn.disabled = true;
+      setStatus('addStatus', 'loading', 'Checking the token with Canvas…');
+      call('addStudent', tokenEl.value, labelEl.value).then(function (res) {
+        tokenEl.value = '';
+        labelEl.value = '';
+        replaceStudent(res.student);
+        render();
+        if (state.run) {
+          setStatus('addStatus', 'success', res.message + ' The update that’s running now doesn’t include them; click Update on their row when it finishes.');
+        } else {
+          setStatus('addStatus', 'success', res.message + ' Making their Doc now (see their row).');
+          updateOne(res.student);
+        }
+      }).catch(function (err) {
+        setStatus('addStatus', 'error', errText(err));
+      }).then(function () {
+        btn.disabled = false;
+      });
+    }
+
+    document.getElementById('updateAllBtn').addEventListener('click', updateAll);
+    document.getElementById('addBtn').addEventListener('click', addStudent);
+
+    call('getAppState').then(function (s) {
+      state.user = s.user;
+      document.getElementById('userChip').innerHTML = 'Signed in as <strong>' + esc(s.user) + '</strong>';
+      document.getElementById('contact').textContent = s.contact;
+      var note = document.getElementById('autoNote');
+      if (s.automaticUpdatesOn) {
+        note.textContent = 'Automatic updates run every day at about 7 pm and about midnight on Google’s ' +
+          'servers, so no computer needs to be on.';
+      } else {
+        note.textContent = 'Automatic updates are not turned on yet. Contact ' + s.contact + '.';
+        note.classList.add('off');
+      }
+      apply(s);
+      if (s.run) startPolling(5000);
+    }).catch(function (err) {
+      document.getElementById('userChip').textContent = 'Not signed in';
+      showBanner(errText(err));
+    });
+  </script>
+</body>
+</html>

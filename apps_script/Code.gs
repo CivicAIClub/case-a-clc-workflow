@@ -1,36 +1,25 @@
 /**
- * AutoPlanner — Google Apps Script Web App (Google Docs + Document tabs)
+ * AutoPlanner — writes each student's planner Google Doc (Docs API + document tabs).
  *
- * SETUP (required once):
- *   1. In the Apps Script editor: Services (+) → add “Google Docs API”.
- *   2. If you use clasp / copied appsscript.json, ensure `enabledAdvancedServices`
- *      includes Docs API v1 (this repo ships `appsscript.json` for that).
- *   3. Deploy as Web app (Execute as: Me, Anyone).
- *
- * OPTIONAL Script Properties (Project Settings → Script Properties):
- *   DOCS_FOLDER_ID      Drive folder ID (or the folder's URL). New student Docs are created
- *                       there; Docs that already exist are not moved. While it is set, only
- *                       Docs inside this folder can be updated, so a request can never change
- *                       any other Doc the deploying account can edit.
- *   APPS_SCRIPT_SECRET  Shared secret. When set, requests whose `secret` field doesn't match
- *                       are rejected. The backend sends it from its APPS_SCRIPT_SECRET env var.
- * After changing either one, select `checkSetup` in the editor and click Run to confirm.
+ * Called from App.gs: upsertPlannerDocument_(schedule) creates or updates one student's Doc
+ * and returns { docUrl, documentId }. `schedule` is the shape Canvas.gs builds: `weeks`,
+ * `total_assignments`, `generated_at`, `studentFullName`, and optional `documentId`.
  *
  * Week tabs are created with Docs API `addDocumentTab` (appended under CLC Planner so
  * calendar weeks appear **earliest at the top**, latest at the bottom). Tab bodies use
  * **only** Docs API `batchUpdate` (DocumentApp cannot reliably resolve nested tabs by ID).
  *
- * POST JSON: `weeks`, `total_assignments`, `generated_at`, optional `studentFullName`
- * (Canvas display name; falls back to "Student"), optional `documentId` (reuse file).
- * Legacy key `spreadsheetId` is still accepted as an alias.
+ * Script Property DOCS_FOLDER_ID (ID or folder URL): new Docs are created in that folder, and
+ * while it is set only Docs inside it can be updated.
  *
- * Response: { docUrl, documentId }
+ * Every function here ends in "_" so the web page can't call it directly (google.script.run
+ * can only call functions without the underscore).
  */
 
 var PARENT_TAB_TITLE = 'CLC Planner';
 
 /** Drive title: First Last - CLC Assignments */
-function buildDocumentTitle(data) {
+function buildDocumentTitle_(data) {
   var raw = String(
     (data.studentFullName || data.student_full_name || '').trim() || 'Student'
   );
@@ -43,7 +32,7 @@ function buildDocumentTitle(data) {
 var DATA_FG = '#212121';
 var LINK_FG = '#1a73e8';
 
-// Pastels; uniqueness within a week is enforced in buildCourseColorMap (not hash-only).
+// Pastels; uniqueness within a week is enforced in buildCourseColorMap_ (not hash-only).
 var COURSE_COLORS = [
   '#D9EAD3',
   '#CFE2F3',
@@ -114,11 +103,11 @@ var BATCH_CHUNK = 45;
 /** Brief pause between chunked write RPCs to stay under per-minute write quota. */
 var DOCS_CHUNK_GAP_MS = 450;
 
-function sleepDocsChunkGap() {
+function sleepDocsChunkGap_() {
   Utilities.sleep(DOCS_CHUNK_GAP_MS);
 }
 
-function docsApiIsQuotaError(err) {
+function docsApiIsQuotaError_(err) {
   var s = String(err);
   return (
     s.indexOf('Quota exceeded') !== -1 ||
@@ -130,7 +119,7 @@ function docsApiIsQuotaError(err) {
 }
 
 /** Docs.Documents.get with retries when Google returns quota / rate limit errors. */
-function docsGet(docId, opts) {
+function docsGet_(docId, opts) {
   var options = opts || { includeTabsContent: true };
   var lastErr;
   for (var attempt = 0; attempt < 7; attempt++) {
@@ -138,7 +127,7 @@ function docsGet(docId, opts) {
       return Docs.Documents.get(docId, options);
     } catch (e) {
       lastErr = e;
-      if (docsApiIsQuotaError(e) && attempt < 6) {
+      if (docsApiIsQuotaError_(e) && attempt < 6) {
         Utilities.sleep(2000 * (attempt + 1));
         continue;
       }
@@ -152,10 +141,10 @@ function docsGet(docId, opts) {
  * Single batchUpdate (≤50 requests per Google Docs API limit).
  * @returns {*} API reply (e.g. for addDocumentTab replies)
  */
-function docsBatchUpdate(docId, requests) {
+function docsBatchUpdate_(docId, requests) {
   if (!requests || !requests.length) return null;
   if (requests.length > 50) {
-    throw new Error('docsBatchUpdate: chunk > 50 requests');
+    throw new Error('docsBatchUpdate_: chunk > 50 requests');
   }
   var lastErr;
   for (var attempt = 0; attempt < 7; attempt++) {
@@ -163,7 +152,7 @@ function docsBatchUpdate(docId, requests) {
       return Docs.Documents.batchUpdate({ requests: requests }, docId);
     } catch (e) {
       lastErr = e;
-      if (docsApiIsQuotaError(e) && attempt < 6) {
+      if (docsApiIsQuotaError_(e) && attempt < 6) {
         Utilities.sleep(2500 * (attempt + 1));
         continue;
       }
@@ -173,25 +162,14 @@ function docsBatchUpdate(docId, requests) {
   throw lastErr;
 }
 
-function getScriptProperty(name) {
+function getScriptProperty_(name) {
   var value = PropertiesService.getScriptProperties().getProperty(name);
   return value ? String(value).trim() : '';
 }
 
-/** Compare without stopping at the first different character, so timing doesn't leak the secret. */
-function secretsMatch(given, expected) {
-  var a = String(given || '');
-  var b = String(expected || '');
-  var diff = a.length ^ b.length;
-  for (var i = 0; i < b.length; i++) {
-    diff |= (a.charCodeAt(i) || 0) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
-}
-
 /** Folder for new Docs from DOCS_FOLDER_ID, or null when unset. Accepts a bare ID or a folder URL. */
-function getDocsFolder() {
-  var raw = getScriptProperty('DOCS_FOLDER_ID');
+function getDocsFolder_() {
+  var raw = getScriptProperty_('DOCS_FOLDER_ID');
   if (!raw) return null;
   var id = raw.replace(/^.*\/folders\//, '').replace(/[?#\/].*$/, '');
   try {
@@ -204,7 +182,7 @@ function getDocsFolder() {
 }
 
 /** Throws unless the Doc's Drive file sits directly in `folder`. Checked before any edit. */
-function assertDocIsInFolder(docId, folder) {
+function assertDocIsInFolder_(docId, folder) {
   var file;
   try {
     file = DriveApp.getFileById(docId);
@@ -222,59 +200,21 @@ function assertDocIsInFolder(docId, folder) {
   );
 }
 
-/** Run from the editor (select checkSetup → Run). Authorizes Drive access and logs the settings. */
-function checkSetup() {
-  var folder = getDocsFolder();
-  Logger.log(
-    folder
-      ? 'DOCS_FOLDER_ID OK: new Docs will be created in "' + folder.getName() + '", ' +
-          'and only Docs in that folder can be updated.'
-      : 'DOCS_FOLDER_ID is not set: new Docs will be created in My Drive.'
-  );
-  Logger.log(
-    getScriptProperty('APPS_SCRIPT_SECRET')
-      ? 'APPS_SCRIPT_SECRET is set: requests without the matching secret are rejected.'
-      : 'APPS_SCRIPT_SECRET is not set: all requests are accepted.'
-  );
-}
-
-function doPost(e) {
-  try {
-    var data = JSON.parse(e.postData.contents);
-    var expectedSecret = getScriptProperty('APPS_SCRIPT_SECRET');
-    if (expectedSecret && !secretsMatch(data.secret, expectedSecret)) {
-      throw new Error(
-        'Unauthorized: the secret sent by the AutoPlanner server does not match ' +
-          'APPS_SCRIPT_SECRET in Script Properties.'
-      );
-    }
-    delete data.secret;
-    var result = upsertPlannerDocument(data);
-    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(
-      ContentService.MimeType.JSON
-    );
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ error: String(err) })).setMimeType(
-      ContentService.MimeType.JSON
-    );
-  }
-}
-
 /**
  * @param {Object} data
  * @returns {{ docUrl: string, documentId: string }}
  */
-function upsertPlannerDocument(data) {
+function upsertPlannerDocument_(data) {
   var docId = data.documentId || data.spreadsheetId;
   var isNew = !docId;
-  var desiredTitle = buildDocumentTitle(data);
+  var desiredTitle = buildDocumentTitle_(data);
   var doc;
   // Look up the folder first, so a bad DOCS_FOLDER_ID fails before any Doc is created or changed.
-  var folder = getDocsFolder();
+  var folder = getDocsFolder_();
 
   if (docId) {
     if (folder) {
-      assertDocIsInFolder(docId, folder);
+      assertDocIsInFolder_(docId, folder);
     }
     doc = DocumentApp.openById(docId);
     try {
@@ -290,8 +230,8 @@ function upsertPlannerDocument(data) {
     }
   }
 
-  var parentTabId = prepareParentTab(docId, isNew);
-  seedParentTabHomeDocsApi(docId, parentTabId);
+  var parentTabId = prepareParentTab_(docId, isNew);
+  seedParentTabHomeDocsApi_(docId, parentTabId);
 
   var weeks = data.weeks || {};
   var weekKeys = Object.keys(weeks).sort();
@@ -302,33 +242,33 @@ function upsertPlannerDocument(data) {
 
   weekKeys.forEach(function (weekKey) {
     var weekData = weeks[weekKey];
-    var tabTitle = buildWeekTabTitle(weekKey, weekData.week_label);
+    var tabTitle = buildWeekTabTitle_(weekKey, weekData.week_label);
 
-    var resource = docsGet(docId);
-    var parentJson = findTabJsonById(resource, parentTabId);
+    var resource = docsGet_(docId);
+    var parentJson = findTabJsonById_(resource, parentTabId);
     var existingWeekTabId =
-      parentJson && findChildTabIdByTitle(parentJson, tabTitle);
+      parentJson && findChildTabIdByTitle_(parentJson, tabTitle);
 
     var tabId;
     if (existingWeekTabId) {
       tabId = existingWeekTabId;
     } else {
-      tabId = addWeekChildTab(
+      tabId = addWeekChildTab_(
         docId,
         parentTabId,
         tabTitle,
-        nextChildTabInsertIndex(parentJson)
+        nextChildTabInsertIndex_(parentJson)
       );
     }
 
-    fillWeekTabDocsApi(docId, parentTabId, tabTitle, tabId, weekKey, weekData);
-    sleepDocsChunkGap();
+    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData);
+    sleepDocsChunkGap_();
   });
 
   return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId };
 }
 
-function buildWeekTabTitle(weekKey, weekLabel) {
+function buildWeekTabTitle_(weekKey, weekLabel) {
   var y = String(weekKey).split('-')[0] || '';
   var label = weekLabel || weekKey;
   var t = 'Week of ' + label + ', ' + y;
@@ -338,7 +278,7 @@ function buildWeekTabTitle(weekKey, weekLabel) {
   return t;
 }
 
-function countAssignmentsInWeek(days) {
+function countAssignmentsInWeek_(days) {
   var n = 0;
   days.forEach(function (d) {
     n += (d.assignments || []).length;
@@ -347,8 +287,8 @@ function countAssignmentsInWeek(days) {
 }
 
 /** Rename default root tab on first create; otherwise locate CLC Planner or first root tab. */
-function prepareParentTab(docId, isNew) {
-  var resource = docsGet(docId);
+function prepareParentTab_(docId, isNew) {
+  var resource = docsGet_(docId);
   var tabs = resource.tabs || [];
   if (!tabs.length) {
     throw new Error('Document has no tabs (unexpected for this account).');
@@ -356,7 +296,7 @@ function prepareParentTab(docId, isNew) {
 
   if (isNew) {
     var pid = tabs[0].tabProperties.tabId;
-    docsBatchUpdate(docId, [
+    docsBatchUpdate_(docId, [
       {
         updateDocumentTabProperties: {
           tabProperties: { tabId: pid, title: PARENT_TAB_TITLE },
@@ -367,12 +307,12 @@ function prepareParentTab(docId, isNew) {
     return pid;
   }
 
-  var named = findRootTabIdByTitle(resource, PARENT_TAB_TITLE);
+  var named = findRootTabIdByTitle_(resource, PARENT_TAB_TITLE);
   if (named) return named;
 
   if (tabs.length === 1 && tabs[0].tabProperties) {
     var onlyId = tabs[0].tabProperties.tabId;
-    docsBatchUpdate(docId, [
+    docsBatchUpdate_(docId, [
       {
         updateDocumentTabProperties: {
           tabProperties: { tabId: onlyId, title: PARENT_TAB_TITLE },
@@ -389,7 +329,7 @@ function prepareParentTab(docId, isNew) {
   return tabs[0].tabProperties.tabId;
 }
 
-function findRootTabIdByTitle(docJson, title) {
+function findRootTabIdByTitle_(docJson, title) {
   var tabs = docJson.tabs || [];
   for (var i = 0; i < tabs.length; i++) {
     var tp = tabs[i].tabProperties || {};
@@ -398,7 +338,7 @@ function findRootTabIdByTitle(docJson, title) {
   return null;
 }
 
-function findTabJsonById(docJson, tabId) {
+function findTabJsonById_(docJson, tabId) {
   function walk(tab) {
     if (!tab || !tab.tabProperties) return null;
     if (tab.tabProperties.tabId === tabId) return tab;
@@ -417,7 +357,7 @@ function findTabJsonById(docJson, tabId) {
   return null;
 }
 
-function findChildTabIdByTitle(parentTabJson, title) {
+function findChildTabIdByTitle_(parentTabJson, title) {
   var kids = parentTabJson.childTabs || [];
   for (var i = 0; i < kids.length; i++) {
     var tp = kids[i].tabProperties || {};
@@ -427,16 +367,16 @@ function findChildTabIdByTitle(parentTabJson, title) {
 }
 
 /** Next sibling index under the parent tab (append = chronological order top → bottom). */
-function nextChildTabInsertIndex(parentTabJson) {
+function nextChildTabInsertIndex_(parentTabJson) {
   return (parentTabJson && parentTabJson.childTabs
     ? parentTabJson.childTabs.length
     : 0);
 }
 
-function addWeekChildTab(docId, parentTabId, title, insertIndex) {
+function addWeekChildTab_(docId, parentTabId, title, insertIndex) {
   var idx =
     typeof insertIndex === 'number' && insertIndex >= 0 ? insertIndex : 0;
-  var resp = docsBatchUpdate(docId, [
+  var resp = docsBatchUpdate_(docId, [
     {
       addDocumentTab: {
         tabProperties: {
@@ -461,7 +401,7 @@ function addWeekChildTab(docId, parentTabId, title, insertIndex) {
 
 // --- Docs API helpers (tabs / colors / tables) ---------------------------------
 
-function hexToRgbColor(hex) {
+function hexToRgbColor_(hex) {
   var h = String(hex || '').replace(/^#/, '');
   if (h.length !== 6) {
     return { red: 0, green: 0, blue: 0 };
@@ -474,23 +414,23 @@ function hexToRgbColor(hex) {
 }
 
 /** Docs API OptionalColor: `{ color: { rgbColor: RgbColor } }` — not bare `rgbColor`. */
-function optionalColorFromHex(hex) {
+function optionalColorFromHex_(hex) {
   return {
     color: {
-      rgbColor: hexToRgbColor(hex),
+      rgbColor: hexToRgbColor_(hex),
     },
   };
 }
 
-function batchUpdateChunked(docId, requests) {
+function batchUpdateChunked_(docId, requests) {
   if (!requests || !requests.length) return;
   for (var i = 0; i < requests.length; i += BATCH_CHUNK) {
-    if (i > 0) sleepDocsChunkGap();
-    docsBatchUpdate(docId, requests.slice(i, i + BATCH_CHUNK));
+    if (i > 0) sleepDocsChunkGap_();
+    docsBatchUpdate_(docId, requests.slice(i, i + BATCH_CHUNK));
   }
 }
 
-function paragraphIsEffectivelyEmpty(paragraph) {
+function paragraphIsEffectivelyEmpty_(paragraph) {
   var text = '';
   (paragraph.elements || []).forEach(function (el) {
     if (el.textRun && el.textRun.content) text += el.textRun.content;
@@ -498,7 +438,7 @@ function paragraphIsEffectivelyEmpty(paragraph) {
   return text.replace(/\s/g, '').length === 0;
 }
 
-function tabBodyPlainText(body) {
+function tabBodyPlainText_(body) {
   var t = '';
   (body.content || []).forEach(function (el) {
     if (el.paragraph) {
@@ -510,12 +450,12 @@ function tabBodyPlainText(body) {
   return t;
 }
 
-function isFiniteNumber(n) {
+function isFiniteNumber_(n) {
   return typeof n === 'number' && !isNaN(n) && isFinite(n);
 }
 
 /** Structural indices sometimes deserialize as strings from the advanced service. */
-function toDocIndex(v) {
+function toDocIndex_(v) {
   if (typeof v === 'number' && isFinite(v)) return Math.floor(v);
   if (typeof v === 'string' && /^-?\d+$/.test(String(v).trim())) {
     return parseInt(v, 10);
@@ -524,13 +464,13 @@ function toDocIndex(v) {
 }
 
 /** Bounds from paragraph.TextRuns when the StructuralElement omits start/end (nested tabs). */
-function spanFromParagraphElements(paragraph) {
+function spanFromParagraphElements_(paragraph) {
   var minS = null;
   var maxE = null;
   (paragraph.elements || []).forEach(function (pe) {
-    var ps = toDocIndex(pe.startIndex);
-    var pe_ = toDocIndex(pe.endIndex);
-    if (!isFiniteNumber(ps) || !isFiniteNumber(pe_)) return;
+    var ps = toDocIndex_(pe.startIndex);
+    var pe_ = toDocIndex_(pe.endIndex);
+    if (!isFiniteNumber_(ps) || !isFiniteNumber_(pe_)) return;
     if (minS === null || ps < minS) minS = ps;
     if (maxE === null || pe_ > maxE) maxE = pe_;
   });
@@ -538,14 +478,14 @@ function spanFromParagraphElements(paragraph) {
   return { start: minS, end: maxE };
 }
 
-function structuralContentBounds(el) {
-  var s = toDocIndex(el.startIndex);
-  var e = toDocIndex(el.endIndex);
-  if (isFiniteNumber(s) && isFiniteNumber(e) && e > s) {
+function structuralContentBounds_(el) {
+  var s = toDocIndex_(el.startIndex);
+  var e = toDocIndex_(el.endIndex);
+  if (isFiniteNumber_(s) && isFiniteNumber_(e) && e > s) {
     return { start: s, end: e };
   }
   if (el.paragraph) {
-    var sp = spanFromParagraphElements(el.paragraph);
+    var sp = spanFromParagraphElements_(el.paragraph);
     if (sp) return sp;
   }
   return null;
@@ -556,12 +496,12 @@ function structuralContentBounds(el) {
  * Skips paragraphs that only contain whitespace/newline — those cannot be removed without
  * violating segment newline rules, so earlier blocks are deleted first.
  */
-function pickNextTabBodyDeletionRequest(content, tabId) {
+function pickNextTabBodyDeletionRequest_(content, tabId) {
   if (!content || !content.length) return null;
   var i = content.length - 1;
   while (i >= 0) {
     var el = content[i];
-    var bounds = structuralContentBounds(el);
+    var bounds = structuralContentBounds_(el);
     if (!bounds) {
       i--;
       continue;
@@ -569,7 +509,7 @@ function pickNextTabBodyDeletionRequest(content, tabId) {
     var s = bounds.start;
     var e = bounds.end;
 
-    if (el.paragraph && paragraphIsEffectivelyEmpty(el.paragraph)) {
+    if (el.paragraph && paragraphIsEffectivelyEmpty_(el.paragraph)) {
       i--;
       continue;
     }
@@ -592,9 +532,9 @@ function pickNextTabBodyDeletionRequest(content, tabId) {
       };
     }
 
-    var ws = toDocIndex(el.startIndex);
-    var we = toDocIndex(el.endIndex);
-    if (!isFiniteNumber(ws) || !isFiniteNumber(we) || we <= ws) {
+    var ws = toDocIndex_(el.startIndex);
+    var we = toDocIndex_(el.endIndex);
+    if (!isFiniteNumber_(ws) || !isFiniteNumber_(we) || we <= ws) {
       i--;
       continue;
     }
@@ -612,12 +552,12 @@ function pickNextTabBodyDeletionRequest(content, tabId) {
   return null;
 }
 
-function tabBodyStillNeedsClearing(body) {
+function tabBodyStillNeedsClearing_(body) {
   var content = body.content || [];
   for (var j = 0; j < content.length; j++) {
     var el = content[j];
     if (!el.paragraph) return true;
-    if (!paragraphIsEffectivelyEmpty(el.paragraph)) return true;
+    if (!paragraphIsEffectivelyEmpty_(el.paragraph)) return true;
   }
   return false;
 }
@@ -627,11 +567,11 @@ function tabBodyStillNeedsClearing(body) {
  * Full paragraph deletes [startIndex, endIndex) hit "cannot include the newline at end of segment".
  * @returns {boolean} false if the tab still has content but no safe delete range (caller should deleteTab + recreate).
  */
-function clearTabBodyDocsApi(docId, tabId) {
+function clearTabBodyDocsApi_(docId, tabId) {
   var iterations = 0;
   while (iterations++ < 80) {
-    var doc = docsGet(docId);
-    var tab = findTabJsonById(doc, tabId);
+    var doc = docsGet_(docId);
+    var tab = findTabJsonById_(doc, tabId);
     if (!tab || !tab.documentTab || !tab.documentTab.body) return true;
     var content = tab.documentTab.body.content || [];
 
@@ -639,18 +579,18 @@ function clearTabBodyDocsApi(docId, tabId) {
     if (
       content.length === 1 &&
       content[0].paragraph &&
-      paragraphIsEffectivelyEmpty(content[0].paragraph)
+      paragraphIsEffectivelyEmpty_(content[0].paragraph)
     ) {
       return true;
     }
 
-    var req = pickNextTabBodyDeletionRequest(content, tabId);
+    var req = pickNextTabBodyDeletionRequest_(content, tabId);
     if (!req) {
-      if (!tabBodyStillNeedsClearing(tab.documentTab.body)) return true;
+      if (!tabBodyStillNeedsClearing_(tab.documentTab.body)) return true;
       return false;
     }
 
-    docsBatchUpdate(docId, [req]);
+    docsBatchUpdate_(docId, [req]);
     /* Spread writes so we do not burst past per-minute Docs write quota. */
     Utilities.sleep(100);
   }
@@ -658,13 +598,13 @@ function clearTabBodyDocsApi(docId, tabId) {
 }
 
 /** One-time helper text on the parent tab (Docs API only). */
-function seedParentTabHomeDocsApi(docId, parentTabId) {
-  var doc = docsGet(docId);
-  var tab = findTabJsonById(doc, parentTabId);
+function seedParentTabHomeDocsApi_(docId, parentTabId) {
+  var doc = docsGet_(docId);
+  var tab = findTabJsonById_(doc, parentTabId);
   if (!tab || !tab.documentTab || !tab.documentTab.body) return;
-  if (tabBodyPlainText(tab.documentTab.body).replace(/\s/g, '').length > 0) return;
+  if (tabBodyPlainText_(tab.documentTab.body).replace(/\s/g, '').length > 0) return;
 
-  docsBatchUpdate(docId, [
+  docsBatchUpdate_(docId, [
     {
       insertText: {
         text: PARENT_TAB_TITLE + '\n',
@@ -687,13 +627,13 @@ function seedParentTabHomeDocsApi(docId, parentTabId) {
     },
   ]);
 
-  doc = docsGet(docId);
-  tab = findTabJsonById(doc, parentTabId);
+  doc = docsGet_(docId);
+  tab = findTabJsonById_(doc, parentTabId);
   var bodyContent = tab.documentTab.body.content || [];
   var p0 = bodyContent[0];
-  var h1bounds = p0 && p0.paragraph ? structuralContentBounds(p0) : null;
+  var h1bounds = p0 && p0.paragraph ? structuralContentBounds_(p0) : null;
   if (h1bounds) {
-    docsBatchUpdate(docId, [
+    docsBatchUpdate_(docId, [
       {
         updateParagraphStyle: {
           range: {
@@ -710,27 +650,27 @@ function seedParentTabHomeDocsApi(docId, parentTabId) {
   }
 }
 
-function findLastTableStructInTab(docJson, tabId) {
-  var tab = findTabJsonById(docJson, tabId);
+function findLastTableStructInTab_(docJson, tabId) {
+  var tab = findTabJsonById_(docJson, tabId);
   if (!tab || !tab.documentTab || !tab.documentTab.body) return null;
   var content = tab.documentTab.body.content || [];
   for (var i = content.length - 1; i >= 0; i--) {
     if (content[i].table) {
-      var si = toDocIndex(content[i].startIndex);
-      if (!isFiniteNumber(si)) return null;
+      var si = toDocIndex_(content[i].startIndex);
+      if (!isFiniteNumber_(si)) return null;
       return { startIndex: si, table: content[i].table };
     }
   }
   return null;
 }
 
-function cellParagraphInsertIndex(cell) {
+function cellParagraphInsertIndex_(cell) {
   var content = cell.content || [];
   for (var i = 0; i < content.length; i++) {
     if (content[i].paragraph) {
-      var s = toDocIndex(content[i].startIndex);
-      if (isFiniteNumber(s)) return s;
-      var inner = spanFromParagraphElements(content[i].paragraph);
+      var s = toDocIndex_(content[i].startIndex);
+      if (isFiniteNumber_(s)) return s;
+      var inner = spanFromParagraphElements_(content[i].paragraph);
       if (inner) return inner.start;
     }
   }
@@ -738,7 +678,7 @@ function cellParagraphInsertIndex(cell) {
 }
 
 /** Find the paragraph in a tab body whose plain text matches `text` (newline-trimmed). */
-function findParagraphByText(tabJson, text) {
+function findParagraphByText_(tabJson, text) {
   if (!tabJson || !tabJson.documentTab || !tabJson.documentTab.body) return null;
   var content = tabJson.documentTab.body.content || [];
   for (var i = 0; i < content.length; i++) {
@@ -753,7 +693,7 @@ function findParagraphByText(tabJson, text) {
   return null;
 }
 
-function getCellTextRange(cell) {
+function getCellTextRange_(cell) {
   var minS = null;
   var maxE = null;
   (cell.content || []).forEach(function (se) {
@@ -772,54 +712,54 @@ function getCellTextRange(cell) {
  * True if the week tab already has a table or substantial body — replace the tab
  * instead of clearing paragraph-by-paragraph (avoids hundreds of Docs writes / quota).
  */
-function tabBodyHasHeavyContent(tabJson) {
+function tabBodyHasHeavyContent_(tabJson) {
   if (!tabJson || !tabJson.documentTab || !tabJson.documentTab.body) return false;
   var content = tabJson.documentTab.body.content || [];
   for (var i = 0; i < content.length; i++) {
     if (content[i].table) return true;
   }
   if (content.length > 3) return true;
-  var plain = tabBodyPlainText(tabJson.documentTab.body).replace(/\s/g, '');
+  var plain = tabBodyPlainText_(tabJson.documentTab.body).replace(/\s/g, '');
   return plain.length > 60;
 }
 
-function fillWeekTabDocsApi(docId, parentTabId, tabTitle, tabId, weekKey, weekData) {
-  var docProbe = docsGet(docId);
-  var tabProbe = findTabJsonById(docProbe, tabId);
-  var savedData = readExistingDataFromTab(tabProbe);
+function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData) {
+  var docProbe = docsGet_(docId);
+  var tabProbe = findTabJsonById_(docProbe, tabId);
+  var savedData = readExistingDataFromTab_(tabProbe);
 
-  if (tabBodyHasHeavyContent(tabProbe)) {
-    docsBatchUpdate(docId, [{ deleteTab: { tabId: tabId } }]);
-    var docAfterHeavy = docsGet(docId);
-    var pjHeavy = findTabJsonById(docAfterHeavy, parentTabId);
-    tabId = addWeekChildTab(
+  if (tabBodyHasHeavyContent_(tabProbe)) {
+    docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
+    var docAfterHeavy = docsGet_(docId);
+    var pjHeavy = findTabJsonById_(docAfterHeavy, parentTabId);
+    tabId = addWeekChildTab_(
       docId,
       parentTabId,
       tabTitle,
-      nextChildTabInsertIndex(pjHeavy)
+      nextChildTabInsertIndex_(pjHeavy)
     );
-    sleepDocsChunkGap();
+    sleepDocsChunkGap_();
   } else {
-    var cleared = clearTabBodyDocsApi(docId, tabId);
+    var cleared = clearTabBodyDocsApi_(docId, tabId);
     if (!cleared) {
-      docsBatchUpdate(docId, [{ deleteTab: { tabId: tabId } }]);
-      var docAfterDel = docsGet(docId);
-      var pjAfterDel = findTabJsonById(docAfterDel, parentTabId);
-      tabId = addWeekChildTab(
+      docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
+      var docAfterDel = docsGet_(docId);
+      var pjAfterDel = findTabJsonById_(docAfterDel, parentTabId);
+      tabId = addWeekChildTab_(
         docId,
         parentTabId,
         tabTitle,
-        nextChildTabInsertIndex(pjAfterDel)
+        nextChildTabInsertIndex_(pjAfterDel)
       );
-      sleepDocsChunkGap();
+      sleepDocsChunkGap_();
     }
   }
 
   var days = weekData.days || [];
   var weekHeading = 'Week of ' + (weekData.week_label || weekKey);
-  var subtitle = 'Assignments in this week: ' + countAssignmentsInWeek(days);
+  var subtitle = 'Assignments in this week: ' + countAssignmentsInWeek_(days);
 
-  docsBatchUpdate(docId, [
+  docsBatchUpdate_(docId, [
     { insertText: { text: weekHeading + '\n', endOfSegmentLocation: { tabId: tabId } } },
     { insertText: { text: subtitle + '\n',    endOfSegmentLocation: { tabId: tabId } } },
     { insertText: { text: '\n',                endOfSegmentLocation: { tabId: tabId } } },
@@ -827,14 +767,14 @@ function fillWeekTabDocsApi(docId, parentTabId, tabTitle, tabId, weekKey, weekDa
 
   // Style week heading + subtitle. The tab was just cleared/created, so the first two
   // paragraphs ARE the ones we just inserted.
-  var doc = docsGet(docId);
-  var tab = findTabJsonById(doc, tabId);
+  var doc = docsGet_(docId);
+  var tab = findTabJsonById_(doc, tabId);
   var paras = tab.documentTab.body.content || [];
   var pTitle = paras[0];
   var pSub = paras[1];
   var styleReqs = [];
-  var titleBounds = pTitle && pTitle.paragraph ? structuralContentBounds(pTitle) : null;
-  var subBounds   = pSub   && pSub.paragraph   ? structuralContentBounds(pSub)   : null;
+  var titleBounds = pTitle && pTitle.paragraph ? structuralContentBounds_(pTitle) : null;
+  var subBounds   = pSub   && pSub.paragraph   ? structuralContentBounds_(pSub)   : null;
   if (titleBounds) {
     styleReqs.push({
       updateParagraphStyle: {
@@ -848,21 +788,21 @@ function fillWeekTabDocsApi(docId, parentTabId, tabTitle, tabId, weekKey, weekDa
     styleReqs.push({
       updateTextStyle: {
         range: { segmentId: '', tabId: tabId, startIndex: subBounds.start, endIndex: subBounds.end },
-        textStyle: { italic: true, foregroundColor: optionalColorFromHex(DATA_FG) },
+        textStyle: { italic: true, foregroundColor: optionalColorFromHex_(DATA_FG) },
         fields: 'italic,foregroundColor',
       },
     });
   }
-  if (styleReqs.length) docsBatchUpdate(docId, styleReqs);
+  if (styleReqs.length) docsBatchUpdate_(docId, styleReqs);
 
-  if (countAssignmentsInWeek(days) === 0) return;
+  if (countAssignmentsInWeek_(days) === 0) return;
 
-  var courseColorMap = buildCourseColorMap(days);
+  var courseColorMap = buildCourseColorMap_(days);
 
   // Two stacked tables: By Class first, then By Day.
   // Both share courseColorMap so the same course is the same color in both views.
-  writeTableSection(docId, tabId, 'By Class', 'class', days, courseColorMap, savedData);
-  writeTableSection(docId, tabId, 'By Day',   'day',   days, courseColorMap, savedData);
+  writeTableSection_(docId, tabId, 'By Class', 'class', days, courseColorMap, savedData);
+  writeTableSection_(docId, tabId, 'By Day',   'day',   days, courseColorMap, savedData);
 }
 
 /**
@@ -879,23 +819,23 @@ function fillWeekTabDocsApi(docId, parentTabId, tabTitle, tabId, weekKey, weekDa
  *   col 4: Status (white bg, editable, defaults to STATUS_DEFAULT)
  *   col 5: Notes  (white bg, editable, blank by default)
  */
-function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMap, savedData) {
+function writeTableSection_(docId, tabId, sectionTitle, mode, days, courseColorMap, savedData) {
   var headers = (mode === 'class') ? BY_CLASS_HEADERS : BY_DAY_HEADERS;
   var widths  = (mode === 'class') ? BY_CLASS_WIDTHS  : BY_DAY_WIDTHS;
-  var groups  = (mode === 'class') ? flattenAndGroupByCourse(days) : flattenAndGroupByDay(days);
+  var groups  = (mode === 'class') ? flattenAndGroupByCourse_(days) : flattenAndGroupByDay_(days);
 
   // 1. Insert section heading paragraph.
-  docsBatchUpdate(docId, [
+  docsBatchUpdate_(docId, [
     { insertText: { text: sectionTitle + '\n', endOfSegmentLocation: { tabId: tabId } } },
   ]);
 
   // 2. Style the section heading as HEADING_3. Find by text since it's now embedded mid-tab.
-  var doc = docsGet(docId);
-  var tab = findTabJsonById(doc, tabId);
-  var headingPara = findParagraphByText(tab, sectionTitle);
-  var headBounds = headingPara && headingPara.paragraph ? structuralContentBounds(headingPara) : null;
+  var doc = docsGet_(docId);
+  var tab = findTabJsonById_(doc, tabId);
+  var headingPara = findParagraphByText_(tab, sectionTitle);
+  var headBounds = headingPara && headingPara.paragraph ? structuralContentBounds_(headingPara) : null;
   if (headBounds) {
-    docsBatchUpdate(docId, [
+    docsBatchUpdate_(docId, [
       {
         updateParagraphStyle: {
           range: { segmentId: '', tabId: tabId, startIndex: headBounds.start, endIndex: headBounds.end },
@@ -912,7 +852,7 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
   if (numRows <= 1) return;
 
   // 4. Insert table at end of segment.
-  docsBatchUpdate(docId, [
+  docsBatchUpdate_(docId, [
     {
       insertTable: {
         rows: numRows,
@@ -923,8 +863,8 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
   ]);
 
   // 5. Re-fetch to find the new table (always the LAST table now since insertTable appended).
-  doc = docsGet(docId);
-  var tblWrap = findLastTableStructInTab(doc, tabId);
+  doc = docsGet_(docId);
+  var tblWrap = findLastTableStructInTab_(doc, tabId);
   if (!tblWrap || !tblWrap.table || !tblWrap.table.tableRows) {
     throw new Error('insertTable failed for ' + sectionTitle);
   }
@@ -938,7 +878,7 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
 
   headers.forEach(function (h, c) {
     var cell = tableJson.tableRows[r].tableCells[c];
-    inserts.push({ idx: cellParagraphInsertIndex(cell), text: String(h) });
+    inserts.push({ idx: cellParagraphInsertIndex_(cell), text: String(h) });
   });
   r++;
 
@@ -946,7 +886,7 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
     var groupLabel = (mode === 'class') ? group.course : group.day;
     headers.forEach(function (_, c) {
       var cell = tableJson.tableRows[r].tableCells[c];
-      inserts.push({ idx: cellParagraphInsertIndex(cell), text: c === 0 ? groupLabel : '' });
+      inserts.push({ idx: cellParagraphInsertIndex_(cell), text: c === 0 ? groupLabel : '' });
     });
     r++;
 
@@ -960,7 +900,7 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
         else if (c === 3) txt = a.priority || '';
         else if (c === 4) txt = (a.url && savedData.status[a.url]) ? savedData.status[a.url] : STATUS_DEFAULT;
         else if (c === 5) txt = (a.url && savedData.notes[a.url])  ? savedData.notes[a.url]  : '';
-        inserts.push({ idx: cellParagraphInsertIndex(cell), text: txt });
+        inserts.push({ idx: cellParagraphInsertIndex_(cell), text: txt });
       });
       r++;
     });
@@ -979,11 +919,11 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
         },
       };
     });
-  batchUpdateChunked(docId, insertReqs);
+  batchUpdateChunked_(docId, insertReqs);
 
   // 7. Re-fetch table for styling (text inserts shift cell ranges).
-  doc = docsGet(docId);
-  tblWrap = findLastTableStructInTab(doc, tabId);
+  doc = docsGet_(docId);
+  tblWrap = findLastTableStructInTab_(doc, tabId);
   tableJson = tblWrap.table;
 
   var decorReqs = [];
@@ -998,18 +938,18 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
         },
         rowSpan: 1, columnSpan: headers.length,
       },
-      tableCellStyle: { backgroundColor: optionalColorFromHex(HEADER_BG) },
+      tableCellStyle: { backgroundColor: optionalColorFromHex_(HEADER_BG) },
       fields: 'backgroundColor',
     },
   });
   for (var c = 0; c < headers.length; c++) {
     var hCell = tableJson.tableRows[0].tableCells[c];
-    var hr = getCellTextRange(hCell);
+    var hr = getCellTextRange_(hCell);
     if (hr && hr.endIndex > hr.startIndex) {
       decorReqs.push({
         updateTextStyle: {
           range: { tabId: tabIdForLoc, startIndex: hr.startIndex, endIndex: hr.endIndex },
-          textStyle: { bold: true, foregroundColor: optionalColorFromHex(HEADER_FG) },
+          textStyle: { bold: true, foregroundColor: optionalColorFromHex_(HEADER_FG) },
           fields: 'bold,foregroundColor',
         },
       });
@@ -1033,17 +973,17 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
           },
           rowSpan: 1, columnSpan: headers.length,
         },
-        tableCellStyle: { backgroundColor: optionalColorFromHex(groupBgHex) },
+        tableCellStyle: { backgroundColor: optionalColorFromHex_(groupBgHex) },
         fields: 'backgroundColor',
       },
     });
     var groupCell = tableJson.tableRows[rowPtr].tableCells[0];
-    var cr = getCellTextRange(groupCell);
+    var cr = getCellTextRange_(groupCell);
     if (cr && cr.endIndex > cr.startIndex) {
       decorReqs.push({
         updateTextStyle: {
           range: { tabId: tabIdForLoc, startIndex: cr.startIndex, endIndex: cr.endIndex },
-          textStyle: { bold: true, foregroundColor: optionalColorFromHex(DATA_FG) },
+          textStyle: { bold: true, foregroundColor: optionalColorFromHex_(DATA_FG) },
           fields: 'bold,foregroundColor',
         },
       });
@@ -1065,7 +1005,7 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
             },
             rowSpan: 1, columnSpan: 3,
           },
-          tableCellStyle: { backgroundColor: optionalColorFromHex(rowBgHex) },
+          tableCellStyle: { backgroundColor: optionalColorFromHex_(rowBgHex) },
           fields: 'backgroundColor',
         },
       });
@@ -1078,7 +1018,7 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
             },
             rowSpan: 1, columnSpan: 1,
           },
-          tableCellStyle: { backgroundColor: optionalColorFromHex(priorityBg) },
+          tableCellStyle: { backgroundColor: optionalColorFromHex_(priorityBg) },
           fields: 'backgroundColor',
         },
       });
@@ -1092,7 +1032,7 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
             },
             rowSpan: 1, columnSpan: 2,
           },
-          tableCellStyle: { backgroundColor: optionalColorFromHex(EDITABLE_BG) },
+          tableCellStyle: { backgroundColor: optionalColorFromHex_(EDITABLE_BG) },
           fields: 'backgroundColor',
         },
       });
@@ -1105,13 +1045,13 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
       var cNotes  = tableJson.tableRows[rowPtr].tableCells[5];
 
       // Assignment cell: link styling if URL present, else dark text.
-      var rAssign = getCellTextRange(cAssign);
+      var rAssign = getCellTextRange_(cAssign);
       if (rAssign && rAssign.endIndex > rAssign.startIndex) {
-        var tsAssign = { foregroundColor: optionalColorFromHex(DATA_FG) };
+        var tsAssign = { foregroundColor: optionalColorFromHex_(DATA_FG) };
         var fieldsAssign = 'foregroundColor';
         if (a.url) {
           tsAssign.link = { url: a.url };
-          tsAssign.foregroundColor = optionalColorFromHex(LINK_FG);
+          tsAssign.foregroundColor = optionalColorFromHex_(LINK_FG);
           fieldsAssign = 'foregroundColor,link';
         }
         decorReqs.push({
@@ -1124,12 +1064,12 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
 
       // All other cells: dark text on whatever background was set above.
       [cMid, cTime, cPri, cStatus, cNotes].forEach(function (cell) {
-        var rg = getCellTextRange(cell);
+        var rg = getCellTextRange_(cell);
         if (rg && rg.endIndex > rg.startIndex) {
           decorReqs.push({
             updateTextStyle: {
               range: { tabId: tabIdForLoc, startIndex: rg.startIndex, endIndex: rg.endIndex },
-              textStyle: { foregroundColor: optionalColorFromHex(DATA_FG) },
+              textStyle: { foregroundColor: optionalColorFromHex_(DATA_FG) },
               fields: 'foregroundColor',
             },
           });
@@ -1140,7 +1080,7 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
     });
   });
 
-  batchUpdateChunked(docId, decorReqs);
+  batchUpdateChunked_(docId, decorReqs);
 
   // 8. Set fixed column widths so the table doesn't expand to page width.
   var widthReqs = [];
@@ -1157,18 +1097,18 @@ function writeTableSection(docId, tabId, sectionTitle, mode, days, courseColorMa
       },
     });
   }
-  batchUpdateChunked(docId, widthReqs);
+  batchUpdateChunked_(docId, widthReqs);
 
   // 9. Trailing blank paragraph for visual breathing room before next section.
-  docsBatchUpdate(docId, [
+  docsBatchUpdate_(docId, [
     { insertText: { text: '\n', endOfSegmentLocation: { tabId: tabId } } },
   ]);
 
-  sleepDocsChunkGap();
+  sleepDocsChunkGap_();
 }
 
-function buildCourseColorMap(days) {
-  var names = collectCourseNames(days);
+function buildCourseColorMap_(days) {
+  var names = collectCourseNames_(days);
   names.sort(function (a, b) {
     return a.localeCompare(b);
   });
@@ -1178,7 +1118,7 @@ function buildCourseColorMap(days) {
 
   for (var i = 0; i < names.length; i++) {
     var name = names[i];
-    var preferred = hashString(name) % COURSE_COLORS.length;
+    var preferred = hashString_(name) % COURSE_COLORS.length;
     var idx = preferred;
     var guard = 0;
     while (usedIndex[idx] && guard < COURSE_COLORS.length) {
@@ -1197,7 +1137,7 @@ function buildCourseColorMap(days) {
   return map;
 }
 
-function collectCourseNames(days) {
+function collectCourseNames_(days) {
   var names = [];
   (days || []).forEach(function (dayObj) {
     (dayObj.assignments || []).forEach(function (a) {
@@ -1208,7 +1148,7 @@ function collectCourseNames(days) {
   return names;
 }
 
-function hashString(str) {
+function hashString_(str) {
   var hash = 0;
   var s = String(str || '');
   for (var i = 0; i < s.length; i++) {
@@ -1217,7 +1157,7 @@ function hashString(str) {
   return hash;
 }
 
-function getCellText(cell) {
+function getCellText_(cell) {
   var text = '';
   (cell.content || []).forEach(function (se) {
     if (!se.paragraph) return;
@@ -1228,7 +1168,7 @@ function getCellText(cell) {
   return text.replace(/\n$/, '').trim();
 }
 
-function getCellLinkUrl(cell) {
+function getCellLinkUrl_(cell) {
   var url = null;
   (cell.content || []).forEach(function (se) {
     if (!se.paragraph || url) return;
@@ -1250,7 +1190,7 @@ function getCellLinkUrl(cell) {
  *   - New 6-col table (Status + Notes): status col = 4, notes col = 5
  * Tables with < 5 columns are ignored.
  */
-function readExistingDataFromTab(tabJson) {
+function readExistingDataFromTab_(tabJson) {
   var result = { notes: {}, status: {} };
   try {
     if (!tabJson || !tabJson.documentTab) return result;
@@ -1265,12 +1205,12 @@ function readExistingDataFromTab(tabJson) {
       (tableStruct.tableRows || []).forEach(function (row) {
         var cells = row.tableCells || [];
         if (cells.length < numCols) return;
-        var url = getCellLinkUrl(cells[0]);
+        var url = getCellLinkUrl_(cells[0]);
         if (!url) return; // header / group-header row — no Canvas link
-        var note = getCellText(cells[notesColIdx]);
+        var note = getCellText_(cells[notesColIdx]);
         if (note) result.notes[url] = note;
         if (statusColIdx >= 0) {
-          var status = getCellText(cells[statusColIdx]);
+          var status = getCellText_(cells[statusColIdx]);
           // Each assignment appears in both tables. An untouched default in one table must not
           // overwrite a Status the teacher typed in the other.
           if (status && (status !== STATUS_DEFAULT || !result.status[url])) {
@@ -1283,7 +1223,7 @@ function readExistingDataFromTab(tabJson) {
   return result;
 }
 
-function flattenAndGroupByCourse(days) {
+function flattenAndGroupByCourse_(days) {
   var all = [];
   (days || []).forEach(function (dayObj) {
     (dayObj.assignments || []).forEach(function (a) { all.push(a); });
@@ -1322,7 +1262,7 @@ function flattenAndGroupByCourse(days) {
  * Within each day, sorts by due_time then assignment title.
  * Skips days with zero assignments to keep the table tight.
  */
-function flattenAndGroupByDay(days) {
+function flattenAndGroupByDay_(days) {
   var groups = [];
   (days || []).forEach(function (dayObj) {
     var assignments = (dayObj.assignments || []).slice();
