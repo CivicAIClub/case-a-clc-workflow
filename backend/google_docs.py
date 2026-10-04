@@ -68,10 +68,11 @@ async def send_to_apps_script(
     if secret:
         payload["secret"] = secret
 
-    # How long to wait: up to 30 seconds to connect to Google, and up to 2 minutes overall.
-    # Writing a whole Doc can take a while, and the script can be slow to "wake up" if it
-    # hasn't been used recently.
-    timeout = httpx.Timeout(120.0, connect=30.0)
+    # How long to wait: up to 30 seconds to connect to Google, and up to 5½ minutes for the reply.
+    # Writing a whole Doc can take a few minutes for a busy student, and the script can be slow
+    # to "wake up" if it hasn't been used recently. Apps Script stops any run after 6 minutes,
+    # so waiting just under that means we never give up on a run that is still working.
+    timeout = httpx.Timeout(330.0, connect=30.0)
 
     # Try up to three times (attempts number 0, 1, and 2).
     for attempt in range(3):
@@ -124,11 +125,15 @@ async def send_to_apps_script(
                 out["documentId"] = str(did)
             return out
 
-        # Google couldn't be reached, or took too long. On the first two tries, wait a moment
-        # (2 seconds, then 4 seconds) and try again, since the problem is often a brief network
-        # hiccup. On the third failure, give up and let main.py report the error.
-        # Other problems (an error code or a bad reply from Google) are not retried.
-        except httpx.RequestError as exc:
+        # Google couldn't be reached at all. On the first two tries, wait a moment (2 seconds,
+        # then 4 seconds) and try again, since the problem is often a brief network hiccup.
+        # On the third failure, give up and let main.py report the error.
+        # Only connection failures are retried: then the request never reached Google, so
+        # trying again is safe. If the request did get through (for example, the reply was
+        # too slow), the script may still be writing the Doc, and sending it again would make
+        # a second copy of a new student's Doc. Those problems, an error code, or a bad reply
+        # from Google go straight to main.py.
+        except (httpx.ConnectError, httpx.ConnectTimeout):
             if attempt < 2:
                 await asyncio.sleep(2.0 * (attempt + 1))
                 continue
