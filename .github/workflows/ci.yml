@@ -1,0 +1,43 @@
+name: CI
+
+# Quick checks on every pull request (and on main). AutoPlanner runs in Google Apps Script,
+# so these run the .gs files in Node with pretend ("mock") Google services. No secrets are
+# used and nothing external is called.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Apps Script tests (tests/*.test.js)
+        run: node --test tests/*.test.js
+
+      - name: JavaScript syntax check (.gs files and the page script in Index.html)
+        run: |
+          # Node won't check a .gs file directly, so check a .js copy of each.
+          for f in apps_script/*.gs; do
+            cp "$f" "$RUNNER_TEMP/$(basename "$f" .gs).js"
+            node --check "$RUNNER_TEMP/$(basename "$f" .gs).js"
+          done
+          node -e '
+            const html = require("fs").readFileSync("apps_script/Index.html", "utf8");
+            const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+            if (scripts.length !== 1) throw new Error("expected 1 inline <script> in Index.html, found " + scripts.length);
+            if (/<script\s+src/.test(html)) throw new Error("Index.html must not load outside scripts");
+            require("fs").writeFileSync(process.env.RUNNER_TEMP + "/index.js", scripts[0]);
+          '
+          node --check "$RUNNER_TEMP/index.js"
+          echo "Syntax check passed."

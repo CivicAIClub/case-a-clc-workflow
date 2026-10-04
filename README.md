@@ -5,8 +5,10 @@
 | **Client** | Supported Study Hall staff at the Center for Learning and Collaboration (CLC), Pomfret School |
 | **Developers** | Luke Ryan, Jack Weinberg |
 | **Club lead** | Cayden Auyang |
-| **Status** | 🟢 Multi-student UI, per-student Google Docs with By Class / By Day tables, frontend deployed to GitHub Pages |
-| **Live frontend** | https://civicaiclub.github.io/case-a-clc-workflow/ (static page only; it needs a hosted backend, see step 6) |
+| **Status** | 🟢 Handed to the CLC: an Apps Script web app on the Pomfret Google domain, with automatic updates at 7 pm and midnight |
+| **Web app** | https://script.google.com/a/macros/pomfret.org/s/AKfycby1FSQahq5fzxF9XHWZ5drKXFrfyF9e-y1o8cfwnGYY_uXVYKIZ6dFKk3muEGEKG3HA/exec (Pomfret sign-in, CLC staff only) |
+| **Old address** | https://civicaiclub.github.io/case-a-clc-workflow/ now just links to the web app |
+| **Staff guides** | [`docs/handoff/`](docs/handoff/): quick start for CLC staff, token guide for students, demo script and troubleshooting |
 
 ## The problem
 
@@ -14,124 +16,147 @@ CLC staff spend hours each week logging into individual student Canvas accounts 
 
 ## What AutoPlanner does
 
-Teachers collect **each student's** Canvas API token, paste them into the UI (one row per student), fetch everyone's assignments in parallel, preview each schedule on a tab, and export a **separate Google Doc per student**. Each Doc has one nested document tab per week; the **Status** and **Notes** columns the teacher edits are preserved across re-runs (keyed by Canvas assignment URL).
+CLC staff open one web page, signed in with their Pomfret Google account. They add each student once by pasting the student's Canvas access token. AutoPlanner then keeps **one Google Doc per student** in a shared Drive folder.
 
-## Stack
+- Each Doc has one tab per week: a **By Class** table for every class the student takes (including classes with nothing due), then a **By Day** table. Every table uses the same full-width layout, written down at the top of `apps_script/Code.gs`.
+- Staff type **Status** (Not started, In progress or Complete, as plain text) and **Notes**. Both are kept across updates, keyed by the assignment's Canvas link.
+- Updates run automatically every day at about 7 pm and about midnight (New York time), or on demand from the page.
 
-- **Backend:** Python 3.11+ / FastAPI (`backend/`). Talks to the Canvas REST API and to the Apps Script web app.
-- **Frontend:** one static HTML page, no build step (`frontend/index.html`). Served by the backend locally, or by GitHub Pages.
-- **Google Apps Script** web app that creates/updates the Google Doc via the Docs API (`apps_script/Code.gs`, manifest in `apps_script/appsscript.json`).
+## How it works
+
+Everything runs in one Google Apps Script project owned by the club lead's Pomfret account. There is no other server.
 
 ```
-Frontend (index.html, static)
-  → GET  /api/assignments (X-Canvas-Token header) → Canvas (per-student token from the teacher's UI)
-  → POST /api/generate-doc                 → Apps Script → Google Doc (per student)
+Staff browser (Index.html, signed in to Pomfret)
+  → google.script.run → App.gs  (checks ALLOWED_USERS on every call)
+       → Canvas.gs  → Canvas REST API (UrlFetchApp, the student's token)
+       → Code.gs    → Google Docs API (writes the Doc in the shared folder)
+Time-driven triggers (7 pm, midnight) → App.gs → same path, in batches
 ```
+
+- **Web app:** executes as the owner (`USER_DEPLOYING`) and is open to **Anyone within Pomfret School** (`DOMAIN`). On top of that, every function the page can call checks the visitor's email (`Session.getActiveUser()`) against the `ALLOWED_USERS` Script Property.
+- **Storage:** the student list, tokens and run summaries live in **Script Properties**, one property per student, with writes protected by `LockService`. Tokens never leave the server: the page only ever gets the last 4 characters, and tokens are never logged or put in messages.
+- **Long runs:** Apps Script stops any run at 6 minutes, and one student's Doc takes about 2 minutes. A run therefore starts no new student after 2 minutes; if students are left, it schedules `continueRun` a minute later. A safety trigger resumes a run whose batch was cut off.
+- **Existing Docs:** when a student is added again, AutoPlanner finds their "First Last - CLC Assignments" Doc in the shared folder and reuses it.
 
 ## Repository layout
 
 ```
 case-a-clc-workflow/
-├── backend/
-│   ├── main.py            FastAPI routes; also serves frontend/ at /
-│   ├── canvas_api.py      Canvas REST client (pagination handled)
-│   ├── processor.py       Data normalization and weekly grouping
-│   ├── google_docs.py     Apps Script HTTP client (retries, redirects)
-│   ├── requirements.txt   Pinned Python dependencies
-│   └── .env.example       Every environment variable, documented (copy to .env)
-├── frontend/
-│   ├── index.html         Single-page UI (no build step)
-│   └── .nojekyll          Keeps GitHub Pages from running Jekyll
-├── apps_script/
-│   ├── Code.gs            Google Apps Script web app (paste into script.google.com)
-│   └── appsscript.json    Apps Script manifest (Docs API advanced service + scopes)
-├── .cursor/rules/         Committed Cursor rules for this repo (nothing to paste into your IDE)
-└── .github/workflows/     Deploys frontend/ to GitHub Pages on every push to main
+├── apps_script/            Everything that runs in Apps Script (paste these into the editor)
+│   ├── appsscript.json     Manifest: Docs API service, permissions, web app settings
+│   ├── Code.gs             Writes each student's Doc (tabs, tables, Status/Notes, folder rules)
+│   ├── Canvas.gs           Reads Canvas, then sorts assignments into weeks and days
+│   ├── App.gs              The web app: access checks, students, updates, triggers, setup, selfTest
+│   └── Index.html          The page staff use (HTML, CSS and JavaScript in one file)
+├── scripts/
+│   └── copy-to-apps-script.sh   Copies each file to the clipboard, one at a time, for pasting
+├── tests/                  Node tests that run the .gs files against pretend Google services
+├── frontend/index.html     The "AutoPlanner has moved" page on GitHub Pages
+├── docs/handoff/           Guides for CLC staff and students, demo script, troubleshooting
+├── .cursor/rules/          Committed Cursor rules (nothing to paste into your IDE)
+└── .github/workflows/      CI (tests on every PR) and the Pages deploy
 ```
 
-## Setup from a fresh clone
+## Updating the live app
 
-### Prerequisites
+clasp (Google's command-line tool) is blocked for Workspace for Education accounts marked under 18, so changes are pasted into the editor by hand.
 
-- Python 3.11 or newer (`python3 --version`)
-- A Google account to deploy the Apps Script
-- A Canvas LMS account with API-token access (each student generates their own; see "Getting a Canvas API token" below)
+1. Merge your change to `main` through a PR as usual.
+2. Open the project at [script.google.com](https://script.google.com) as the owner.
+3. In a terminal, run `scripts/copy-to-apps-script.sh` for every file, or `scripts/copy-to-apps-script.sh App.gs Index.html` for just the ones you changed. For each file it puts on your clipboard:
+   - click that file in **Files** (or **+ → Script / HTML** to create it, typing the name without its extension)
+   - click inside the code and press **⌘A, ⌘V, ⌘S**
+4. **Deploy → Manage deployments**, then select the web app deployment and click ✏️. Set **Version** to **New version**, and click **Deploy**.
+   - Pasting alone changes nothing for staff: the deployment keeps running its old version until you pick **New version**. "Script function not found: doGet" means you forgot this step.
+   - The web app URL stays the same.
+5. Use **Deploy → Test deployments** for a private `/dev` link that runs your latest saved code before you deploy it.
 
-### 1. Clone
+## Setting it up from scratch
+
+Only needed for a brand-new project, for example to move AutoPlanner to a CLC staff account.
+
+1. Create a Drive folder for the Docs and share it as **Editor** with the CLC staff.
+2. At [script.google.com](https://script.google.com), click **New project**, then paste all five files (see above). Turn on **Project Settings → Show "appsscript.json" manifest file in editor** first.
+3. **Project Settings → Script Properties:**
+
+   | Property | Required | What it is |
+   |---|---|---|
+   | `ALLOWED_USERS` | yes | Comma-separated Pomfret emails allowed to use the page. Nobody else gets in. |
+   | `DOCS_FOLDER_ID` | yes | The shared folder's ID or URL. New Docs are created there, and only Docs inside it can be updated. |
+   | `CANVAS_BASE_URL` | no | Defaults to `https://pomfret.instructure.com`. |
+   | `COURSE_EXCLUDE` | no | Comma-separated keywords, such as `advisory, dorm`. Classes whose name contains one are left out of the Docs entirely. Empty: every class is shown. |
+   | `TEST_CANVAS_TOKEN` | only for `selfTest` | Your own Canvas token. `selfTest` deletes it when it finishes; `selfTestKeepToken` keeps it. |
+
+   Properties named `student.*`, `token.*`, `busy.*`, `run.*` and `trigger.*` are written by the app. Don't edit them by hand.
+4. In the editor, open **App.gs** (the function menu only lists functions from the open file). Run **setupTriggers** and approve the permissions. It installs the daily updates and logs a setup check.
+5. Run **selfTest**. Using your own token, it:
+   - fetches your Canvas assignments
+   - creates or reuses your Doc in the folder
+   - types a test Status and Note, runs an update, and checks both survived in both tables
+
+   Every line of the log should say `PASS`.
+6. **Deploy → New deployment →** ⚙ **Web app**. Set **Execute as: Me** and **Who has access: Anyone within Pomfret School**, then click **Deploy**.
+
+Other functions you can run from the editor (they only run for the owner):
+- **checkSetup** logs the current setup.
+- **scheduleTestRun** schedules one extra update about 5 minutes from now, to test the automatic updates. The daily triggers are not touched.
+
+## Tests
 
 ```bash
-git clone https://github.com/CivicAIClub/case-a-clc-workflow.git
-cd case-a-clc-workflow
+node --test tests/*.test.js
 ```
 
-### 2. Deploy the Google Apps Script
+- The tests load the real `.gs` files into Node with pretend Google services (`tests/helpers/`).
+- They cover:
+  - who can call what
+  - tokens never reaching the page or the logs
+  - Doc reuse
+  - batching and triggers
+  - the shared-folder rules and Status preservation in `Code.gs`
+  - the Canvas client
+  - a week-grouping golden file that matches the original Python version exactly
+- CI runs them, plus a syntax check of every `.gs` file and of the script in `Index.html`, on every PR.
 
-1. Go to [script.google.com](https://script.google.com) → **New project**.
-2. Delete the default `myFunction` and paste the entire contents of `apps_script/Code.gs`.
-3. **Services (+)** → add **Google Docs API** (or paste `apps_script/appsscript.json` into the manifest via Project Settings → "Show appsscript.json").
-4. **Deploy → New deployment** → type **Web app** → Execute as **Me** → Who has access **Anyone** → **Deploy**, authorize, and copy the **Web App URL** (ends in `/exec`).
+**Security rule for developers:** `google.script.run` can call **any** function whose name does not end in `_`. Every internal function must end in `_`. Every public function must start with:
+- `requireAllowedUser_()` for functions the page calls
+- `requireOwner_()` for editor-only functions
+- `requireTrigger_(e)` for trigger handlers
 
-After any later change to `Code.gs`, redeploy a **new version** (Manage deployments → ✏️ → New version). The URL stays the same.
+A test fails if a new public function appears.
 
-### 3. Configure the backend
+## Limits
 
-```bash
-cp backend/.env.example backend/.env
-```
+Google Workspace limits that matter here:
+- 6 minutes per run (hence the batches)
+- 6 hours of trigger runtime per day
+- 100,000 Canvas requests per day
+- 20 triggers per user per script
+- Script Properties: 9 KB per value and 500 KB in total, so one property per student means hundreds fit
+- the Docs API's per-minute write limit (writes are batched, paced and retried)
 
-Open `backend/.env` and fill in:
-
-| Variable | Required | What it is |
-|---|---|---|
-| `APPS_SCRIPT_URL` | yes | Web App URL from step 2 |
-| `TIMEZONE` | yes | IANA timezone for due dates and week grouping, e.g. `America/New_York` |
-| `CANVAS_API_TOKEN` | no | Fallback token, used only if the UI does not send a per-student token |
-| `CANVAS_BASE_URL` | no | Fallback Canvas URL (the UI sends `canvas_base_url` too) |
-
-`.env` is gitignored. Never commit it.
-
-### 4. Install and run the backend
-
-Run these **from the repo root** (the app is imported as `backend.main`):
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt
-uvicorn backend.main:app --reload
-```
-
-Check `http://127.0.0.1:8000/health` → `{"status":"ok"}`.
-
-### 5. Use the app locally
-
-Open **http://127.0.0.1:8000/**. The backend serves the frontend on the same origin, so leave **AutoPlanner API URL** blank. Set your school's **Canvas base URL** (e.g. `https://pomfret.instructure.com`), click **+ Add student**, paste each student's Canvas API token, then **Fetch all students**. Review each schedule on its tab and use **Create / Update Google Doc** per student.
-
-Tokens and Doc IDs are stored in the browser's localStorage, not on the server.
-
-### 6. Public site (GitHub Pages) + hosted API
-
-The frontend is static; GitHub Pages cannot run Python.
-
-1. **Frontend:** `.github/workflows/deploy-pages.yml` publishes `frontend/` to the `gh-pages` branch on every push to `main` (or run it manually from the Actions tab). The site is at https://civicaiclub.github.io/case-a-clc-workflow/.
-2. **Backend:** deploy the FastAPI app somewhere with HTTPS (Render, Railway, Fly.io, a school server). Set `APPS_SCRIPT_URL` and `TIMEZONE` in that host's environment. Browsers may only call it from the origins in `ALLOWED_ORIGINS` (default: `https://civicaiclub.github.io`, `http://127.0.0.1:8000`, `http://localhost:8000`); add others there, comma-separated. CORS doesn't stop non-browser clients, so a publicly hosted backend also needs its own access check.
-3. On the public site, set **AutoPlanner API URL** to your backend's base URL (no trailing slash required). Everything else works as in step 5.
+Everything belongs to the owner's account: the script, its triggers, the stored tokens and the Docs. Anyone with edit access to the script project can read the tokens, so don't share the project. Before the owner graduates, move the project and the folder to a CLC staff account (see "Setting it up from scratch").
 
 ## Getting a Canvas API token (for each student)
 
 1. Log into Canvas → profile picture → **Settings**.
 2. Scroll to **Approved Integrations** → **+ New Access Token**.
-3. Purpose: "AutoPlanner"; leave expiry blank for dev use.
-4. Copy the token immediately (Canvas will not show it again) and paste it into the student's row in AutoPlanner.
+3. Purpose: "AutoPlanner". Expiry: June 30, 2027.
+4. Copy the token immediately (Canvas will not show it again) and paste it into AutoPlanner's **Add a student** box.
+
+The student-facing version is [`docs/handoff/student-token-guide.md`](docs/handoff/student-token-guide.md).
 
 ## Working on this repo
 
 - Branch from `main` as `feature/<short-description>`, `fix/<short-description>`, or `chore/<short-description>` (lowercase, hyphens).
 - Every change goes through a pull request with at least one approval. `main` cannot be pushed to directly.
-- Never commit secrets. `.env` is ignored; `.env.example` holds only placeholders.
+- Never commit secrets, tokens, real student data, staff email lists, or `.clasp.json` / `.clasprc.json` (both are gitignored).
 - Cursor rules for this project are committed in `.cursor/rules/`. You do not need to paste anything into your IDE settings.
 - The full Git walkthrough for beginners is the club's **[Developer Onboarding Guide](https://github.com/CivicAIClub/docs/blob/main/developer-onboarding.md)**.
 
 ## History
 
-This repository was split out of the club monorepo (`CivicAIClub/Civic-AI-Github-Repository`, `projects/case-a-clc-workflow/`) on 2026-09-18 with full history preserved.
+- This repository was split out of the club monorepo (`CivicAIClub/Civic-AI-Github-Repository`, `projects/case-a-clc-workflow/`) on 2026-09-18 with full history preserved.
+- Until October 2026, AutoPlanner was a Python/FastAPI backend plus a static page on GitHub Pages. It never got a hosted backend.
+- In October 2026 it moved entirely into Apps Script. The Python code is in the git history before that change.

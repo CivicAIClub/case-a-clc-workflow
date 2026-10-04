@@ -1,0 +1,312 @@
+{
+  "weeks": {
+    "2026-10-26": {
+      "week_label": "Oct 26 – Nov 1",
+      "days": [
+        {
+          "day": "Monday",
+          "assignments": []
+        },
+        {
+          "day": "Tuesday",
+          "assignments": []
+        },
+        {
+          "day": "Wednesday",
+          "assignments": [
+            {
+              "day": "Wednesday",
+              "assignment": "Lab report",
+              "course": "Biology",
+              "due_time": "8:00 AM",
+              "priority": "Today",
+              "days_until_due": 0,
+              "due_date": "2026-10-28",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/2/assignments/201"
+            }
+          ]
+        },
+        {
+          "day": "Thursday",
+          "assignments": [
+            {
+              "day": "Thursday",
+              "assignment": "Field trip form",
+              "course": "Biology",
+              "due_time": "12:00 PM",
+              "priority": "Tomorrow",
+              "days_until_due": 1,
+              "due_date": "2026-10-29",
+              "week_start": "2026-10-26",
+              "url": ""
+            },
+            {
+              "day": "Thursday",
+              "assignment": "Essay draft",
+              "course": "English 10",
+              "due_time": "11:59 PM",
+              "priority": "Tomorrow",
+              "days_until_due": 1,
+              "due_date": "2026-10-29",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/1/assignments/101"
+            }
+          ]
+        },
+        {
+          "day": "Friday",
+          "assignments": [
+            {
+              "day": "Friday",
+              "assignment": "Narrative outline",
+              "course": "English 10",
+              "due_time": "9:00 AM",
+              "priority": "Due Soon",
+              "days_until_due": 2,
+              "due_date": "2026-10-30",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/1/assignments/107"
+            },
+            {
+              "day": "Friday",
+              "assignment": "Grammar check",
+              "course": "English 10",
+              "due_time": "10:00 AM",
+              "priority": "Due Soon",
+              "days_until_due": 2,
+              "due_date": "2026-10-30",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/1/assignments/106"
+            },
+            {
+              "day": "Friday",
+              "assignment": "Zygote worksheet",
+              "course": "Biology",
+              "due_time": "11:59 PM",
+              "priority": "Due Soon",
+              "days_until_due": 2,
+              "due_date": "2026-10-30",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/2/assignments/203"
+            },
+            {
+              "day": "Friday",
+              "assignment": "cell quiz",
+              "course": "Biology",
+              "due_time": "11:59 PM",
+              "priority": "Due Soon",
+              "days_until_due": 2,
+              "due_date": "2026-10-30",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/2/assignments/202"
+            }
+          ]
+        },
+        {
+          "day": "Saturday",
+          "assignments": [
+            {
+              "day": "Saturday",
+              "assignment": "Problem set 5",
+              "course": "Algebra II",
+              "due_time": "12:00 PM",
+              "priority": "Due Soon",
+              "days_until_due": 3,
+              "due_date": "2026-10-31",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/3/assignments/301"
+            }
+          ]
+        },
+        {
+          "day": "Sunday",
+          "assignments": [
+            {
+              "day": "Sunday",
+              "assignment": "Graphing worksheet",
+              "course": "Algebra II",
+              "due_time": "1:30 AM",
+              "priority": "This Week",
+              "days_until_due": 4,
+              "due_date": "2026-11-01",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/3/assignments/303"
+            },
+            {
+              "day": "Sunday",
+              "assignment": "Practice quiz",
+              "course": "Algebra II",
+              "due_time": "1:30 AM",
+              "priority": "This Week",
+              "days_until_due": 4,
+              "due_date": "2026-11-01",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/3/assignments/302"
+            },
+            {
+              "day": "Sunday",
+              "assignment": "Book talk slides",
+              "course": "English 10",
+              "due_time": "11:59 PM",
+              "priority": "This Week",
+              "days_until_due": 4,
+              "due_date": "2026-11-01",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/1/assignments/105"
+            }
+          ]
+        }
+      ]
+    },
+    "2026-11-02": {
+      "week_label": "Nov 2 – Nov 8",
+      "days": [
+        {
+          "day": "Monday",
+          "assignments": []
+        },
+        {
+          "day": "Tuesday",
+          "assignments": [
+            {
+              "day": "Tuesday",
+              "assignment": "Reading quiz",
+              "course": "Algebra II",
+              "due_time": "3:00 PM",
+              "priority": "This Week",
+              "days_until_due": 6,
+              "due_date": "2026-11-03",
+              "week_start": "2026-11-02",
+              "url": "https://pomfret.instructure.com/courses/3/assignments/305"
+            },
+            {
+              "day": "Tuesday",
+              "assignment": "Reading quiz",
+              "course": "Biology",
+              "due_time": "3:00 PM",
+              "priority": "This Week",
+              "days_until_due": 6,
+              "due_date": "2026-11-03",
+              "week_start": "2026-11-02",
+              "url": "https://pomfret.instructure.com/courses/2/assignments/209"
+            }
+          ]
+        },
+        {
+          "day": "Wednesday",
+          "assignments": [
+            {
+              "day": "Wednesday",
+              "assignment": "Ecology project",
+              "course": "Biology",
+              "due_time": "11:00 AM",
+              "priority": "This Week",
+              "days_until_due": 7,
+              "due_date": "2026-11-04",
+              "week_start": "2026-11-02",
+              "url": "https://pomfret.instructure.com/courses/2/assignments/204"
+            }
+          ]
+        },
+        {
+          "day": "Thursday",
+          "assignments": [
+            {
+              "day": "Thursday",
+              "assignment": "Genetics test",
+              "course": "Biology",
+              "due_time": "12:00 AM",
+              "priority": "Upcoming",
+              "days_until_due": 8,
+              "due_date": "2026-11-05",
+              "week_start": "2026-11-02",
+              "url": "https://pomfret.instructure.com/courses/2/assignments/205"
+            },
+            {
+              "day": "Thursday",
+              "assignment": "Microscope practice",
+              "course": "Biology",
+              "due_time": "12:30 PM",
+              "priority": "Upcoming",
+              "days_until_due": 8,
+              "due_date": "2026-11-05",
+              "week_start": "2026-11-02",
+              "url": "https://pomfret.instructure.com/courses/2/assignments/206"
+            }
+          ]
+        },
+        {
+          "day": "Friday",
+          "assignments": []
+        },
+        {
+          "day": "Saturday",
+          "assignments": []
+        },
+        {
+          "day": "Sunday",
+          "assignments": []
+        }
+      ]
+    },
+    "2026-11-16": {
+      "week_label": "Nov 16 – Nov 22",
+      "days": [
+        {
+          "day": "Monday",
+          "assignments": []
+        },
+        {
+          "day": "Tuesday",
+          "assignments": [
+            {
+              "day": "Tuesday",
+              "assignment": "Untitled Assignment",
+              "course": "Biology",
+              "due_time": "3:00 PM",
+              "priority": "Upcoming",
+              "days_until_due": 20,
+              "due_date": "2026-11-17",
+              "week_start": "2026-11-16",
+              "url": "https://pomfret.instructure.com/courses/2/assignments/207"
+            }
+          ]
+        },
+        {
+          "day": "Wednesday",
+          "assignments": []
+        },
+        {
+          "day": "Thursday",
+          "assignments": []
+        },
+        {
+          "day": "Friday",
+          "assignments": []
+        },
+        {
+          "day": "Saturday",
+          "assignments": []
+        },
+        {
+          "day": "Sunday",
+          "assignments": [
+            {
+              "day": "Sunday",
+              "assignment": "Final portfolio",
+              "course": "English 10",
+              "due_time": "11:59 PM",
+              "priority": "Upcoming",
+              "days_until_due": 25,
+              "due_date": "2026-11-22",
+              "week_start": "2026-11-16",
+              "url": "https://pomfret.instructure.com/courses/1/assignments/108"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "total_assignments": 18
+}
