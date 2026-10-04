@@ -7,6 +7,13 @@
  *      includes Docs API v1 (this repo ships `appsscript.json` for that).
  *   3. Deploy as Web app (Execute as: Me, Anyone).
  *
+ * OPTIONAL Script Properties (Project Settings → Script Properties):
+ *   DOCS_FOLDER_ID      Drive folder ID (or the folder's URL). New student Docs are created
+ *                       there; Docs that already exist are not moved.
+ *   APPS_SCRIPT_SECRET  Shared secret. When set, requests whose `secret` field doesn't match
+ *                       are rejected. The backend sends it from its APPS_SCRIPT_SECRET env var.
+ * After changing either one, select `checkSetup` in the editor and click Run to confirm.
+ *
  * Week tabs are created with Docs API `addDocumentTab` (appended under CLC Planner so
  * calendar weeks appear **earliest at the top**, latest at the bottom). Tab bodies use
  * **only** Docs API `batchUpdate` (DocumentApp cannot reliably resolve nested tabs by ID).
@@ -164,9 +171,62 @@ function docsBatchUpdate(docId, requests) {
   throw lastErr;
 }
 
+function getScriptProperty(name) {
+  var value = PropertiesService.getScriptProperties().getProperty(name);
+  return value ? String(value).trim() : '';
+}
+
+/** Compare without stopping at the first different character, so timing doesn't leak the secret. */
+function secretsMatch(given, expected) {
+  var a = String(given || '');
+  var b = String(expected || '');
+  var diff = a.length ^ b.length;
+  for (var i = 0; i < b.length; i++) {
+    diff |= (a.charCodeAt(i) || 0) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+/** Folder for new Docs from DOCS_FOLDER_ID, or null when unset. Accepts a bare ID or a folder URL. */
+function getDocsFolder() {
+  var raw = getScriptProperty('DOCS_FOLDER_ID');
+  if (!raw) return null;
+  var id = raw.replace(/^.*\/folders\//, '').replace(/[?#\/].*$/, '');
+  try {
+    return DriveApp.getFolderById(id);
+  } catch (err) {
+    throw new Error(
+      'DOCS_FOLDER_ID is set, but this account cannot open that Drive folder: ' + err
+    );
+  }
+}
+
+/** Run from the editor (select checkSetup → Run). Authorizes Drive access and logs the settings. */
+function checkSetup() {
+  var folder = getDocsFolder();
+  Logger.log(
+    folder
+      ? 'DOCS_FOLDER_ID OK: new Docs will be created in "' + folder.getName() + '".'
+      : 'DOCS_FOLDER_ID is not set: new Docs will be created in My Drive.'
+  );
+  Logger.log(
+    getScriptProperty('APPS_SCRIPT_SECRET')
+      ? 'APPS_SCRIPT_SECRET is set: requests without the matching secret are rejected.'
+      : 'APPS_SCRIPT_SECRET is not set: all requests are accepted.'
+  );
+}
+
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
+    var expectedSecret = getScriptProperty('APPS_SCRIPT_SECRET');
+    if (expectedSecret && !secretsMatch(data.secret, expectedSecret)) {
+      throw new Error(
+        'Unauthorized: the secret sent by the AutoPlanner server does not match ' +
+          'APPS_SCRIPT_SECRET in Script Properties.'
+      );
+    }
+    delete data.secret;
     var result = upsertPlannerDocument(data);
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(
       ContentService.MimeType.JSON
@@ -196,8 +256,13 @@ function upsertPlannerDocument(data) {
       /* ignore — e.g. insufficient permission on shared drives */
     }
   } else {
+    // Look up the folder first, so a bad DOCS_FOLDER_ID fails before a stray Doc is created.
+    var folder = getDocsFolder();
     doc = DocumentApp.create(desiredTitle);
     docId = doc.getId();
+    if (folder) {
+      DriveApp.getFileById(docId).moveTo(folder);
+    }
   }
 
   var parentTabId = prepareParentTab(docId, isNew);

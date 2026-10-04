@@ -58,7 +58,7 @@ load_dotenv(Path(__file__).parent / ".env", override=True)
 
 # Create the web server itself and give it a name and version number.
 # Everything below attaches "routes" to it: web addresses it knows how to answer.
-app = FastAPI(title="AutoPlanner API", version="1.0.0")
+app = FastAPI(title="AutoPlanner API", version="1.1.0")
 
 # Browsers normally refuse to let a web page on one website talk to a server on a different
 # website. This setting (called CORS) lists the websites whose pages ARE allowed to call this
@@ -99,7 +99,8 @@ def _get_env(key: str) -> str:
             status_code=500,
             detail=(
                 f"Server misconfiguration: environment variable '{key}' is not set. "
-                f"Copy backend/.env.example to backend/.env and fill in all values."
+                f"Copy backend/.env.example to backend/.env and fill in all values "
+                f"(on Render, set it under the service's Environment tab)."
             ),
         )
     return value
@@ -254,13 +255,18 @@ async def generate_doc(body: GenerateDocRequest) -> dict[str, Optional[str]]:
     # Look up the web address of the Google Apps Script helper from the settings file,
     # trimming off any stray spaces.
     script_url = _get_env("APPS_SCRIPT_URL").strip()
+    # The shared secret is optional: if it's blank, requests go out without one, which only
+    # works while the Apps Script's APPS_SCRIPT_SECRET Script Property is also blank.
+    script_secret = os.getenv("APPS_SCRIPT_SECRET", "").strip()
 
     # Pass the schedule to google_docs.py, which sends it to Apps Script and waits for the Doc.
     # "by_alias" uses the names Apps Script expects (e.g. "documentId"), and "exclude_none"
     # leaves out optional pieces that are empty, such as the Doc ID for a brand-new student.
     try:
         result = await send_to_apps_script(
-            script_url, body.model_dump(by_alias=True, exclude_none=True)
+            script_url,
+            body.model_dump(by_alias=True, exclude_none=True),
+            secret=script_secret or None,
         )
     # Apps Script answered with an error code. Pass it along with the first 200 characters.
     except httpx.HTTPStatusError as exc:

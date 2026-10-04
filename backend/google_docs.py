@@ -38,8 +38,17 @@ import httpx
 # It is given the Apps Script's web address and the schedule (plus the student's name and,
 # if they already have one, their existing Doc's ID). It gives back the Doc's link and,
 # usually, its ID. If Google can't be reached, it tries up to three times before giving up.
-async def send_to_apps_script(script_url: str, weekly_data: dict[str, Any]) -> dict[str, Optional[str]]:
+# It can also be given a shared secret (a password that only this server and the Apps Script
+# know). The Apps Script turns away any request that doesn't carry the matching secret, so
+# strangers who find the Apps Script's address can't use it to make Docs.
+async def send_to_apps_script(
+    script_url: str, weekly_data: dict[str, Any], secret: Optional[str] = None
+) -> dict[str, Optional[str]]:
     """POST the weekly schedule JSON to the Apps Script Web App.
+
+    If ``secret`` is set, it is sent as the ``secret`` field of the JSON body
+    (Apps Script web apps can't read request headers) and checked against the
+    APPS_SCRIPT_SECRET Script Property.
 
     Returns:
         dict with ``docUrl`` and usually ``documentId``.
@@ -52,6 +61,12 @@ async def send_to_apps_script(script_url: str, weekly_data: dict[str, Any]) -> d
     script_url = (script_url or "").strip()
     if not script_url:
         raise ValueError("APPS_SCRIPT_URL is empty after trim.")
+
+    # Tuck the secret into the package, if there is one. (Apps Script can only read what's
+    # inside the package, not the labels on the outside, so it can't go in a header.)
+    payload = dict(weekly_data)
+    if secret:
+        payload["secret"] = secret
 
     # How long to wait: up to 30 seconds to connect to Google, and up to 2 minutes overall.
     # Writing a whole Doc can take a while, and the script can be slow to "wake up" if it
@@ -76,7 +91,7 @@ async def send_to_apps_script(script_url: str, weekly_data: dict[str, Any]) -> d
                 # If Google answers with an error code, stop here; main.py reports it.
                 response = await client.post(
                     script_url,
-                    json=weekly_data,
+                    json=payload,
                     headers={
                         "Content-Type": "application/json",
                         "User-Agent": "AutoPlanner/1.0 (+https://github.com)",
