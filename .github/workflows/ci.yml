@@ -1,0 +1,61 @@
+name: CI
+
+# Quick checks on every pull request (and on main), so a broken change is caught before
+# Render redeploys the backend or GitHub Pages republishes the frontend.
+# No secrets are used: Canvas and Apps Script are never called.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Backend smoke test
+        run: |
+          python - <<'EOF'
+          from fastapi.testclient import TestClient
+          from backend.main import app
+
+          client = TestClient(app)
+          assert client.get("/health").json() == {"status": "ok"}
+          assert client.get("/").status_code == 200, "frontend not served"
+          # A Canvas address that can't be reached must give a clean error, not a crash.
+          r = client.get(
+              "/api/assignments",
+              params={"canvas_base_url": "http://127.0.0.1:9"},
+              headers={"X-Canvas-Token": "fake"},
+          )
+          assert r.status_code == 502 and "Could not reach Canvas" in r.json()["detail"], r.text
+          print("Backend smoke test passed.")
+          EOF
+
+      - name: JavaScript syntax check (Code.gs and index.html)
+        run: |
+          # Node won't check a .gs file directly, so check a .js copy.
+          cp apps_script/Code.gs "$RUNNER_TEMP/Code.js"
+          node --check "$RUNNER_TEMP/Code.js"
+          python - <<'EOF' > "$RUNNER_TEMP/index.js"
+          import pathlib, re
+          html = pathlib.Path("frontend/index.html").read_text()
+          scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+          assert len(scripts) == 1, f"expected 1 inline <script>, found {len(scripts)}"
+          assert "<script src" not in html, "index.html must stay a single dependency-free file"
+          print(scripts[0])
+          EOF
+          node --check "$RUNNER_TEMP/index.js"
+          echo "JavaScript syntax check passed."
