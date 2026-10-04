@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@300;400&family=Martian+Mono:wght@400&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@300;400;600&family=Martian+Mono:wght@400&display=swap"
     rel="stylesheet"
   />
   <style>
@@ -125,7 +125,7 @@
     /* Errors that stop the whole page (for example "Not authorized"). */
     .banner { display: none; margin-top: 32px; padding: 14px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); font-size: var(--fs-ui); line-height: 1.45; }
     .banner.visible { display: block; }
-    .banner::before { content: 'Problem'; display: block; margin-bottom: 6px; font-family: var(--font-mono); font-size: var(--fs-mono); letter-spacing: var(--ls-mono); text-transform: uppercase; font-weight: var(--fw-regular); }
+    .banner::before { content: 'Problem'; }
 
     /* ---- Buttons ---- */
     .btn-primary, .btn-secondary {
@@ -193,13 +193,17 @@
       content: ''; display: inline-block; width: 0.55em; height: 0.55em; margin-right: 0.5em;
       border-radius: 50%; background: var(--crimson); vertical-align: 0.05em;
     }
-    /* Problems get a small mono label in ink (the site keeps crimson for focus and progress). */
+    /* Problems get an inverted tag: paper text on ink, in the mono label style, so they stand out
+       without red (the site keeps crimson for focus and progress). Paper on ink is 17.5:1. */
     .status.error::before { content: 'Problem'; }
-    .status.error::before, .flag {
-      margin-right: 0.75em; color: var(--ink);
+    .status.error::before, .banner::before, .flag {
+      display: inline-block; margin-right: 0.6em; padding: 3px 6px;
+      background: var(--ink); color: var(--paper);
       font-family: var(--font-mono); font-size: var(--fs-mono); font-weight: var(--fw-regular);
-      letter-spacing: var(--ls-mono); text-transform: uppercase;
+      letter-spacing: var(--ls-mono); text-transform: uppercase; line-height: 1.2; vertical-align: 0.08em;
     }
+    /* The name of a student who needs attention is bold (Host Grotesk 600). */
+    .s-name.bad, .last-run li .lr-name { font-weight: 600; }
 
     /* ---- Update ---- */
     .update-row { margin-top: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
@@ -208,7 +212,6 @@
     .last-run .lr-k { font-weight: var(--fw-regular); }
     .last-run ul { margin-top: 8px; border-top: 1px solid var(--rule); }
     .last-run li { padding: 8px 0; border-bottom: 1px solid var(--rule); }
-    .last-run li .lr-name { font-weight: var(--fw-regular); }
     .last-run li .lr-msg { color: var(--ink-2); }
     .note { margin-top: 16px; }
     .note.off { color: var(--ink); }
@@ -473,7 +476,7 @@
         var card = document.createElement('div');
         card.className = 'student-card';
         card.innerHTML =
-          '<div class="s-name">' + studentTitle(s) + '</div>' +
+          '<div class="s-name' + (s.last && !s.last.ok ? ' bad' : '') + '">' + studentTitle(s) + '</div>' +
           '<div class="s-token"><span class="s-k">Token</span>••••' + esc(s.tokenEnd) + '</div>' +
           '<div class="s-last' + (s.last && !s.last.ok ? ' bad' : '') + '"><span class="s-k">Last update</span>' + last + '</div>' +
           '<div class="s-doc">' +
