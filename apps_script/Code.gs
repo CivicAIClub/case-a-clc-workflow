@@ -1246,7 +1246,11 @@ function readExistingDataFromTab(tabJson) {
         if (note) result.notes[url] = note;
         if (statusColIdx >= 0) {
           var status = getCellText(cells[statusColIdx]);
-          if (status) result.status[url] = status;
+          // Each assignment appears in both tables. An untouched default in one table must not
+          // overwrite a Status the teacher typed in the other.
+          if (status && (status !== STATUS_DEFAULT || !result.status[url])) {
+            result.status[url] = status;
+          }
         }
       });
     });
