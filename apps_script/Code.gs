@@ -265,7 +265,6 @@ function upsertPlannerDocument_(data) {
   }
 
   var parentTabId = prepareParentTab_(docId, isNew);
-  seedParentTabHomeDocsApi_(docId, parentTabId);
 
   var weeks = data.weeks || {};
   var weekKeys = Object.keys(weeks).sort();
@@ -274,6 +273,7 @@ function upsertPlannerDocument_(data) {
   var colorMap = buildCourseColorMap_(courses);
 
   if (weekKeys.length === 0) {
+    rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
     return { docUrl: doc.getUrl(), documentId: docId };
   }
 
@@ -301,6 +301,9 @@ function upsertPlannerDocument_(data) {
     fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap);
     sleepDocsChunkGap_();
   });
+
+  // The home tab last, so its "Open this week" link can point at this week's (new) tab.
+  rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
 
   return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId };
 }
@@ -634,50 +637,277 @@ function clearTabBodyDocsApi_(docId, tabId) {
   throw new Error('Timed out clearing tab body — try again.');
 }
 
-/**
- * The CLC Planner home tab: title, the Status/Notes help line, and how the tabs work. In an older
- * Doc that already has text there, only the help line is added (once), right under the title.
- */
-function seedParentTabHomeDocsApi_(docId, parentTabId) {
-  var tab = findTabJsonById_(docsGet_(docId), parentTabId);
+// ---- The CLC Planner home tab: a one-page summary, rebuilt from scratch on every update ----
+//
+// Layout (same fonts, colors and table values as the week tabs; see LAYOUT at the top):
+//   Student name (Heading 1)
+//   CLC PLANNER · SUPPORTED STUDY HALL (9 pt, #666666) / Last updated ... (10 pt, #444444)
+//   ── THIS WEEK · OCT 5 – OCT 11 (Heading 4 with a thin rule above)
+//      "N assignments this week · M due today or tomorrow." and "Open this week →" (a tab link)
+//      Class | This week | Next due table (full width: 288 | 80 | 100 pt at 468 pt)
+//   ── HOW THIS DOC WORKS (Heading 4 with a thin rule above), a numbered list of 3 lines
+//   PRIORITY COLORS (Heading 4): a swatch for each priority with its rule
+//   Footer (9 pt, #666666)
+var HOME_SUBTITLE = 'CLC PLANNER · SUPPORTED STUDY HALL';
+var HOME_FOOTER = 'Built by the Pomfret Civic AI Club · Questions: Cayden Auyang or Luke Ryan';
+var HOME_HOW_LINES = [
+  'Each week has its own tab in the left sidebar.',
+  'Status: type Not started, In progress, or Complete. Notes: type anything. AutoPlanner never changes these two columns.',
+  'It updates every day at about 7 pm and midnight. Edits anywhere else get replaced.',
+];
+// The priority rules from schedulePriority_ in Canvas.gs (days until the due date).
+var HOME_PRIORITY_RULES = [
+  ['Today', 'Today'],
+  ['Tomorrow', 'Tomorrow'],
+  ['Due Soon', 'Due Soon, 2–3 days'],
+  ['This Week', 'This Week, 4–7 days'],
+  ['Upcoming', 'Upcoming, 8+ days'],
+];
+var HOME_CLASS_HEADERS = ['Class', 'This week', 'Next due'];
+var HOME_CLASS_WIDTHS = [288, 80, 100];
+var HOME_RULE_FG = '#BFBFBF'; // thin gray rules (the text color at about 25% on white)
+var HOME_SWATCH = '   '; // three no-break spaces, shaded with the priority color
+
+/** Rebuilds the home tab. Runs after the week tabs, so "Open this week" can link to its tab. */
+function rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, now) {
+  var doc = docsGet_(docId);
+  var tab = findTabJsonById_(doc, parentTabId);
   if (!tab || !tab.documentTab || !tab.documentTab.body) return;
-  var body = tab.documentTab.body;
-  var plain = tabBodyPlainText_(body);
-  var range = function (s, e) { return { tabId: parentTabId, startIndex: s, endIndex: e }; };
-  var named = function (s, e, type) {
-    return { updateParagraphStyle: { range: range(s, e), paragraphStyle: { namedStyleType: type }, fields: 'namedStyleType' } };
+  var summary = homeSummary_(data, courses, now || new Date());
+  var weekTab = findChildTabIdByTitle_(tab, buildWeekTabTitle_(summary.weekKey, summary.weekRange));
+  var requests = homeClearRequests_(tab, parentTabId).concat(
+    buildHomeTabRequests_(parentTabId, summary, weekTab, tabContentWidth_(tab), colorMap)
+  );
+  batchUpdateChunked_(docId, requests);
+}
+
+/** Deletes everything in the tab and resets the one paragraph that is left to plain text. */
+function homeClearRequests_(tab, tabId) {
+  var content = tab.documentTab.body.content || [];
+  var end = content.length ? toDocIndex_(content[content.length - 1].endIndex) : 2;
+  var reqs = [];
+  if (end > 2) {
+    reqs.push({ deleteContentRange: { range: { tabId: tabId, startIndex: 1, endIndex: end - 1 } } });
+  }
+  reqs.push({ deleteParagraphBullets: { range: { tabId: tabId, startIndex: 1, endIndex: 2 } } });
+  reqs.push({
+    updateParagraphStyle: {
+      range: { tabId: tabId, startIndex: 1, endIndex: 2 },
+      paragraphStyle: { namedStyleType: 'NORMAL_TEXT' },
+      fields: 'namedStyleType,alignment,borderTop,borderBottom,spaceAbove,spaceBelow,indentStart,indentFirstLine',
+    },
+  });
+  return reqs;
+}
+
+/** "ADV Calculus III-Browne-G" becomes "ADV Calculus III" (teacher and section dropped). */
+function shortCourseName_(name) {
+  var m = /^(.*\S)-[A-Z][A-Za-z'’.]+(?: [A-Z][A-Za-z'’.]+)?-[A-Z][A-Z0-9]?$/.exec(String(name || ''));
+  return m && m[1].length >= 3 ? m[1] : String(name || '');
+}
+
+/** Everything the home tab shows, worked out from the schedule (pure, so it can be tested). */
+function homeSummary_(data, courses, now) {
+  var today = Utilities.formatDate(now, SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
+  var weekKey = scheduleWeekStart_(today);
+  var all = [];
+  Object.keys(data.weeks || {}).forEach(function (k) {
+    (data.weeks[k].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) { all.push(a); });
+    });
+  });
+  var thisWeek = all.filter(function (a) { return a.week_start === weekKey; });
+  var shortNames = courses.map(shortCourseName_);
+  // Keep the full names if shortening would make two classes look the same.
+  var unique = shortNames.every(function (n, i) { return shortNames.indexOf(n) === i; });
+  var rows = courses.map(function (course, i) {
+    var mine = all.filter(function (a) { return (cellText_(a.course) || '(No Course)') === course; });
+    var next = mine.map(function (a) { return a.due_date; }).sort()[0];
+    return {
+      course: course,
+      name: unique ? shortNames[i] : course,
+      count: mine.filter(function (a) { return a.week_start === weekKey; }).length,
+      next: next ? Utilities.formatDate(new Date(scheduleDateToMs_(next) + 12 * 3600000), 'UTC', 'EEE, MMM d') : '—',
+    };
+  });
+  return {
+    name: cellText_(data.studentFullName || data.student_full_name) || 'Student',
+    updated: Utilities.formatDate(now, SCHEDULE_TIME_ZONE, "EEEE, MMM d 'at' h:mm a"),
+    weekKey: weekKey,
+    weekRange: scheduleShortDate_(weekKey) + ' – ' + scheduleShortDate_(scheduleAddDays_(weekKey, 6)),
+    weekCount: thisWeek.length,
+    soonCount: all.filter(function (a) { return a.days_until_due === 0 || a.days_until_due === 1; }).length,
+    rows: rows,
+  };
+}
+
+/**
+ * Every request that writes the home tab, in order, starting from one empty paragraph at index 1.
+ * Pure, like buildWeekTabRequests_: text first, then the class table, then the rest of the text.
+ */
+function buildHomeTabRequests_(tabId, summary, weekTabId, contentWidth, colorMap) {
+  var reqs = [];
+  var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
+  var color = function (hex) { return optionalColorFromHex_(hex); };
+  var pt = function (n) { return { magnitude: n, unit: 'PT' }; };
+  var rule = { color: color(HOME_RULE_FG), width: pt(0.75), dashStyle: 'SOLID', padding: pt(8) };
+  var resetFields = 'bold,italic,underline,strikethrough,smallCaps,backgroundColor,foregroundColor,fontSize,link,baselineOffset';
+  var para = function (s, e, style, fields) {
+    reqs.push({ updateParagraphStyle: { range: range(s, e), paragraphStyle: style, fields: fields } });
+  };
+  var text = function (s, e, style, fields) {
+    if (e > s) reqs.push({ updateTextStyle: { range: range(s, e), textStyle: style, fields: fields } });
   };
 
-  if (plain.replace(/\s/g, '').length === 0) {
-    var lines = [
-      PARENT_TAB_TITLE,
-      STATUS_HELP_LINE,
-      'Open nested tabs under this document tab for each week (Document tabs sidebar). ' +
-        'Re-running AutoPlanner refreshes an existing week tab or adds a new one.',
-    ];
+  // Writes lines at `at` (the start of an empty paragraph), clears inherited styles, and gives
+  // back where each line starts.
+  function insertLines(at, lines) {
+    reqs.push({ insertText: { text: lines.join('\n'), location: { tabId: tabId, index: at } } });
     var starts = [];
-    var pos = 1;
-    lines.forEach(function (l) { starts.push(pos); pos += l.length + 1; });
-    docsBatchUpdate_(docId, [
-      { insertText: { text: lines.join('\n') + '\n', location: { tabId: parentTabId, index: 1 } } },
-      named(starts[0], starts[0] + lines[0].length + 1, 'HEADING_1'),
-      named(starts[1], starts[1] + lines[1].length + 1, 'NORMAL_TEXT'),
-      named(starts[2], starts[2] + lines[2].length + 1, 'NORMAL_TEXT'),
-    ]);
-    return;
+    var pos = at;
+    lines.forEach(function (line) { starts.push(pos); pos += line.length + 1; });
+    text(at, pos - 1, {}, resetFields);
+    para(at, pos, { namedStyleType: 'NORMAL_TEXT' }, 'namedStyleType,borderTop,spaceAbove,spaceBelow');
+    return starts;
   }
-  if (plain.indexOf(STATUS_HELP_LINE) !== -1) return;
 
-  // Put the line on its own paragraph right after the title (or at the very top if there is none).
-  var title = findParagraphByText_(tab, PARENT_TAB_TITLE);
-  var bounds = title ? structuralContentBounds_(title) : null;
-  var at = bounds ? bounds.end - 1 : 1;
-  var text = bounds ? '\n' + STATUS_HELP_LINE : STATUS_HELP_LINE + '\n';
-  var lineStart = bounds ? at + 1 : 1;
-  docsBatchUpdate_(docId, [
-    { insertText: { text: text, location: { tabId: parentTabId, index: at } } },
-    named(lineStart, lineStart + STATUS_HELP_LINE.length + 1, 'NORMAL_TEXT'),
-  ]);
+  // 1. Name, caps line, last updated, this week.
+  var summaryLine = summary.weekCount
+    ? summary.weekCount + ' assignment' + (summary.weekCount === 1 ? '' : 's') + ' this week · ' +
+      summary.soonCount + ' due today or tomorrow.'
+    : 'Nothing is due this week. ' + summary.soonCount + ' due today or tomorrow.';
+  var a = [
+    summary.name,
+    HOME_SUBTITLE,
+    'Last updated ' + summary.updated,
+    ('This week · ' + summary.weekRange).toUpperCase(),
+    summaryLine,
+  ];
+  if (weekTabId) a.push('Open this week →');
+  if (!summary.rows.length) a.push('No current classes found in Canvas.');
+  var aStart = insertLines(1, a);
+  var lineEnd = function (i) { return aStart[i] + a[i].length; };
+  para(aStart[0], lineEnd(0) + 1, { namedStyleType: 'HEADING_1' }, 'namedStyleType');
+  text(aStart[1], lineEnd(1), { fontSize: pt(9), foregroundColor: color(MUTED_FG), bold: true }, 'fontSize,foregroundColor,bold');
+  text(aStart[2], lineEnd(2), { fontSize: pt(10), foregroundColor: color(HELP_FG) }, 'fontSize,foregroundColor');
+  para(aStart[3], lineEnd(3) + 1, { namedStyleType: 'HEADING_4', borderTop: rule, spaceAbove: pt(18) }, 'namedStyleType,borderTop,spaceAbove');
+  text(aStart[4], lineEnd(4), { foregroundColor: color(DATA_FG) }, 'foregroundColor');
+  if (weekTabId) {
+    text(aStart[5], lineEnd(5), { link: { tabId: weekTabId }, foregroundColor: color(LINK_FG) }, 'link,foregroundColor');
+    para(aStart[5], lineEnd(5) + 1, { spaceBelow: pt(8) }, 'spaceBelow');
+  } else {
+    para(aStart[4], lineEnd(4) + 1, { spaceBelow: pt(8) }, 'spaceBelow');
+  }
+  var at = lineEnd(a.length - 1); // the newline of the last line: the table goes right under it
+
+  // 2. Class | This week | Next due.
+  var next;
+  if (summary.rows.length) {
+    next = appendHomeClassTable_(reqs, tabId, at, summary.rows, scaledColumnWidths_(HOME_CLASS_WIDTHS, contentWidth), colorMap);
+  } else {
+    // No table: split off an empty paragraph for the rest.
+    reqs.push({ insertText: { text: '\n', location: { tabId: tabId, index: at } } });
+    next = at + 1;
+  }
+
+  // 3. How this Doc works, priority colors, footer: written into the paragraph after the table.
+  var legend = [];
+  HOME_PRIORITY_RULES.forEach(function (r, i) { legend.push((i ? '   ' : '') + HOME_SWATCH + ' ' + r[1]); });
+  var b = ['HOW THIS DOC WORKS'].concat(HOME_HOW_LINES, ['PRIORITY COLORS', legend.join(''), HOME_FOOTER]);
+  var bStart = insertLines(next, b);
+  var bEnd = function (i) { return bStart[i] + b[i].length; };
+  para(bStart[0], bEnd(0) + 1, { namedStyleType: 'HEADING_4', borderTop: rule, spaceAbove: pt(18) }, 'namedStyleType,borderTop,spaceAbove');
+  reqs.push({ createParagraphBullets: { range: range(bStart[1], bEnd(3) + 1), bulletPreset: 'NUMBERED_DECIMAL_ALPHA_ROMAN' } });
+  text(bStart[1], bEnd(3), { foregroundColor: color(DATA_FG) }, 'foregroundColor');
+  para(bStart[4], bEnd(4) + 1, { namedStyleType: 'HEADING_4' }, 'namedStyleType');
+  text(bStart[5], bEnd(5), { fontSize: pt(10), foregroundColor: color(DATA_FG) }, 'fontSize,foregroundColor');
+  var pos = bStart[5];
+  HOME_PRIORITY_RULES.forEach(function (r, i) {
+    if (i) pos += 3;
+    text(pos, pos + HOME_SWATCH.length, { backgroundColor: color(PRIORITY_COLORS[r[0]]) }, 'backgroundColor');
+    pos += HOME_SWATCH.length + 1 + r[1].length;
+  });
+  para(bStart[6], bEnd(6) + 1, { spaceAbove: pt(28) }, 'spaceAbove');
+  text(bStart[6], bEnd(6), { fontSize: pt(9), foregroundColor: color(MUTED_FG) }, 'fontSize,foregroundColor');
+  return reqs;
+}
+
+/**
+ * The home tab's class table: a header row, then one row per class, at index `at` (the newline
+ * of the paragraph above it). Same cell values as the week tables. Returns the index of the
+ * empty paragraph Docs adds after it.
+ */
+function appendHomeClassTable_(reqs, tabId, at, rows, widths, colorMap) {
+  var C = 3;
+  var R = rows.length + 1;
+  var tableStart = at + 1;
+  var emptyAfter = at + 3 + R * (2 * C + 1);
+  var texts = [HOME_CLASS_HEADERS.slice()].concat(rows.map(function (r) {
+    return [cellText_(r.name), String(r.count), r.next];
+  }));
+  var emptyIndex = function (r, c) { return at + 4 + r * (2 * C + 1) + 2 * c; };
+  var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
+  var loc = { tabId: tabId, index: tableStart };
+
+  reqs.push({ insertTable: { rows: R, columns: C, location: { tabId: tabId, index: at } } });
+  reqs.push({ updateParagraphStyle: { range: range(emptyAfter, emptyAfter + 1), paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, fields: 'namedStyleType' } });
+  for (var r = R - 1; r >= 0; r--) {
+    for (var c = C - 1; c >= 0; c--) {
+      if (texts[r][c]) reqs.push({ insertText: { text: texts[r][c], location: { tabId: tabId, index: emptyIndex(r, c) } } });
+    }
+  }
+  var start = [];
+  var shift = 0;
+  for (r = 0; r < R; r++) {
+    start.push([]);
+    for (c = 0; c < C; c++) {
+      start[r].push(emptyIndex(r, c) + shift);
+      shift += texts[r][c].length;
+    }
+  }
+  var cellEnd = function (r, c) { return start[r][c] + texts[r][c].length; };
+
+  reqs.push(cellStyleRequest_(tabId, tableStart, 0, 0, R, C, {
+    paddingTop: { magnitude: CELL_PAD_TOP_BOTTOM_PT, unit: 'PT' },
+    paddingBottom: { magnitude: CELL_PAD_TOP_BOTTOM_PT, unit: 'PT' },
+    paddingLeft: { magnitude: CELL_PAD_SIDE_PT, unit: 'PT' },
+    paddingRight: { magnitude: CELL_PAD_SIDE_PT, unit: 'PT' },
+    contentAlignment: 'MIDDLE',
+  }, 'paddingTop,paddingBottom,paddingLeft,paddingRight,contentAlignment'));
+  widths.forEach(function (w, i) {
+    reqs.push({
+      updateTableColumnProperties: {
+        tableStartLocation: loc,
+        columnIndices: [i],
+        tableColumnProperties: { widthType: 'FIXED_WIDTH', width: { magnitude: w, unit: 'PT' } },
+        fields: 'widthType,width',
+      },
+    });
+  });
+  reqs.push(textStyleRequest_(range(start[0][0], cellEnd(R - 1, C - 1) + 1), {
+    fontSize: { magnitude: TABLE_FONT_PT, unit: 'PT' },
+    foregroundColor: optionalColorFromHex_(DATA_FG),
+  }, 'fontSize,foregroundColor'));
+  // Header row, as in the week tables.
+  reqs.push(cellStyleRequest_(tabId, tableStart, 0, 0, 1, C, { backgroundColor: optionalColorFromHex_(HEADER_BG) }, 'backgroundColor'));
+  reqs.push(textStyleRequest_(range(start[0][0], cellEnd(0, C - 1)), { bold: true, foregroundColor: optionalColorFromHex_(HEADER_FG) }, 'bold,foregroundColor'));
+  // Class name on its class color; the two number columns centered.
+  for (r = 0; r < R; r++) {
+    reqs.push({ updateParagraphStyle: { range: range(start[r][1], cellEnd(r, C - 1) + 1), paragraphStyle: { alignment: 'CENTER' }, fields: 'alignment' } });
+    if (r > 0) {
+      reqs.push(cellStyleRequest_(tabId, tableStart, r, 0, 1, 1, { backgroundColor: optionalColorFromHex_(colorMap[rows[r - 1].course] || '#EAEDED') }, 'backgroundColor'));
+      reqs.push(cellStyleRequest_(tabId, tableStart, r, 1, 1, 2, { backgroundColor: optionalColorFromHex_(EDITABLE_BG) }, 'backgroundColor'));
+    }
+  }
+  reqs.push({
+    updateTableRowStyle: {
+      tableStartLocation: loc,
+      rowIndices: [0],
+      tableRowStyle: { minRowHeight: { magnitude: ROW_MIN_HEIGHT_PT, unit: 'PT' } },
+      fields: 'minRowHeight',
+    },
+  });
+  return emptyAfter + shift;
 }
 
 function cellParagraphInsertIndex_(cell) {

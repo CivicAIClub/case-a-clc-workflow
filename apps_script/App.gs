@@ -863,14 +863,36 @@ function runSelfTest_(keepToken) {
       });
       return 'By Class ' + Object.keys(sets['By Class'])[0] + ' | By Day ' + Object.keys(sets['By Day'])[0] + ' (pt)';
     }) &&
-    check('The Status/Notes help line is on every week tab and the CLC Planner tab', function () {
+    check('The Status/Notes help line is on every week tab', function () {
       var tabs = currentWeeks();
-      var home = findTabJsonById_(doc, findRootTabIdByTitle_(doc, PARENT_TAB_TITLE));
-      tabs.concat([{ title: PARENT_TAB_TITLE, tab: home }]).forEach(function (w) {
+      tabs.forEach(function (w) {
         var body = w.tab && w.tab.documentTab && w.tab.documentTab.body;
         if (!body || tabBodyPlainText_(body).indexOf(STATUS_HELP_LINE) === -1) throw new Error('missing on "' + w.title + '"');
       });
-      return (tabs.length + 1) + ' tabs';
+      return tabs.length + ' tabs';
+    }) &&
+    check('Home tab: name, last updated, this-week summary and class table', function () {
+      var home = findTabJsonById_(doc, findRootTabIdByTitle_(doc, PARENT_TAB_TITLE));
+      var body = home && home.documentTab && home.documentTab.body;
+      if (!body) throw new Error('No CLC Planner tab.');
+      var lines = tabBodyPlainText_(body).split('\n');
+      var expected = homeSummary_(schedule, plannerCourseList_(schedule), new Date());
+      if (lines[0] !== expected.name) throw new Error('title is "' + lines[0] + '"');
+      var updated = lines.filter(function (l) { return l.indexOf('Last updated ') === 0; })[0];
+      if (!updated) throw new Error('no "Last updated" line');
+      var week = lines.filter(function (l) { return l.indexOf('THIS WEEK · ') === 0; })[0];
+      if (!week) throw new Error('no "THIS WEEK" line');
+      if (!lines.some(function (l) { return / this week · \d+ due today or tomorrow\.$|^Nothing is due this week\./.test(l); })) {
+        throw new Error('no this-week summary line');
+      }
+      var table = (body.content || []).filter(function (el) { return el.table; })[0];
+      var rows = table ? table.table.tableRows || [] : [];
+      var header = rows.length ? (rows[0].tableCells || []).map(getCellText_).join(' | ') : '';
+      if (header !== HOME_CLASS_HEADERS.join(' | ')) throw new Error('class table header is "' + header + '"');
+      if (rows.length - 1 !== expected.rows.length) {
+        throw new Error('class table has ' + (rows.length - 1) + ' classes, expected ' + expected.rows.length);
+      }
+      return expected.name + '; ' + updated + '; ' + week + '; ' + expected.rows.length + ' classes';
     }) &&
     check('Doc: type a test Status and Note into a By Class table', function () {
       target = findFirstAssignmentRow_(docId);

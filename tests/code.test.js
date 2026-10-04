@@ -34,7 +34,7 @@ function setup(props, opts) {
       getFolderById: () => { throw new Error('No item with the given ID could be found'); },
     });
   }
-  const sb = createSandbox({ files: ['apps_script/Code.gs'], globals });
+  const sb = createSandbox({ files: ['apps_script/Code.gs', 'apps_script/Canvas.gs'], globals });
   return { svc, ctx: sb.context, calls, names: () => calls.map((c) => c[0]) };
 }
 
@@ -164,4 +164,80 @@ test('help line and status normalization', () => {
   assert.strictEqual(t.ctx.normalizeStatus_('  ✅  complete '), 'Complete');
   assert.strictEqual(t.ctx.normalizeStatus_('⬜ Not started'), 'Not started');
   assert.strictEqual(t.ctx.normalizeStatus_('Waiting on teacher'), 'Waiting on teacher');
+});
+
+// ---- The CLC Planner home tab -------------------------------------------------------------
+
+function homeData() {
+  const C = { calc: 'ADV Calculus III-Smith-G', code: 'ADV Computer Coding-Jones-D', psy: 'ADV Psychology-Lee-A', stat: 'ADV Statistics-Patel-C', eng: 'Eng: Jane Austen-Garcia-B' };
+  let n = 0;
+  const A = (course, date, time, until, prio, name) => ({ day: 'x', assignment: name, course, due_time: time, priority: prio, days_until_due: until,
+    due_date: date, week_start: date < '2026-10-12' ? '2026-10-05' : date < '2026-10-19' ? '2026-10-12' : '2026-10-19', url: url(++n) });
+  const list = [
+    A(C.psy, '2026-10-05', '8:30 AM', 0, 'Today', 'Paper Outline Due'), A(C.eng, '2026-10-05', '10:25 AM', 0, 'Today', 'Read & Annotate (pp. 204-232)'),
+    A(C.stat, '2026-10-06', '8:00 AM', 1, 'Tomorrow', 'HW 7'), A(C.stat, '2026-10-06', '8:00 AM', 1, 'Tomorrow', 'SQ 6 & 7'),
+    A(C.eng, '2026-10-06', '2:30 PM', 1, 'Tomorrow', 'Read & Annotate (pp. 235-259)'), A(C.code, '2026-10-07', '9:30 AM', 2, 'Due Soon', 'One-Page Project Spec'),
+    A(C.eng, '2026-10-08', '10:35 AM', 3, 'Due Soon', 'Read & Annotate (pp. 260-291)'), A(C.psy, '2026-10-12', '8:30 AM', 7, 'This Week', 'Paper on Personality'),
+    A(C.calc, '2026-10-14', '11:59 PM', 9, 'Upcoming', 'Problem Set 4'), A(C.eng, '2026-10-12', '10:25 AM', 7, 'This Week', 'Read & Annotate (pp. 292-331)'),
+  ];
+  const weeks = {};
+  list.forEach((a) => { (weeks[a.week_start] = weeks[a.week_start] || { week_label: 'x', days: [{ day: 'Monday', assignments: [] }] }).days[0].assignments.push(a); });
+  return { weeks, studentFullName: 'Avery Example', courses: Object.values(C).sort() };
+}
+const MONDAY_8AM = new Date('2026-10-05T12:00:00Z');
+const round3 = (x) => typeof x === 'number' ? Math.round(x * 1000) / 1000 : Array.isArray(x) ? x.map(round3)
+  : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, round3(v)])) : x;
+
+test('home tab: class names lose the teacher and section only when the pattern is clear', () => {
+  const t = setup();
+  assert.strictEqual(t.ctx.shortCourseName_('ADV Calculus III-Browne-G'), 'ADV Calculus III');
+  assert.strictEqual(t.ctx.shortCourseName_('Eng: Jane Austen-Rosenberg-B'), 'Eng: Jane Austen');
+  assert.strictEqual(t.ctx.shortCourseName_('Pre-Calculus-Smith-A'), 'Pre-Calculus');
+  assert.strictEqual(t.ctx.shortCourseName_('Biology'), 'Biology');
+  assert.strictEqual(t.ctx.shortCourseName_('Advisory - Smith'), 'Advisory - Smith');
+  assert.strictEqual(t.ctx.shortCourseName_('Art-Lee-Studio'), 'Art-Lee-Studio');
+});
+
+test('home tab: the summary counts this week, today-or-tomorrow, and next due per class', () => {
+  const t = setup();
+  const data = homeData();
+  const s = toPlain(t.ctx.homeSummary_(data, t.ctx.plannerCourseList_(data), MONDAY_8AM));
+  assert.strictEqual(s.name, 'Avery Example');
+  assert.strictEqual(s.updated, 'Monday, Oct 5 at 8:00 AM');
+  assert.strictEqual(s.weekRange, 'Oct 5 – Oct 11');
+  assert.strictEqual(s.weekCount, 7);
+  assert.strictEqual(s.soonCount, 5);
+  assert.deepStrictEqual(s.rows.map((r) => [r.name, r.count, r.next]), [
+    ['ADV Calculus III', 0, 'Wed, Oct 14'], ['ADV Computer Coding', 1, 'Wed, Oct 7'], ['ADV Psychology', 1, 'Mon, Oct 5'],
+    ['ADV Statistics', 2, 'Tue, Oct 6'], ['Eng: Jane Austen', 3, 'Mon, Oct 5'],
+  ]);
+  // Two sections of the same class would look identical when shortened: keep the full names.
+  const twin = toPlain(t.ctx.homeSummary_({ weeks: {} }, ['Art-Lee-A', 'Art-Kim-B'], MONDAY_8AM));
+  assert.deepStrictEqual(twin.rows.map((r) => [r.name, r.next]), [['Art-Lee-A', '—'], ['Art-Kim-B', '—']]);
+});
+
+test('home tab: the exact requests that were checked against the live Docs API (2026-10-04)', () => {
+  // These 72 requests cleared an old home tab and built this one correctly in a real Google Doc,
+  // including the "Open this week" tab link. If you change the home tab, check it in a real Doc
+  // again, then regenerate this file.
+  const t = setup();
+  const data = homeData();
+  const courses = t.ctx.plannerCourseList_(data);
+  const summary = t.ctx.homeSummary_(data, courses, MONDAY_8AM);
+  const tab = { documentTab: { body: { content: [{ endIndex: 1 }, { endIndex: 68 }] } } };
+  const reqs = toPlain(t.ctx.homeClearRequests_(tab, 't.0').concat(
+    t.ctx.buildHomeTabRequests_('t.0', summary, 't.v3p30v8op28s', 468, t.ctx.buildCourseColorMap_(courses))));
+  assert.strictEqual(JSON.stringify(round3(reqs)), JSON.stringify(require('./fixtures/home-tab-requests.json')));
+});
+
+test('home tab: with no current-week tab there is no link, and with no classes there is no table', () => {
+  const t = setup();
+  const summary = toPlain(t.ctx.homeSummary_({ weeks: {}, studentFullName: 'Casey Test' }, [], MONDAY_8AM));
+  const reqs = toPlain(t.ctx.buildHomeTabRequests_('t.0', summary, null, 468, {}));
+  const texts = reqs.filter((r) => r.insertText).map((r) => r.insertText.text).join('\n');
+  assert.match(texts, /Nothing is due this week\. 0 due today or tomorrow\./);
+  assert.match(texts, /No current classes found in Canvas\./);
+  assert.ok(!/Open this week/.test(texts));
+  assert.strictEqual(reqs.filter((r) => r.insertTable).length, 0);
+  assert.ok(!JSON.stringify(reqs).includes('"tabId":null'));
 });
