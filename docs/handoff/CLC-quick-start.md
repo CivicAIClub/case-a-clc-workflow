@@ -6,7 +6,7 @@ AutoPlanner reads each student's assignments from Canvas and writes them into on
 
 **https://civicaiclub.github.io/case-a-clc-workflow/**
 
-The first time you open it on a computer, type `https://pomfret.instructure.com` in **Canvas base URL**. Leave **AutoPlanner API URL** as it is; it fills itself in.
+There's nothing to set up: **AutoPlanner API URL** and **Canvas base URL** fill themselves in. Leave them as they are.
 
 ## 2. Add a student
 

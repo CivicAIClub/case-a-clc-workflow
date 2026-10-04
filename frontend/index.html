@@ -1023,7 +1023,7 @@
         <span class="step-num">1</span>
         <div class="step-text">
           <strong>Connect</strong>
-          <p>Enter your school’s Canvas address. The AutoPlanner API URL is already filled in.</p>
+          <p>Both addresses are already filled in, so there’s nothing to set up.</p>
         </div>
       </li>
       <li class="step">
@@ -1074,7 +1074,7 @@
             spellcheck="false"
           />
           <p class="hint">
-            Same for every student in this group. Each fetch pulls <strong>4 weeks ahead</strong>.
+            Filled in with Pomfret’s Canvas. Each fetch pulls <strong>4 weeks ahead</strong>.
           </p>
         </div>
       </div>
@@ -1190,8 +1190,11 @@
     // "AutoPlanner API URL" field starts with this value on the public site, so staff never type it.
     // Ignored when the page runs on localhost, which talks to the local server instead.
     const DEFAULT_API_BASE = "";
+    // The school's Canvas address. Fills in "Canvas base URL" the same way (on localhost too).
+    const DEFAULT_CANVAS_BASE_URL = "https://pomfret.instructure.com";
 
     const LS_API_BASE = "autoplanner_api_base";
+    const LS_CANVAS_BASE = "canvas_base_url";
     const LS_ROSTER = "autoplanner_student_roster";
     const LS_DOC_MAP = "autoplanner_document_ids";
     const LS_LEGACY_TOKEN = "canvas_api_token";
@@ -1467,10 +1470,12 @@
     }
 
     function saveConnection() {
-      localStorage.setItem("canvas_base_url", document.getElementById("baseUrl").value.trim());
+      // Only remember addresses staff typed themselves. The defaults aren't saved, so if the
+      // club ever changes one, updating DEFAULT_API_BASE / DEFAULT_CANVAS_BASE_URL reaches every browser.
+      const canvas = document.getElementById("baseUrl").value.trim();
+      if (canvas && canvas !== DEFAULT_CANVAS_BASE_URL) localStorage.setItem(LS_CANVAS_BASE, canvas);
+      else localStorage.removeItem(LS_CANVAS_BASE);
       const backend = document.getElementById("apiBackendUrl").value.trim().replace(/\/$/, "");
-      // Only remember an address staff typed themselves. The default isn't saved, so if the
-      // club ever moves the server, updating DEFAULT_API_BASE reaches every browser.
       if (backend && backend !== defaultApiBase()) localStorage.setItem(LS_API_BASE, backend);
       else localStorage.removeItem(LS_API_BASE);
       updateBackendBanner();
@@ -1479,7 +1484,8 @@
     window.addEventListener("DOMContentLoaded", () => {
       document.getElementById("apiBackendUrl").value =
         localStorage.getItem(LS_API_BASE) || defaultApiBase();
-      document.getElementById("baseUrl").value = localStorage.getItem("canvas_base_url") || "";
+      document.getElementById("baseUrl").value =
+        localStorage.getItem(LS_CANVAS_BASE) || DEFAULT_CANVAS_BASE_URL;
       loadRosterFromStorage();
       if (!roster.length) roster.push({ id: uuid(), label: "", token: "" });
       migrateLegacyDocId();

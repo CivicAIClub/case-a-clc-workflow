@@ -119,7 +119,7 @@ Check `http://127.0.0.1:8000/health` → `{"status":"ok"}`.
 
 ### 5. Use the app locally
 
-Open **http://127.0.0.1:8000/**. The backend serves the frontend on the same origin, so leave **AutoPlanner API URL** blank. Set your school's **Canvas base URL** (e.g. `https://pomfret.instructure.com`), click **+ Add student**, paste each student's Canvas API token, then **Fetch all students**. Review each schedule on its tab and use **Create / Update Google Doc** per student.
+Open **http://127.0.0.1:8000/**. The backend serves the frontend on the same origin, so leave **AutoPlanner API URL** blank. **Canvas base URL** starts as `https://pomfret.instructure.com` (`DEFAULT_CANVAS_BASE_URL` near the top of the `<script>`); change it for another school. Click **+ Add student**, paste each student's Canvas API token, then **Fetch all students**. Review each schedule on its tab and use **Create / Update Google Doc** per student.
 
 Tokens and Doc IDs are stored in the browser's localStorage, not on the server. That means each browser has its own student list: a second computer doesn't know which Docs already exist and would create new ones.
 
@@ -135,7 +135,7 @@ The frontend is static; GitHub Pages cannot run Python.
    2. **New → Blueprint** → pick this repo. Render reads `render.yaml` and asks for the two secret values: `APPS_SCRIPT_URL` and `APPS_SCRIPT_SECRET`. `TIMEZONE`, `ALLOWED_ORIGINS` and `PYTHON_VERSION` come from the file.
    3. **Deploy Blueprint.** The service deploys from `main` and redeploys on every push to `main`. Change secrets later under the service's **Environment** tab.
    4. Check `https://<service>.onrender.com/health` returns `{"status":"ok"}`.
-3. **Connect them:** set `DEFAULT_API_BASE` near the top of the `<script>` in `frontend/index.html` to the Render URL (no trailing slash). The public site then fills in **AutoPlanner API URL** by itself; staff can still change it.
+3. **Connect them:** set `DEFAULT_API_BASE` near the top of the `<script>` in `frontend/index.html` to the Render URL (no trailing slash). The public site then fills in **AutoPlanner API URL** by itself, just as `DEFAULT_CANVAS_BASE_URL` fills in the Canvas address; staff can still change both. Neither default is saved in the browser, so changing a default reaches every browser.
 
 Things to know about the hosted backend:
 

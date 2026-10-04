@@ -17,7 +17,7 @@ For the Civic AI Club team presenting AutoPlanner to the CLC staff. Two roles: t
 "Today you log in to each student's Canvas and copy assignments into a Google Doc by hand. AutoPlanner does that copying for you: one Doc per student, refreshed whenever you click Update."
 
 **0:45–1:30 One link** (Driver shows the page)
-"This is the only link you need; bookmark it. The first time on a computer you type our Canvas address once. Everything else is already filled in."
+"This is the only link you need; bookmark it. There's nothing to set up: the server and our Canvas address are already filled in."
 
 **1:30–2:30 Students and Fetch** (Driver clicks **Fetch all students**)
 "Each student gives you a token from Canvas Settings; this sheet shows them how. You paste it here once. Fetch pulls the next four weeks for everyone." Show the student's tab: assignments by day, with priorities.
