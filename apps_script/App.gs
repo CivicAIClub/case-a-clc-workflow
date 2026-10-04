@@ -24,7 +24,9 @@ var APP_WEEKS_AHEAD = 4;
 var APP_DEFAULT_CANVAS_BASE_URL = 'https://pomfret.instructure.com';
 var APP_CONTACT = 'Cayden Auyang or Luke Ryan (Civic AI Club)';
 var APP_DAILY_HOURS = [19, 0]; // 7 pm and midnight, America/New_York
-var APP_BATCH_BUDGET_MS = 3.5 * 60 * 1000; // don't start another student after this
+// One student's Doc takes about 2 minutes (measured: 16 assignments, 97 s to create, 126 s to
+// update). Starting nobody new after 2 minutes leaves each student about 4 minutes of the 6.
+var APP_BATCH_BUDGET_MS = 2 * 60 * 1000; // don't start another student after this
 var APP_CONTINUE_AFTER_MS = 60 * 1000; // next batch of a long run
 var APP_SAFETY_CONTINUE_AFTER_MS = 8 * 60 * 1000; // resumes a run if a batch is cut off
 var APP_RUN_STALE_MS = 15 * 60 * 1000; // a run with no progress this long is treated as stopped
@@ -146,7 +148,7 @@ function removeStudent(id) {
   });
 }
 
-/** Update one student's Doc right away (about 30–90 seconds). */
+/** Update one student's Doc right away (about 1–2 minutes). */
 function updateStudentNow(id) {
   requireAllowedUser_();
   if (activeRun_()) {
@@ -753,7 +755,12 @@ function runSelfTest_(keepToken) {
       if (!isAllowedUser_(requireOwner_())) throw new Error('Add your email to ALLOWED_USERS.');
     }) &&
     check('Canvas: fetch your assignments', function () {
-      schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD);
+      try {
+        schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD);
+      } catch (err) {
+        if (err.canvasKind !== 'auth') throw err;
+        throw new Error("Canvas didn't accept TEST_CANVAS_TOKEN. Check that the property holds a working token.");
+      }
       return schedule.student_full_name + ', ' + schedule.total_assignments + ' assignments in the next ' + APP_WEEKS_AHEAD + ' weeks';
     }) &&
     check('Doc: create or update yours in the shared folder', function () {

@@ -254,7 +254,7 @@ test('long runs stop at the time budget, chain continueRun, and finish in the ne
   // While a run is going, a second run or a single update is refused.
   assert.strictEqual(toPlain(t.ctx.startUpdateAll()).alreadyRunning, true);
   assert.throws(() => t.ctx.updateStudentNow(res.students[0].id), /is running/);
-  t.ctx.APP_BATCH_BUDGET_MS = 3.5 * 60 * 1000;
+  t.ctx.APP_BATCH_BUDGET_MS = 2 * 60 * 1000;
   t.ctx.continueRun({ triggerUid: cont[0].uid });
   const last = JSON.parse(t.svc.props['run.last']);
   assert.strictEqual(last.updated, 3);
@@ -272,7 +272,7 @@ test('if a batch is cut off mid-student, the safety trigger records it and carri
   t.ctx.updateOneStudent_ = () => { throw new Error('Exceeded maximum execution time'); };
   assert.throws(() => t.ctx.startUpdateAll(), /Exceeded maximum execution time/);
   t.ctx.updateOneStudent_ = realUpdate;
-  t.ctx.APP_BATCH_BUDGET_MS = 3.5 * 60 * 1000;
+  t.ctx.APP_BATCH_BUDGET_MS = 2 * 60 * 1000;
   const safety = t.svc.triggers.find((x) => x.handler === 'continueRun');
   assert.strictEqual(safety.config.after, 8 * 60 * 1000);
   t.ctx.continueRun({ triggerUid: safety.uid });
@@ -331,6 +331,9 @@ test('checkSetup and selfTest never log a token; selfTest deletes TEST_CANVAS_TO
   const logText = t.sb.logs.join('\n');
   assert.ok(!logText.includes(TOKEN_A), 'token never logged');
   assert.match(logText, /PASS Canvas: fetch your assignments: Avery Example, 3 assignments/);
+  t.svc.props.TEST_CANVAS_TOKEN = 'NOT-A-TOKEN';
+  t.ctx.selfTest();
+  assert.match(t.sb.logs.join('\n'), /FAIL Canvas: fetch your assignments: Canvas didn't accept TEST_CANVAS_TOKEN/);
   assert.match(logText, /FAIL Doc: type a test Status and Note.*No assignments/);
   assert.match(logText, /selfTest: FAILED/);
 });

@@ -640,7 +640,7 @@
       </div>
       <div class="fetch-cta">
         <button type="button" class="btn-primary" id="updateAllBtn" disabled>Update all students now</button>
-        <span class="fetch-cta-meta">About a minute per student. You can close this page; it keeps going.</span>
+        <span class="fetch-cta-meta">About 2 minutes per student. You can close this page; it keeps going.</span>
       </div>
       <p class="status" id="runStatus"></p>
       <div class="last-run" id="lastRun"></div>
@@ -913,7 +913,7 @@
     function updateOne(s) {
       state.busy[s.id] = true;
       renderStudents();
-      setStatus('st-' + s.id, 'loading', 'Updating ' + s.name + '’s Doc (about 30–90 seconds)…');
+      setStatus('st-' + s.id, 'loading', 'Updating ' + s.name + '’s Doc (about 1–2 minutes)…');
       return call('updateStudentNow', s.id).then(function (fresh) {
         delete state.busy[s.id];
         replaceStudent(fresh);
