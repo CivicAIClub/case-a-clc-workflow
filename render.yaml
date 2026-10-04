@@ -1,0 +1,33 @@
+# Render Blueprint for the AutoPlanner backend (FastAPI).
+# Render reads this file when you create the service with New → Blueprint. See README step 6.
+#
+# Free plan: the server goes to sleep after 15 minutes without visitors, and the next request
+# waits about a minute while it starts again. The web page shows a "Waking up the server" message
+# while that happens.
+
+services:
+  - type: web
+    name: autoplanner-api
+    runtime: python
+    plan: free
+    region: virginia
+    # Always deploy from main, even if the Blueprint itself was linked to another branch.
+    branch: main
+    autoDeployTrigger: commit
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Same Python version the backend is tested with.
+      - key: PYTHON_VERSION
+        value: 3.12.13
+      # Secrets: "sync: false" means Render asks for the value when the Blueprint is created
+      # and never stores it in this file. Change them later in the service's Environment tab.
+      - key: APPS_SCRIPT_URL
+        sync: false
+      - key: APPS_SCRIPT_SECRET
+        sync: false
+      - key: TIMEZONE
+        value: America/New_York
+      - key: ALLOWED_ORIGINS
+        value: https://civicaiclub.github.io
