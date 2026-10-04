@@ -354,3 +354,18 @@ test('writeStatusAndNote_ edits the Notes cell before the Status cell and keeps 
     { insertText: { text: 'S', location: { tabId: 't.1', index: 100 } } },
   ]);
 });
+
+test("selfTest uses your student row's Doc when you're on the list (no second copy in the folder)", () => {
+  const t = setup({ TEST_CANVAS_TOKEN: TOKEN_A });
+  t.svc.addFile('MY-DOC', 'Avery Example - CLC Assignments', 'FOLDER123');
+  const { student } = addAs(t, STAFF, TOKEN_A, 'Demo'); // reuses MY-DOC
+  assert.match(student.docUrl, /MY-DOC/);
+  t.svc.setActive(OWNER);
+  const calls = [];
+  t.ctx.writeDocWithRecovery_ = (s) => { calls.push(toPlain(s)); return s.docId || 'NEW-DOC'; };
+  t.ctx.assertDocIsInFolder_ = () => {};
+  t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [] }] });
+  t.ctx.selfTestKeepToken();
+  assert.deepStrictEqual(calls[0], { id: student.id, docId: 'MY-DOC' });
+  assert.match(t.sb.logs.join('\n'), /PASS Doc: create or update yours in the shared folder: used your student row's Doc/);
+});

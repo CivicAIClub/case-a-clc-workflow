@@ -755,7 +755,7 @@ function runSelfTest_(keepToken) {
     }
   }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
-  var schedule, docId, target, testStatus, testNote, doc, firstSeconds;
+  var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent;
   // Only the weeks AutoPlanner just wrote; tabs from earlier weeks are left as they were.
   var currentWeeks = function () {
     var titles = Object.keys(schedule.weeks || {}).map(function (k) {
@@ -787,13 +787,20 @@ function runSelfTest_(keepToken) {
         APP_WEEKS_AHEAD + ' weeks, ' + schedule.courses.length + ' classes: ' + schedule.courses.join('; ');
     }) &&
     check('Doc: create or update yours in the shared folder', function () {
-      var reused = findReusableDoc_(schedule.student_full_name, null);
+      // If you're also on the student list, test that same Doc, so selfTest never makes a second
+      // copy of your planner in the folder.
+      var row = listStudents_().filter(function (s) {
+        return s.canvasUserId !== null && s.canvasUserId !== undefined &&
+          String(s.canvasUserId) === String(schedule.canvas_user_id);
+      })[0];
+      selfStudent = { id: row ? row.id : 'selftest', docId: row && row.docId ? row.docId : findReusableDoc_(schedule.student_full_name, null) };
+      var how = row && row.docId ? "used your student row's Doc" : selfStudent.docId ? 'reused' : 'created';
       var t0 = Date.now();
-      docId = writeDocWithRecovery_({ id: 'selftest', docId: reused }, schedule);
+      docId = writeDocWithRecovery_(selfStudent, schedule);
       firstSeconds = Math.round((Date.now() - t0) / 1000);
       assertDocIsInFolder_(docId, getDocsFolder_());
       doc = docsGet_(docId);
-      return (reused ? 'reused' : 'created') + ' in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
+      return how + ' in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
     }) &&
     check('Every class has its own By Class table in every week', function () {
       var weeks = currentWeeks();
@@ -875,7 +882,7 @@ function runSelfTest_(keepToken) {
     }) &&
     check('Doc: run an update (timed)', function () {
       var t0 = Date.now();
-      writeDocWithRecovery_({ id: 'selftest', docId: docId }, schedule);
+      writeDocWithRecovery_({ id: selfStudent.id, docId: docId }, schedule);
       var s = Math.round((Date.now() - t0) / 1000);
       if (s * 1000 > 6 * 60 * 1000 - APP_BATCH_BUDGET_MS) {
         throw new Error('took ' + s + ' s: too close to the 6-minute limit for the 2-minute batch budget');
