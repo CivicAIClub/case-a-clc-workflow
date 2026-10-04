@@ -186,6 +186,22 @@
       font-size: 0.85rem;
       margin-top: 0.05rem;
     }
+    /* Neutral "please wait" banner, e.g. while the hosted server wakes up. */
+    .banner.info {
+      background: var(--accent-soft);
+      border-color: var(--accent-ring);
+      color: var(--accent-text);
+    }
+    .banner.info::before {
+      content: "";
+      width: 1rem;
+      height: 1rem;
+      margin-top: 0.15rem;
+      background: transparent;
+      border: 2px solid var(--accent-ring);
+      border-top-color: var(--accent);
+      animation: spin 0.7s linear infinite;
+    }
 
     /* ---------- Steps strip ---------- */
     .steps {
@@ -1000,13 +1016,14 @@
     </header>
 
     <div class="banner" id="backendBanner" role="status"></div>
+    <div class="banner" id="wakeBanner" role="status" aria-live="polite"></div>
 
     <ol class="steps" aria-label="How it works">
       <li class="step">
         <span class="step-num">1</span>
         <div class="step-text">
           <strong>Connect</strong>
-          <p>Set the AutoPlanner API URL (if hosted) and your school’s Canvas address.</p>
+          <p>Enter your school’s Canvas address. The AutoPlanner API URL is already filled in.</p>
         </div>
       </li>
       <li class="step">
@@ -1041,8 +1058,8 @@
             spellcheck="false"
           />
           <p class="hint">
-            On <strong>GitHub Pages</strong> this is required: paste the public URL of your deployed FastAPI app
-            (trailing slash optional). Running on <strong>http://127.0.0.1:8000/</strong>? Leave this blank.
+            Filled in automatically on the CLC site, so you can leave it as it is.
+            Developers running the server on <strong>http://127.0.0.1:8000/</strong> leave this blank.
           </p>
         </div>
       </div>
@@ -1169,6 +1186,11 @@
   </div>
 
   <script>
+    // Address of the hosted AutoPlanner server (no trailing slash). When set, the
+    // "AutoPlanner API URL" field starts with this value on the public site, so staff never type it.
+    // Ignored when the page runs on localhost, which talks to the local server instead.
+    const DEFAULT_API_BASE = "";
+
     const LS_API_BASE = "autoplanner_api_base";
     const LS_ROSTER = "autoplanner_student_roster";
     const LS_DOC_MAP = "autoplanner_document_ids";
@@ -1259,6 +1281,87 @@
         );
       }
       return m;
+    }
+
+    /** DEFAULT_API_BASE on the hosted site; blank on localhost so local runs use the local server. */
+    function defaultApiBase() {
+      return isStaticHost() ? DEFAULT_API_BASE.trim().replace(/\/$/, "") : "";
+    }
+
+    /* ===================================================================
+       Waking the server
+       The free host puts the server to sleep after ~15 minutes without visitors, and the first
+       request then waits up to a minute while it starts. Before talking to the server we ask
+       /health; if that takes more than 3 seconds, we say the server is waking up instead of
+       looking frozen. (A slow Canvas or Google step after that keeps its own message.)
+       =================================================================== */
+
+    const WAKE_MESSAGE = "Waking up the server, this can take up to a minute…";
+    const WAKE_NOTICE_AFTER_MS = 3000;
+    const WAKE_GIVE_UP_AFTER_MS = 90000;
+    const SERVER_AWAKE_FOR_MS = 5 * 60 * 1000;
+    let lastServerReplyAt = 0;
+
+    function noteServerReplied() {
+      lastServerReplyAt = Date.now();
+    }
+
+    /** True only for the real /health reply (the host may show a "loading" page while it starts). */
+    async function healthIsOk() {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 30000);
+      try {
+        const res = await fetch(apiBase() + "/health", { cache: "no-store", signal: ctrl.signal });
+        const body = await res.json().catch(() => ({}));
+        return res.ok && body.status === "ok";
+      } catch (_) {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    /**
+     * Resolves once the server answers /health. Calls onSlow() if that takes over 3 seconds.
+     * Throws a friendly error if it still hasn't answered after 90 seconds.
+     */
+    async function ensureServerAwake(onSlow) {
+      if (Date.now() - lastServerReplyAt < SERVER_AWAKE_FOR_MS) return;
+      const slowTimer = setTimeout(onSlow, WAKE_NOTICE_AFTER_MS);
+      const giveUpAt = Date.now() + WAKE_GIVE_UP_AFTER_MS;
+      try {
+        while (!(await healthIsOk())) {
+          if (Date.now() >= giveUpAt) {
+            throw new Error(
+              "Could not reach the AutoPlanner server at " +
+                (apiBase() || "(same origin)") +
+                ". Wait a minute and try again. If it keeps happening, check the AutoPlanner API URL."
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+        noteServerReplied();
+      } finally {
+        clearTimeout(slowTimer);
+      }
+    }
+
+    function setWakeBanner(type, message) {
+      const el = document.getElementById("wakeBanner");
+      el.textContent = message || "";
+      el.classList.toggle("info", type === "info");
+      el.classList.toggle("visible", !!message);
+    }
+
+    /** Start waking the server as soon as the page opens, so it's ready by the time staff click Fetch. */
+    async function wakeServerOnLoad() {
+      if (isStaticHost() && !apiBase()) return;
+      try {
+        await ensureServerAwake(() => setWakeBanner("info", WAKE_MESSAGE));
+        setWakeBanner("", "");
+      } catch (e) {
+        setWakeBanner("warn", e.message);
+      }
     }
 
     function loadDocMap() {
@@ -1366,13 +1469,16 @@
     function saveConnection() {
       localStorage.setItem("canvas_base_url", document.getElementById("baseUrl").value.trim());
       const backend = document.getElementById("apiBackendUrl").value.trim().replace(/\/$/, "");
-      if (backend) localStorage.setItem(LS_API_BASE, backend);
+      // Only remember an address staff typed themselves. The default isn't saved, so if the
+      // club ever moves the server, updating DEFAULT_API_BASE reaches every browser.
+      if (backend && backend !== defaultApiBase()) localStorage.setItem(LS_API_BASE, backend);
       else localStorage.removeItem(LS_API_BASE);
       updateBackendBanner();
     }
 
     window.addEventListener("DOMContentLoaded", () => {
-      document.getElementById("apiBackendUrl").value = localStorage.getItem(LS_API_BASE) || "";
+      document.getElementById("apiBackendUrl").value =
+        localStorage.getItem(LS_API_BASE) || defaultApiBase();
       document.getElementById("baseUrl").value = localStorage.getItem("canvas_base_url") || "";
       loadRosterFromStorage();
       if (!roster.length) roster.push({ id: uuid(), label: "", token: "" });
@@ -1380,6 +1486,7 @@
       persistRoster();
       renderStudentList();
       updateBackendBanner();
+      wakeServerOnLoad();
       localStorage.removeItem("autoplanner_spreadsheet_id");
 
       document.getElementById("apiBackendUrl").addEventListener("input", updateBackendBanner);
@@ -1553,11 +1660,22 @@
         return;
       }
 
-      setStatus("fetchStatus", "loading", `Fetching ${withToken.length} student(s) from Canvas…`);
+      const fetchingMessage = `Fetching ${withToken.length} student(s) from Canvas…`;
+      setStatus("fetchStatus", "loading", fetchingMessage);
       setBtnDisabled("fetchBtn", true);
       document.getElementById("previewCard").classList.remove("visible");
       resultsById = {};
       refreshBulkActionsStrip();
+
+      try {
+        await ensureServerAwake(() => setStatus("fetchStatus", "loading", WAKE_MESSAGE));
+      } catch (e) {
+        setStatus("fetchStatus", "error", e.message);
+        setBtnDisabled("fetchBtn", false);
+        return;
+      }
+      setWakeBanner("", "");
+      setStatus("fetchStatus", "loading", fetchingMessage);
 
       const qBase = new URLSearchParams({
         weeks_ahead: String(weeksAhead),
@@ -1573,6 +1691,7 @@
             headers: { "X-Canvas-Token": r.token.trim() },
           });
           const body = await res.json().catch(() => ({}));
+          noteServerReplied();
           if (!res.ok) {
             throw new Error(formatApiDetail(body) || `HTTP ${res.status}`);
           }
@@ -1823,15 +1942,17 @@
       const storageKey = docStorageKey(sched, studentId);
       const existingId = getStoredDocId(sched, studentId);
       const hasSaved = !!existingId;
-      setStatus(
-        "gen-status-" + studentId,
-        "loading",
-        hasSaved ? "Updating Doc (~10–20s on cold start)…" : "Creating Doc (~10–20s)…"
-      );
+      const workingMessage = hasSaved
+        ? "Updating Doc (~10–20s on cold start)…"
+        : "Creating Doc (~10–20s)…";
+      setStatus("gen-status-" + studentId, "loading", workingMessage);
       const btn = document.querySelector(".btn-gen[data-sid=\"" + studentId + "\"]");
       if (btn) btn.disabled = true;
 
       try {
+        await ensureServerAwake(() => setStatus("gen-status-" + studentId, "loading", WAKE_MESSAGE));
+        setStatus("gen-status-" + studentId, "loading", workingMessage);
+
         const payload = { ...res.schedule };
         if (existingId) payload.documentId = existingId;
 
@@ -1841,6 +1962,7 @@
           body: JSON.stringify(payload),
         });
         const body = await r.json().catch(() => ({}));
+        noteServerReplied();
         if (!r.ok) throw new Error(formatApiDetail(body) || "HTTP " + r.status);
 
         if (body.documentId) {
