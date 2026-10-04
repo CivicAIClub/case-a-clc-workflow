@@ -1,8 +1,8 @@
 name: Deploy frontend to GitHub Pages
 
-# Publishes the static AutoPlanner frontend to the gh-pages branch of this
-# repo. Live at https://civicaiclub.github.io/case-a-clc-workflow/
-# The Python backend is NOT deployed here (see README step 6).
+# Publishes frontend/ (now just an "AutoPlanner has moved" page that links to the
+# Apps Script web app) to the gh-pages branch of this repo.
+# Live at https://civicaiclub.github.io/case-a-clc-workflow/
 
 on:
   push:

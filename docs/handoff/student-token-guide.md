@@ -14,6 +14,6 @@ The CLC uses AutoPlanner to copy your Canvas assignments into a weekly planner G
 
 Your token works like a password to your Canvas account.
 
-- Give it **only to CLC staff**, the way they ask you to.
+- Give it **only to CLC staff**, the way they ask you to. They paste it into AutoPlanner once; after that, even they see only its last 4 characters.
 - Never post it in a chat, email it to friends, or paste it into any other website.
 - Want to stop AutoPlanner? Go back to **Settings → Approved Integrations** and delete the "AutoPlanner" token. The CLC staff will need a new one to keep your planner updated.

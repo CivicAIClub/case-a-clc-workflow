@@ -1,30 +1,38 @@
 # AutoPlanner: quick start for CLC staff
 
-AutoPlanner reads each student's assignments from Canvas and writes them into one Google Doc per student, with a tab for each week.
+AutoPlanner reads each student's assignments from Canvas and keeps them in one Google Doc per student, with a tab for each week. It updates every Doc automatically each evening.
 
-## 1. Bookmark this link
+## 1. Open it and bookmark it
 
-**https://civicaiclub.github.io/case-a-clc-workflow/**
+**https://script.google.com/a/macros/pomfret.org/s/AKfycby1FSQahq5fzxF9XHWZ5drKXFrfyF9e-y1o8cfwnGYY_uXVYKIZ6dFKk3muEGEKG3HA/exec**
 
-There's nothing to set up: **AutoPlanner API URL** and **Canvas base URL** fill themselves in. Leave them as they are.
+That's long, so you can also go to **civicaiclub.github.io/case-a-clc-workflow** and click **Open AutoPlanner**.
+
+- Sign in with your **Pomfret Google account**. The page shows "Signed in as …" at the top.
+- **Any staff computer works.** Everything is saved in AutoPlanner, not in the browser.
+- If you're signed in to more than one Google account, use a browser window (or Chrome profile) signed in **only** to your Pomfret account. Otherwise the page may not load.
 
 ## 2. Add a student
 
-1. Ask the student for their Canvas access token. Hand them the [student token guide](student-token-guide.md) if they don't have one.
-2. Click **+ Add student**, then paste the token into **Canvas API token**. The **Label** box is optional, just for you (for example "Table 4").
+1. Ask the student for their Canvas access token. Give them the [student token guide](student-token-guide.md) if they don't have one.
+2. Paste it into **Canvas access token** under **Add a student**. **Label** is optional, just for you (for example "Table 4"). Click **Add student**.
+3. AutoPlanner checks the token with Canvas, then makes the student's Doc. This takes about 2 minutes, and you'll see a ✅ on their row when it's done.
 
-## 3. Fetch and update
+After that you only ever see the token's **last 4 characters**. If a student was on the list before, AutoPlanner finds and reuses their existing Doc.
 
-1. Click **Fetch all students**. Each student gets a tab with their next four weeks of assignments.
-2. Click **Create Google Doc** on a student's tab (it says **Update Google Doc** once the Doc exists), or **Update all students' Docs** to do everyone. Each Doc takes about 20 seconds to a minute.
+## 3. Updates
 
-If you see **"Waking up the server, this can take up to a minute…"**, just wait. The server naps when nobody has used it for 15 minutes. A red tab means that one student had a problem; the message on the tab says what.
+- **Automatic:** every day at about **7 pm** and about **midnight**. They run on Google's servers, so no computer needs to be on.
+- **Right now:** click **Update all students now** (about 2 minutes per student). You can close the page; it keeps going. To refresh just one student, click **Update** on their row.
+- **Last update** shows when the last update ran and any student who had a problem, with the reason. A ⚠️ on a student's row means the same thing.
 
 ## 4. Where the Docs live
 
-Every Doc is in the Google Drive folder **AutoPlanner – CLC Student Planners**. Find it in Drive under **Shared with me** (add a shortcut to My Drive to keep it handy). Each Doc is called "*Student Name* - CLC Assignments". Open the **Document tabs** sidebar on the left to see one tab per week under **CLC Planner**.
+Every Doc is in the Google Drive folder **AutoPlanner – CLC Student Planners**, under **Shared with me** in Drive. Click **Open their Doc ↗** on a student's row to jump straight to it.
 
-Keep the Docs in this folder. AutoPlanner only updates Docs that are inside it; if one gets moved out, move it back.
+- Each Doc is called "*Student Name* - CLC Assignments".
+- Open the **Document tabs** sidebar on the left to see one tab per week under **CLC Planner**.
+- **Keep the Docs in this folder.** AutoPlanner only updates Docs that are inside it. If one gets moved out, move it back.
 
 ## 5. Status and Notes
 
@@ -32,23 +40,16 @@ Type in the white **Status** and **Notes** cells, in either table. Status starts
 
 **Everything else in a week tab is rewritten on each update.** For notes about the student in general, write on the **CLC Planner** tab at the top, which AutoPlanner never changes.
 
-## 6. Use one computer
+## 6. Change or remove a student
 
-AutoPlanner remembers the student list, tokens and Doc links **in this browser on this computer only**. Pick one CLC computer and always use the same browser on it.
+- **New token** (for example after the old one expired): click **Edit** on their row, paste the new token, and click **Save**. Then click **Update**.
+- **Remove:** click **Remove**. Their Doc stays in the shared folder. If you add them again later, AutoPlanner reuses it.
 
-- On another computer, AutoPlanner doesn't know which Docs already exist and would make second copies.
-- Clearing the browser's history or site data makes AutoPlanner forget everything, with the same result.
-- Tokens work like passwords to the students' Canvas accounts. Use a computer only CLC staff use, and keep it locked.
-
-## 7. What "Run at these times" really does
-
-The **Auto-update schedule** only runs while the AutoPlanner page is **open in a browser tab** and the computer is **awake**. If the tab is closed or the computer is asleep, the run is skipped; nothing runs on its own in the background. When in doubt, click **Update all students' Docs**.
-
-## 8. Who to contact
+## 7. Who to contact
 
 Civic AI Club, by school email:
 
-- **Cayden Auyang**, Club President
-- **Luke Ryan** and **Jack Weinberg**, the AutoPlanner developers
+- **Cayden Auyang**
+- **Luke Ryan**
 
-Tell us the student's tab name and the exact message you see (a screenshot is perfect). Please don't send tokens.
+Tell us the student's name and the exact message you see (a screenshot is perfect). Never send tokens by email.

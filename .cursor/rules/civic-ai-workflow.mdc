@@ -13,7 +13,7 @@ The developers are high school students learning collaborative coding. Prefer cl
 
 - **Never push to `main`.** Always work on a branch and open a pull request. Merging requires one approving review.
 - **Branch names:** `feature/<short-description>`, `fix/<short-description>`, or `chore/<short-description>`. Lowercase, hyphens, no spaces. The old `case-a/` prefix is retired.
-- **Never commit secrets.** No API keys, tokens, or `.env` files. `backend/.env` is gitignored; `backend/.env.example` holds placeholders only. If a developer pastes a real credential into a file, stop and tell them.
+- **Never commit secrets.** No API keys, tokens, `.env` files, or clasp files (`.clasp.json`, `.clasprc.json`, both gitignored). AutoPlanner's Canvas tokens live only in the Apps Script project's Script Properties. If a developer pastes a real credential into a file, stop and tell them.
 - Small, frequent commits with plain-English messages ("Add Status column to By Day table", not "stuff").
 - Pull requests use the template in `.github/pull_request_template.md`: what changed, how it was tested, screenshots for UI.
 
