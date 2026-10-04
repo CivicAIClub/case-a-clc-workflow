@@ -7,690 +7,379 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@300;400;600&family=Martian+Mono:wght@400&display=swap"
     rel="stylesheet"
   />
   <style>
+    /* Design tokens: the Civic AI Club website's values (civicaiclub.github.io, src/styles/tokens.css).
+       Ink and paper; crimson only for focus rings, the progress hairline, the "in progress" dot and
+       the one primary button. Dividers are the text color at 25%, 1px. */
     :root {
-      --bg: #fafaf7;
-      --bg-tint: #f3f1ec;
-      --surface: #ffffff;
-      --surface-soft: #f8fafc;
-      --surface-hover: #f1f5f9;
-      --border: #e5e7eb;
-      --border-strong: #d1d5db;
-      --text: #0f172a;
-      --text-soft: #1e293b;
-      --muted: #64748b;
-      --muted-soft: #94a3b8;
+      --ink: #0d0d0c;
+      --paper: #f4f3ef;
+      --ink-2: #5f5d58; /* secondary text on paper, 5.9:1 */
+      --crimson: #a8172b;
+      --mark-text: #fbfaf7; /* text on crimson, 7.1:1 */
+      --rule: rgb(13 13 12 / 0.25);
+      --field: var(--ink-2); /* form field edges need 3:1, so not the 25% rule */
+      --focus: var(--crimson);
 
-      --accent: #6366f1;
-      --accent-hover: #4f46e5;
-      --accent-soft: #eef2ff;
-      --accent-ring: rgba(99, 102, 241, 0.18);
-      --accent-text: #4338ca;
+      --font-sans: 'Host Grotesk', 'Helvetica Neue', Arial, sans-serif;
+      --font-mono: 'Martian Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+      --fs-mono: 11px;
+      --ls-mono: 0.04em;
+      --fs-ui: 14px;
+      --fs-body: clamp(16px, 0.9rem + 0.2vw, 18px);
+      --fs-label: 20px;
+      --fw-light: 300;
+      --fw-regular: 400;
+      --margin: 40px;
+      --gutter: 20px;
+      --header-height: 62px;
 
-      --success: #10b981;
-      --success-soft: #ecfdf5;
-      --success-text: #047857;
-      --success-ring: rgba(16, 185, 129, 0.18);
-
-      --warn: #f59e0b;
-      --warn-soft: #fffbeb;
-      --warn-text: #92400e;
-      --warn-ring: rgba(245, 158, 11, 0.2);
-
-      --danger: #ef4444;
-      --danger-soft: #fef2f2;
-      --danger-text: #b91c1c;
-      --danger-ring: rgba(239, 68, 68, 0.2);
-
-      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
-      --shadow-md: 0 6px 16px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
-      --shadow-lg: 0 18px 36px rgba(15, 23, 42, 0.08), 0 3px 8px rgba(15, 23, 42, 0.04);
-
-      --radius-xs: 8px;
-      --radius-sm: 10px;
-      --radius: 14px;
-      --radius-lg: 20px;
-      --radius-xl: 26px;
-
-      --font-sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      --font-display: "Fraunces", "DM Sans", Georgia, serif;
+      /* Motion: the site's two curves, plus its arrow swap and underline hand-off timings. */
+      --ease-civic: cubic-bezier(0.7, 0, 0.3, 1);
+      --ease-expo-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-arrow: cubic-bezier(0.52, 0, 0, 1);
+      --ease-underline: cubic-bezier(0.16, 1, 0.3, 1);
+      --dur-arrow: 0.7s;
+      --dur-underline: 0.6s;
+    }
+    @media (max-width: 1023px) {
+      :root { --margin: 24px; --gutter: 16px; --fs-label: 18px; }
+    }
+    @media (max-width: 767px) {
+      :root { --margin: 16px; --gutter: 12px; --fs-label: 17px; --header-height: 56px; }
     }
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    html { scroll-behavior: smooth; }
-
-    body {
+    /* ---- Reset and page defaults (as in the site's base.css) ---- */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body, h1, h2, p, ul { margin: 0; }
+    ul { padding: 0; list-style: none; }
+    button, input, textarea { font: inherit; color: inherit; }
+    button { background: none; border: 0; padding: 0; cursor: pointer; }
+    a { color: inherit; text-decoration: none; }
+    [hidden] { display: none !important; }
+    html {
+      background: var(--paper);
+      color: var(--ink);
       font-family: var(--font-sans);
-      background:
-        radial-gradient(1200px 600px at 90% -10%, rgba(99, 102, 241, 0.10), transparent 60%),
-        radial-gradient(900px 500px at -10% 10%, rgba(16, 185, 129, 0.06), transparent 60%),
-        linear-gradient(180deg, var(--bg) 0%, var(--bg-tint) 100%);
-      background-attachment: fixed;
-      color: var(--text);
-      min-height: 100vh;
-      line-height: 1.55;
+      font-weight: var(--fw-light);
+      -webkit-text-size-adjust: 100%;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
-
-    a { color: var(--accent-text); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-
-    a:focus-visible,
-    button:focus-visible,
-    input:focus-visible,
-    select:focus-visible,
-    textarea:focus-visible,
-    [role="tab"]:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-      border-radius: var(--radius-xs);
-    }
-
-    .wrap {
-      max-width: 1080px;
-      margin: 0 auto;
-      padding: 2.25rem 1.25rem 4rem;
-    }
-
-    /* ---------- Hero ---------- */
-    .hero {
-      display: flex;
-      flex-direction: column;
-      gap: 1.25rem;
-      margin-bottom: 2rem;
-    }
-
-    .hero-brand {
-      display: flex;
-      align-items: center;
-      gap: 0.9rem;
-    }
-
-    .hero-mark {
-      width: 2.6rem;
-      height: 2.6rem;
-      border-radius: 14px;
-      background: linear-gradient(135deg, #818cf8, #6366f1 55%, #4f46e5);
-      color: #fff;
-      display: grid;
-      place-items: center;
-      font-family: var(--font-display);
-      font-weight: 700;
-      font-size: 1.25rem;
-      box-shadow: 0 6px 16px rgba(99, 102, 241, 0.35);
-      letter-spacing: -0.02em;
-    }
-
-    .hero h1 {
-      font-family: var(--font-display);
-      font-weight: 600;
-      font-size: clamp(1.85rem, 4.6vw, 2.6rem);
-      line-height: 1.1;
-      letter-spacing: -0.02em;
-      color: var(--text);
-    }
-
-    .hero-eyebrow {
-      display: inline-block;
-      font-size: 0.72rem;
-      font-weight: 600;
-      letter-spacing: 0.14em;
+    body { min-height: 100vh; font-size: var(--fs-body); line-height: 1.35; overflow-x: clip; }
+    :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+    :focus:not(:focus-visible) { outline: none; }
+    ::selection { background: var(--crimson); color: var(--mark-text); }
+    .t-mono {
+      font-family: var(--font-mono);
+      font-size: var(--fs-mono);
+      font-weight: var(--fw-regular);
+      letter-spacing: var(--ls-mono);
+      line-height: 1.3;
       text-transform: uppercase;
-      color: var(--accent-text);
-      background: var(--accent-soft);
-      padding: 0.28rem 0.7rem;
-      border-radius: 999px;
-      margin-bottom: 0.5rem;
+    }
+    .sr-only {
+      position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+    }
+    .skip-link {
+      position: fixed; top: 8px; left: 8px; z-index: 10; padding: 10px 14px;
+      background: var(--paper); outline: 2px solid var(--crimson); transform: translateY(-200%);
+    }
+    .skip-link:focus, .skip-link:focus-visible { transform: none; }
+    .page { width: 100%; max-width: calc(900px + 2 * var(--margin)); margin: 0 auto; padding-inline: var(--margin); }
+
+    /* ---- Header ---- */
+    .site-header { position: relative; border-bottom: 1px solid var(--rule); }
+    .header-inner {
+      min-height: var(--header-height);
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px var(--gutter); flex-wrap: wrap; padding-block: 12px;
+    }
+    .brand { display: flex; align-items: baseline; gap: 4px 18px; flex-wrap: wrap; }
+    .brand-name { font-size: var(--fs-label); font-weight: var(--fw-regular); letter-spacing: -0.01em; line-height: 1.2; }
+    .brand-sub, .who { color: var(--ink-2); }
+    .who-v { color: var(--ink); text-transform: none; letter-spacing: 0; }
+    /* The progress hairline: a thin crimson line under the header while an update runs. */
+    .progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; opacity: 0; transition: opacity 0.6s var(--ease-expo-out); }
+    .progress span {
+      position: absolute; top: 0; bottom: 0; left: 0; width: 32%;
+      background: var(--crimson); transform: translateX(-100%);
+    }
+    body.is-updating .progress { opacity: 1; }
+    body.is-updating .progress span { animation: progress-run 1.8s var(--ease-civic) infinite; }
+    @keyframes progress-run { from { transform: translateX(-100%); } to { transform: translateX(320%); } }
+
+    /* ---- Sections ---- */
+    main { padding-bottom: 24px; }
+    .lede { margin-top: 48px; max-width: 34em; font-size: var(--fs-label); line-height: 1.3; letter-spacing: -0.01em; }
+    .block { margin-top: 56px; border-top: 1px solid var(--rule); padding-top: 16px; }
+    .block-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px var(--gutter); }
+    .block-label { color: var(--ink); }
+    .count { color: var(--ink-2); }
+    .hint, .note, .fine, .empty-note { color: var(--ink-2); font-size: var(--fs-ui); line-height: 1.45; }
+
+    /* Errors that stop the whole page (for example "Not authorized"). */
+    .banner { display: none; margin-top: 32px; padding: 14px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); font-size: var(--fs-ui); line-height: 1.45; }
+    .banner.visible { display: block; }
+    .banner::before { content: 'Problem'; }
+
+    /* ---- Buttons ---- */
+    .btn-primary, .btn-secondary {
+      font-family: var(--font-mono); font-size: var(--fs-mono); font-weight: var(--fw-regular);
+      letter-spacing: var(--ls-mono); text-transform: uppercase; line-height: 1;
+      padding: 16px 20px; min-height: 44px;
+      transition: background-color 0.45s var(--ease-civic), color 0.45s var(--ease-civic);
+    }
+    .btn-primary { background: var(--crimson); color: var(--mark-text); border: 1px solid transparent; padding: 15px 19px; }
+    .btn-secondary { border: 1px solid var(--ink); color: var(--ink); padding: 15px 19px; }
+    @media (hover: hover) {
+      .btn-primary:not(:disabled):hover { background: var(--ink); }
+      .btn-secondary:not(:disabled):hover { background: var(--ink); color: var(--paper); }
+    }
+    /* Disabled: a quiet outline in secondary ink (never a faded, pinkish crimson). */
+    .btn-primary:disabled, .btn-secondary:disabled {
+      background: transparent; color: var(--ink-2); border-color: var(--rule); cursor: not-allowed;
     }
 
-    .hero-help {
-      color: var(--muted);
-      font-size: 1.02rem;
-      max-width: 60ch;
-      line-height: 1.6;
+    /* Quiet text buttons (Update, Edit, Remove, Cancel): an underline draws in on hover. */
+    .quiet {
+      position: relative; padding: 6px 0;
+      font-family: var(--font-mono); font-size: var(--fs-mono); font-weight: var(--fw-regular);
+      letter-spacing: var(--ls-mono); text-transform: uppercase; line-height: 1.3;
     }
-    .hero-help strong { color: var(--text-soft); font-weight: 600; }
+    .quiet::after {
+      content: ''; position: absolute; left: 0; right: 0; bottom: 3px; height: 1px;
+      background: currentColor; transform: scaleX(0); transform-origin: 0 50%;
+      transition: transform var(--dur-underline) var(--ease-underline);
+    }
+    @media (hover: hover) {
+      .quiet:not(:disabled):hover::after { transform: scaleX(1); }
+    }
+    .quiet:focus-visible::after { transform: scaleX(1); }
+    .quiet:disabled { color: var(--ink-2); cursor: not-allowed; }
+    @media (pointer: coarse) { .quiet { padding-block: 12px; } }
 
-    /* ---------- Banner ---------- */
-    .banner {
-      display: none;
-      align-items: flex-start;
-      gap: 0.75rem;
-      margin-bottom: 1.5rem;
-      padding: 0.95rem 1.1rem;
-      border-radius: var(--radius);
-      background: var(--warn-soft);
-      border: 1px solid rgba(245, 158, 11, 0.35);
-      color: var(--warn-text);
-      font-size: 0.92rem;
-      line-height: 1.5;
-      box-shadow: var(--shadow-sm);
+    /* The site's arrow link (motion M7): the arrow flies out, a new one slides in, an underline draws. */
+    .arrow-link { --gap: 0.4em; --shift: calc(0.72em + var(--gap)); position: relative; display: inline-flex; align-items: center; gap: var(--gap); white-space: nowrap; padding-block: 4px; }
+    .arrow-link__text { display: inline-block; transition: transform var(--dur-arrow) var(--ease-arrow); }
+    .arrow-link__slot { position: relative; display: inline-flex; overflow: clip; width: 0.72em; height: 0.72em; }
+    .arrow-link__slot svg { width: 0.72em; height: 0.72em; overflow: visible; transition: transform var(--dur-arrow) var(--ease-arrow); }
+    .arrow-link__slot--in { position: absolute; left: 0; top: 50%; margin-top: -0.36em; }
+    .arrow-link__slot--in svg { transform: translate(-110%, 110%); }
+    .arrow-link::after {
+      content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: currentColor;
+      transform: scaleX(0); transform-origin: 0 50%; transition: transform var(--dur-arrow) var(--ease-arrow);
     }
-    .banner.visible { display: flex; }
-    .banner::before {
-      content: "!";
-      flex-shrink: 0;
-      width: 1.4rem;
-      height: 1.4rem;
-      border-radius: 999px;
-      background: var(--warn);
-      color: #fff;
-      font-weight: 700;
-      display: grid;
-      place-items: center;
-      font-size: 0.85rem;
-      margin-top: 0.05rem;
+    @media (hover: hover) {
+      .arrow-link:hover::after { transform: scaleX(1); }
+      .arrow-link:hover .arrow-link__text { transform: translateX(var(--shift)); }
+      .arrow-link:hover .arrow-link__slot--out svg { transform: translate(110%, -110%); }
+      .arrow-link:hover .arrow-link__slot--in svg { transform: none; }
     }
-    /* Neutral "please wait" banner, e.g. while the hosted server wakes up. */
-    .banner.info {
-      background: var(--accent-soft);
-      border-color: var(--accent-ring);
-      color: var(--accent-text);
-    }
-    .banner.info::before {
-      content: "";
-      width: 1rem;
-      height: 1rem;
-      margin-top: 0.15rem;
-      background: transparent;
-      border: 2px solid var(--accent-ring);
-      border-top-color: var(--accent);
-      animation: spin 0.7s linear infinite;
-    }
+    .arrow-link:focus-visible::after { transform: scaleX(1); }
+    @media (pointer: coarse) { .arrow-link { padding-block: 12px; margin-block: -8px; } }
 
-    /* ---------- Steps strip ---------- */
-    .steps {
-      display: grid;
-      gap: 0.75rem;
-      list-style: none;
-      margin-bottom: 2rem;
-      padding: 1.1rem;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      box-shadow: var(--shadow-sm);
-    }
-    @media (min-width: 760px) {
-      .steps { grid-template-columns: repeat(3, 1fr); gap: 1rem; padding: 1.4rem; }
-    }
-
-    .step {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.85rem;
-      padding: 0.4rem 0.2rem;
-    }
-
-    .step-num {
-      flex-shrink: 0;
-      width: 2rem;
-      height: 2rem;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent-text);
-      font-weight: 700;
-      font-size: 0.92rem;
-      display: grid;
-      place-items: center;
-      font-family: var(--font-display);
-    }
-
-    .step-text strong {
-      display: block;
-      color: var(--text);
-      font-weight: 600;
-      font-size: 0.96rem;
-      margin-bottom: 0.15rem;
-    }
-    .step-text p {
-      color: var(--muted);
-      font-size: 0.86rem;
-      line-height: 1.5;
-    }
-
-    /* ---------- Cards ---------- */
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      padding: 1.6rem 1.6rem 1.4rem;
-      margin-bottom: 1.25rem;
-      box-shadow: var(--shadow-sm);
-      transition: box-shadow 0.2s ease, transform 0.2s ease;
-    }
-    .card:hover { box-shadow: var(--shadow-md); }
-
-    .card-head {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 1rem;
-      margin-bottom: 1.1rem;
-      flex-wrap: wrap;
-    }
-
-    .card h2 {
-      font-family: var(--font-display);
-      font-weight: 600;
-      font-size: 1.15rem;
-      color: var(--text);
-      letter-spacing: -0.01em;
-    }
-
-    .card-sub {
-      color: var(--muted);
-      font-size: 0.88rem;
-    }
-
-    /* ---------- Forms ---------- */
-    .form-row {
-      display: flex;
-      gap: 1rem;
-      flex-wrap: wrap;
-      margin-bottom: 1rem;
-    }
-    .form-row:last-child { margin-bottom: 0; }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-width: 220px;
-    }
-    .form-group.wide { flex: 1 1 100%; min-width: 0; }
-
-    label {
-      font-size: 0.85rem;
-      font-weight: 600;
-      color: var(--text-soft);
-      margin-bottom: 0.4rem;
-      letter-spacing: 0;
-    }
-
-    .hint {
-      font-size: 0.83rem;
-      color: var(--muted);
-      margin-top: 0.5rem;
-      line-height: 1.55;
-    }
-    .hint strong { color: var(--text-soft); font-weight: 600; }
-
-    input, select, textarea {
-      padding: 0.7rem 0.85rem;
-      border: 1px solid var(--border-strong);
-      border-radius: var(--radius-sm);
-      font-size: 0.94rem;
-      color: var(--text);
-      background: var(--surface);
-      outline: none;
-      font-family: inherit;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-    }
-    input::placeholder, textarea::placeholder { color: var(--muted-soft); }
-    input:hover, select:hover, textarea:hover { border-color: #94a3b8; }
-    input:focus, select:focus, textarea:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 4px var(--accent-ring);
-    }
-
-    select {
-      appearance: none;
-      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'><path d='M1 1.5L6 6.5L11 1.5' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-      background-repeat: no-repeat;
-      background-position: right 0.95rem center;
-      padding-right: 2.2rem;
-    }
-
-    textarea.token-field {
-      font-family: ui-monospace, "SF Mono", Menlo, monospace;
-      font-size: 0.84rem;
-      letter-spacing: 0.01em;
-      min-height: 2.8rem;
-      resize: vertical;
-      background: var(--surface-soft);
-    }
-
-    .btn-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.7rem;
-      align-items: center;
-      margin-top: 0.5rem;
-    }
-
-    button {
-      padding: 0.7rem 1.25rem;
-      border: 1px solid transparent;
-      border-radius: var(--radius-sm);
-      font-size: 0.92rem;
-      font-weight: 600;
-      font-family: inherit;
-      cursor: pointer;
-      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
-                  box-shadow 0.15s ease, transform 0.08s ease, opacity 0.15s ease;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.45rem;
-      line-height: 1.2;
-    }
-    button:active:not(:disabled) { transform: translateY(1px); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    .btn-primary {
-      background: linear-gradient(135deg, #6366f1, #4f46e5);
-      color: #fff;
-      box-shadow: 0 6px 16px rgba(99, 102, 241, 0.28);
-    }
-    .btn-primary:hover:not(:disabled) {
-      box-shadow: 0 10px 22px rgba(99, 102, 241, 0.36);
-      transform: translateY(-1px);
-    }
-    .btn-primary:active:not(:disabled) { transform: translateY(0); }
-
-    .btn-success {
-      background: linear-gradient(135deg, #34d399, #10b981);
-      color: #fff;
-      box-shadow: 0 6px 16px rgba(16, 185, 129, 0.28);
-    }
-    .btn-success:hover:not(:disabled) {
-      box-shadow: 0 10px 22px rgba(16, 185, 129, 0.36);
-      transform: translateY(-1px);
-    }
-
-    .btn-ghost {
-      background: var(--surface);
-      color: var(--text-soft);
-      border: 1px dashed var(--border-strong);
-    }
-    .btn-ghost:hover:not(:disabled) {
-      background: var(--accent-soft);
-      color: var(--accent-text);
-      border-color: var(--accent);
-      border-style: solid;
-    }
-
-    .btn-danger-ghost {
-      background: transparent;
-      color: var(--danger-text);
-      border: 1px solid transparent;
-      font-size: 0.82rem;
-      padding: 0.4rem 0.7rem;
-      border-radius: var(--radius-xs);
-    }
-    .btn-danger-ghost:hover:not(:disabled) {
-      background: var(--danger-soft);
-      border-color: rgba(239, 68, 68, 0.25);
-    }
-
-    .fetch-cta {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      flex-wrap: wrap;
-    }
-    .fetch-cta .btn-primary { font-size: 1rem; padding: 0.85rem 1.6rem; }
-    .fetch-cta-meta {
-      color: var(--muted);
-      font-size: 0.86rem;
-    }
-
-    /* ---------- Status ---------- */
-    .status {
-      margin-top: 0.85rem;
-      font-size: 0.9rem;
-      min-height: 1.25rem;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0;
-    }
+    /* ---- Status messages: plain sentences that ease in ---- */
+    .status { margin-top: 12px; font-size: var(--fs-ui); line-height: 1.45; }
     .status:empty { display: none; }
-    .status.loading {
-      color: var(--muted);
-    }
+    .status:not(:empty) { animation: status-in 0.7s var(--ease-expo-out) both; }
+    @keyframes status-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .status.loading { color: var(--ink); }
     .status.loading::before {
-      content: "";
-      width: 0.85rem;
-      height: 0.85rem;
-      border-radius: 999px;
-      border: 2px solid var(--border-strong);
-      border-top-color: var(--accent);
-      animation: spin 0.7s linear infinite;
-      display: inline-block;
+      content: ''; display: inline-block; width: 0.55em; height: 0.55em; margin-right: 0.5em;
+      border-radius: 50%; background: var(--crimson); vertical-align: 0.05em;
     }
-    .status.error {
-      color: var(--danger-text);
-      background: var(--danger-soft);
-      border: 1px solid rgba(239, 68, 68, 0.2);
-      padding: 0.5rem 0.75rem;
-      border-radius: var(--radius-xs);
-      font-weight: 500;
+    /* Problems get an inverted tag: paper text on ink, in the mono label style, so they stand out
+       without red (the site keeps crimson for focus and progress). Paper on ink is 17.5:1. */
+    .status.error::before { content: 'Problem'; }
+    .status.error::before, .banner::before, .flag {
+      display: inline-block; margin-right: 0.6em; padding: 3px 6px;
+      background: var(--ink); color: var(--paper);
+      font-family: var(--font-mono); font-size: var(--fs-mono); font-weight: var(--fw-regular);
+      letter-spacing: var(--ls-mono); text-transform: uppercase; line-height: 1.2; vertical-align: 0.08em;
     }
-    .status.success {
-      color: var(--success-text);
-      background: var(--success-soft);
-      border: 1px solid rgba(16, 185, 129, 0.25);
-      padding: 0.5rem 0.75rem;
-      border-radius: var(--radius-xs);
-      font-weight: 500;
+    /* The name of a student who needs attention is bold (Host Grotesk 600). */
+    .s-name.bad, .last-run li .lr-name { font-weight: 600; }
+
+    /* ---- Update ---- */
+    .update-row { margin-top: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
+    .update-row .hint { flex: 1 1 18em; }
+    .last-run { margin-top: 20px; font-size: var(--fs-ui); line-height: 1.45; }
+    .last-run .lr-k { font-weight: var(--fw-regular); }
+    .last-run ul { margin-top: 8px; border-top: 1px solid var(--rule); }
+    .last-run li { padding: 8px 0; border-bottom: 1px solid var(--rule); }
+    .last-run li .lr-msg { color: var(--ink-2); }
+    .note { margin-top: 16px; }
+    .note.off { color: var(--ink); }
+
+    /* ---- Students: ruled rows ---- */
+    .cols, .student-card {
+      display: grid;
+      /* The actions column has a fixed width so the column headings line up with the rows. */
+      grid-template-columns: minmax(0, 1.45fr) minmax(0, 0.7fr) minmax(0, 2fr) minmax(0, 0.8fr) 170px;
+      grid-template-areas: 'name token last doc actions';
+      column-gap: var(--gutter);
+    }
+    .cols { margin-top: 24px; padding-bottom: 8px; color: var(--ink-2); }
+    .cols span:nth-child(1) { grid-area: name; } .cols span:nth-child(2) { grid-area: token; }
+    .cols span:nth-child(3) { grid-area: last; } .cols span:nth-child(4) { grid-area: doc; }
+    .student-list { border-bottom: 1px solid var(--rule); }
+    .student-card { padding: 16px 0; border-top: 1px solid var(--rule); align-items: baseline; row-gap: 6px; }
+    .s-name { grid-area: name; font-weight: var(--fw-regular); line-height: 1.3; overflow-wrap: anywhere; }
+    .s-name .student-label { color: var(--ink-2); font-weight: var(--fw-light); }
+    .s-token { grid-area: token; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0; }
+    .s-last { grid-area: last; font-size: var(--fs-ui); line-height: 1.45; color: var(--ink-2); }
+    .s-last.bad { color: var(--ink); }
+    .s-doc { grid-area: doc; font-size: var(--fs-ui); }
+    .s-doc .none { color: var(--ink-2); }
+    .row-actions { grid-area: actions; display: flex; gap: 16px; justify-content: flex-end; }
+    .s-k { display: none; }
+    .student-card > .status, .student-card > .edit-form { grid-column: 1 / -1; }
+    .student-card > .status { margin-top: 4px; }
+    .empty-note { margin-top: 20px; }
+
+    /* ---- Forms ---- */
+    .fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px var(--gutter); margin-top: 20px; }
+    .field label { display: block; margin-bottom: 8px; color: var(--ink-2); }
+    .field input, .field textarea {
+      width: 100%; display: block; padding: 12px 14px; border: 1px solid var(--field); border-radius: 0;
+      background: var(--mark-text); font-size: 16px; font-weight: var(--fw-regular); line-height: 1.4;
+    }
+    .field textarea { font-family: var(--font-mono); font-size: 13px; letter-spacing: 0; resize: vertical; min-height: 64px; }
+    .field input::placeholder, .field textarea::placeholder { color: var(--ink-2); opacity: 0.85; }
+    .form-actions { margin-top: 16px; display: flex; align-items: center; gap: 20px; }
+    .fine { margin-top: 20px; max-width: 46em; }
+    .edit-form { margin-top: 8px; padding-top: 4px; border-top: 1px solid var(--rule); }
+    .edit-form .fields { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+
+    /* ---- Footer ---- */
+    .site-footer { margin-top: 72px; padding-top: 16px; padding-bottom: 40px; color: var(--ink-2); }
+    .site-footer p { border-top: 1px solid var(--rule); padding-top: 16px; font-size: var(--fs-ui); line-height: 1.45; }
+
+    /* ---- Phones: rows stack ---- */
+    @media (max-width: 767px) {
+      .lede { margin-top: 32px; }
+      .block { margin-top: 44px; }
+      .cols { display: none; }
+      .student-card {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas: 'name name' 'token doc' 'last last' 'actions actions';
+      }
+      .s-k { display: inline; color: var(--ink-2); margin-right: 0.4em; font-family: var(--font-sans); font-size: var(--fs-ui); }
+      .s-doc { justify-self: end; }
+      .row-actions { justify-content: flex-start; gap: 24px; }
+      .fields, .edit-form .fields { grid-template-columns: minmax(0, 1fr); }
+      .field textarea { min-height: 92px; }
+      .btn-primary { width: 100%; }
     }
 
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ---------- Student cards ---------- */
-    .student-list {
-      display: flex;
-      flex-direction: column;
-      gap: 0.85rem;
-      margin-bottom: 1rem;
+    /* No motion for people who ask for less. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      body.is-updating .progress span { width: 100%; transform: none; }
     }
-
-    .student-card {
-      background: var(--surface-soft);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.1rem 1.2rem 1rem;
-      transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-    }
-    .student-card:hover {
-      border-color: var(--border-strong);
-      background: #fff;
-      box-shadow: var(--shadow-sm);
-    }
-
-    .student-card-head {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 0.75rem;
-    }
-    .student-card-head span {
-      font-size: 0.82rem;
-      font-weight: 600;
-      color: var(--muted);
-      letter-spacing: 0.02em;
-      text-transform: uppercase;
-    }
-
-    .privacy-note {
-      font-size: 0.8rem;
-      color: var(--muted);
-      margin-top: 0.85rem;
-      line-height: 1.55;
-      padding: 0.7rem 0.9rem;
-      background: var(--surface-soft);
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-    }
-
-    /* ---------- Responsive tweaks ---------- */
-    @media (max-width: 600px) {
-      .wrap { padding: 1.5rem 1rem 3rem; }
-      .card { padding: 1.25rem 1.1rem 1.1rem; border-radius: var(--radius); }
-      .hero-mark { width: 2.3rem; height: 2.3rem; font-size: 1.1rem; }
-      .fetch-cta { align-items: stretch; }
-      .fetch-cta .btn-primary { width: 100%; justify-content: center; }
-    }
-    /* ---------- AutoPlanner (Apps Script) additions ---------- */
-    .user-chip {
-      display: inline-block;
-      width: fit-content;
-      justify-self: start;
-      align-self: flex-start;
-      margin-top: 1rem;
-      padding: 0.3rem 0.85rem;
-      font-size: 0.85rem;
-      color: var(--muted);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 999px;
-    }
-    .user-chip strong { color: var(--text-soft); font-weight: 600; }
-    .student-card-head .student-name {
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--text);
-      letter-spacing: 0;
-      text-transform: none;
-    }
-    .student-card-head .student-label { font-weight: 500; color: var(--muted); text-transform: none; }
-    .row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-    .row-actions button { padding: 0.4rem 0.8rem; font-size: 0.84rem; }
-    .student-meta {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.35rem 1rem;
-      font-size: 0.88rem;
-      color: var(--muted);
-    }
-    .student-meta code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.85rem;
-      color: var(--text-soft);
-    }
-    .last-line { margin-top: 0.45rem; font-size: 0.88rem; }
-    .last-line.ok { color: var(--success-text); }
-    .last-line.bad { color: var(--danger-text); }
-    .edit-form { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px dashed var(--border-strong); }
-    .last-run { margin-top: 1rem; font-size: 0.9rem; color: var(--text-soft); }
-    .last-run ul { margin: 0.4rem 0 0 1.2rem; }
-    .last-run li { margin-top: 0.2rem; }
-    .auto-note { margin-top: 1rem; }
-    .auto-note.off { color: var(--warn-text); }
-    .empty-note { margin: 0 0 1rem; }
-    .foot { margin-top: 2rem; text-align: center; font-size: 0.85rem; color: var(--muted); }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header class="hero">
-      <div class="hero-brand">
-        <span class="hero-mark" aria-hidden="true">A</span>
-        <div>
-          <span class="hero-eyebrow">CLC Study Hall</span>
-          <h1>AutoPlanner</h1>
-        </div>
+  <a class="skip-link t-mono" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="page header-inner">
+      <div class="brand">
+        <span class="brand-name">AutoPlanner</span>
+        <span class="t-mono brand-sub">CLC Supported Study Hall · Pomfret School</span>
       </div>
-      <p class="hero-help">
-        Personal weekly planners for every student, kept up to date in a <strong>Google Doc</strong>
-        in the shared folder. Add each student once; AutoPlanner refreshes their Doc every evening.
-      </p>
-      <p class="user-chip" id="userChip">Loading…</p>
-    </header>
+      <p class="t-mono who" id="userChip">Loading…</p>
+    </div>
+    <div class="progress" aria-hidden="true"><span></span></div>
+  </header>
+
+  <main id="main" class="page">
+    <p class="lede">
+      Each student’s Canvas assignments, kept up to date in their own Google Doc in the shared
+      folder. Add a student once; AutoPlanner refreshes their Doc every evening.
+    </p>
 
     <div class="banner" id="errorBanner" role="alert"></div>
 
-    <ol class="steps" aria-label="How it works">
-      <li class="step">
-        <span class="step-num">1</span>
-        <div class="step-text">
-          <strong>Add students</strong>
-          <p>Paste each student’s Canvas token once. It’s stored safely in AutoPlanner.</p>
-        </div>
-      </li>
-      <li class="step">
-        <span class="step-num">2</span>
-        <div class="step-text">
-          <strong>Update</strong>
-          <p>Click “Update all students now”, or let the automatic update run in the evening.</p>
-        </div>
-      </li>
-      <li class="step">
-        <span class="step-num">3</span>
-        <div class="step-text">
-          <strong>Open the Docs</strong>
-          <p>Each student’s Doc is in the shared Drive folder, one tab per week.</p>
-        </div>
-      </li>
-    </ol>
-
-    <section class="card">
-      <div class="card-head">
-        <h2>Update</h2>
-        <span class="card-sub">Refresh every student’s Doc from Canvas</span>
-      </div>
-      <div class="fetch-cta">
+    <section class="block" aria-labelledby="h-update">
+      <h2 class="t-mono block-label" id="h-update">Update</h2>
+      <div class="update-row">
         <button type="button" class="btn-primary" id="updateAllBtn" disabled>Update all students now</button>
-        <span class="fetch-cta-meta">About 2 minutes per student. You can close this page; it keeps going.</span>
+        <p class="hint">About 2 minutes per student. You can close this page; it keeps going.</p>
       </div>
-      <p class="status" id="runStatus"></p>
+      <p class="status" id="runStatus" role="status" aria-live="polite"></p>
       <div class="last-run" id="lastRun"></div>
-      <p class="hint auto-note" id="autoNote"></p>
+      <p class="note" id="autoNote"></p>
     </section>
 
-    <section class="card">
-      <div class="card-head">
-        <h2>Students</h2>
-        <span class="card-sub" id="studentCount"></span>
+    <section class="block" aria-labelledby="h-students">
+      <div class="block-head">
+        <h2 class="t-mono block-label" id="h-students">Students</h2>
+        <span class="t-mono count" id="studentCount"></span>
       </div>
-      <p class="hint empty-note" id="emptyNote" hidden>No students yet. Add the first one below.</p>
+      <div class="cols t-mono" aria-hidden="true"><span>Name</span><span>Token</span><span>Last update</span><span>Doc</span></div>
+      <p class="empty-note" id="emptyNote" hidden>No students yet. Add the first one below.</p>
       <div class="student-list" id="studentList"></div>
     </section>
 
-    <section class="card">
-      <div class="card-head">
-        <h2>Add a student</h2>
-        <span class="card-sub">Their Doc is made right after</span>
+    <section class="block" aria-labelledby="h-add">
+      <div class="block-head">
+        <h2 class="t-mono block-label" id="h-add">Add a student</h2>
+        <span class="t-mono count">Their Doc is made right after</span>
       </div>
-      <div class="form-row">
-        <div class="form-group wide">
-          <label for="newToken">Canvas access token</label>
+      <div class="fields">
+        <div class="field">
+          <label class="t-mono" for="newToken">Canvas access token</label>
           <textarea id="newToken" class="token-field" rows="2" spellcheck="false" autocomplete="off"
             placeholder="The student makes it in Canvas: Account → Settings → + New Access Token"></textarea>
         </div>
-        <div class="form-group" style="min-width: 160px; max-width: 240px;">
-          <label for="newLabel">Label (optional)</label>
+        <div class="field">
+          <label class="t-mono" for="newLabel">Label (optional)</label>
           <input id="newLabel" type="text" maxlength="60" placeholder="e.g. Table 4" autocomplete="off" />
         </div>
       </div>
-      <div class="btn-row">
-        <button type="button" class="btn-primary" id="addBtn">Add student</button>
+      <div class="form-actions">
+        <button type="button" class="btn-secondary" id="addBtn">Add student</button>
       </div>
-      <p class="status" id="addStatus"></p>
-      <p class="privacy-note">
+      <p class="status" id="addStatus" role="status" aria-live="polite"></p>
+      <p class="fine">
         Tokens are stored inside AutoPlanner, not in this browser, so any staff computer works.
         After a token is saved, only its last 4 characters are shown. A token works like a password
         to the student’s Canvas account: never paste it anywhere else.
       </p>
     </section>
+  </main>
 
-    <p class="foot">Questions or problems? Contact <span id="contact">the Civic AI Club</span>.</p>
-  </div>
+  <footer class="page site-footer">
+    <p>Built by the Pomfret Civic AI Club · Questions: <span id="contact">Cayden Auyang or Luke Ryan</span></p>
+  </footer>
 
   <script>
     /* AutoPlanner page. Every action calls a function in App.gs through google.script.run;
        nothing is stored in this browser. */
     var state = { user: '', students: [], run: null, lastRun: null, busy: {}, editing: {} };
     var pollTimer = null;
+
+    /** The crimson hairline under the header shows while any update is running. */
+    function syncProgress() {
+      var running = !!state.run || !!state.starting || Object.keys(state.busy).length > 0;
+      document.body.classList.toggle('is-updating', running);
+    }
+
+    /** The website's arrow link: "Open Doc ↗" with the arrow swap on hover. */
+    var ARROW_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false">' +
+      '<path d="M3.5 12.5 12.5 3.5M5 3.5h7.5V11" vector-effect="non-scaling-stroke"></path></svg>';
+    function arrowLink(href, text, forWhom) {
+      return '<a class="arrow-link" href="' + esc(href) + '" target="_blank" rel="noopener">' +
+        '<span class="arrow-link__slot arrow-link__slot--in" aria-hidden="true">' + ARROW_SVG + '</span>' +
+        '<span class="arrow-link__text">' + esc(text) + '</span>' +
+        '<span class="arrow-link__slot arrow-link__slot--out" aria-hidden="true">' + ARROW_SVG + '</span>' +
+        '<span class="sr-only"> for ' + esc(forWhom) + ' (opens in a new tab)</span></a>';
+    }
 
     function call(fn) {
       var args = Array.prototype.slice.call(arguments, 1);
@@ -781,43 +470,40 @@
         var running = !!state.run;
         var busy = !!state.busy[s.id];
         var last = s.last
-          ? '<p class="last-line ' + (s.last.ok ? 'ok' : 'bad') + '">' + (s.last.ok ? '✅ ' : '⚠️ ') +
-            esc(when(s.last.at)) + ': ' + esc(s.last.message) + '</p>'
-          : '<p class="last-line">Not updated yet.</p>';
+          ? (s.last.ok ? '' : '<span class="flag">Needs attention</span>') +
+            esc(when(s.last.at)) + '. ' + esc(s.last.message)
+          : 'Not updated yet.';
         var card = document.createElement('div');
         card.className = 'student-card';
         card.innerHTML =
-          '<div class="student-card-head">' +
-            '<span class="student-name">' + studentTitle(s) + '</span>' +
-            '<div class="row-actions">' +
-              '<button type="button" class="btn-ghost" data-act="update"' + (running || busy ? ' disabled' : '') + '>' +
-                (busy ? 'Updating…' : 'Update') + '</button>' +
-              '<button type="button" class="btn-ghost" data-act="edit"' + (busy ? ' disabled' : '') + '>Edit</button>' +
-              '<button type="button" class="btn-danger-ghost" data-act="remove"' + (busy ? ' disabled' : '') + '>Remove</button>' +
-            '</div>' +
+          '<div class="s-name' + (s.last && !s.last.ok ? ' bad' : '') + '">' + studentTitle(s) + '</div>' +
+          '<div class="s-token"><span class="s-k">Token</span>••••' + esc(s.tokenEnd) + '</div>' +
+          '<div class="s-last' + (s.last && !s.last.ok ? ' bad' : '') + '"><span class="s-k">Last update</span>' + last + '</div>' +
+          '<div class="s-doc">' +
+            (s.docUrl ? arrowLink(s.docUrl, 'Open Doc', s.name) : '<span class="none">No Doc yet</span>') +
           '</div>' +
-          '<div class="student-meta">' +
-            '<span>Token <code>••••' + esc(s.tokenEnd) + '</code></span>' +
-            (s.docUrl ? '<a href="' + esc(s.docUrl) + '" target="_blank" rel="noopener">Open their Doc ↗</a>'
-                      : '<span>No Doc yet</span>') +
+          '<div class="row-actions">' +
+            '<button type="button" class="quiet" data-act="update" aria-label="Update ' + esc(s.name) + '"' + (running || busy ? ' disabled' : '') + '>' +
+              (busy ? 'Updating…' : 'Update') + '</button>' +
+            '<button type="button" class="quiet" data-act="edit" aria-label="Edit ' + esc(s.name) + '"' + (busy ? ' disabled' : '') + '>Edit</button>' +
+            '<button type="button" class="quiet" data-act="remove" aria-label="Remove ' + esc(s.name) + '"' + (busy ? ' disabled' : '') + '>Remove</button>' +
           '</div>' +
-          last +
-          '<p class="status" id="st-' + esc(s.id) + '"></p>' +
+          '<p class="status" id="st-' + esc(s.id) + '" role="status" aria-live="polite"></p>' +
           (state.editing[s.id]
             ? '<div class="edit-form">' +
-                '<div class="form-row">' +
-                  '<div class="form-group" style="min-width: 160px; max-width: 240px;">' +
-                    '<label for="editLabel-' + esc(s.id) + '">Label (optional)</label>' +
+                '<div class="fields">' +
+                  '<div class="field">' +
+                    '<label class="t-mono" for="editLabel-' + esc(s.id) + '">Label (optional)</label>' +
                     '<input id="editLabel-' + esc(s.id) + '" type="text" maxlength="60" value="' + esc(s.label) + '" />' +
                   '</div>' +
-                  '<div class="form-group wide">' +
-                    '<label for="editToken-' + esc(s.id) + '">New Canvas token (leave blank to keep the current one)</label>' +
+                  '<div class="field">' +
+                    '<label class="t-mono" for="editToken-' + esc(s.id) + '">New Canvas token (leave blank to keep the current one)</label>' +
                     '<textarea id="editToken-' + esc(s.id) + '" class="token-field" rows="2" spellcheck="false" autocomplete="off"></textarea>' +
                   '</div>' +
                 '</div>' +
-                '<div class="btn-row">' +
-                  '<button type="button" class="btn-primary" data-act="save">Save</button>' +
-                  '<button type="button" class="btn-ghost" data-act="cancel">Cancel</button>' +
+                '<div class="form-actions">' +
+                  '<button type="button" class="btn-secondary" data-act="save">Save</button>' +
+                  '<button type="button" class="quiet" data-act="cancel">Cancel</button>' +
                 '</div>' +
               '</div>'
             : '');
@@ -835,6 +521,7 @@
           el.textContent = messages[s.id].text;
         }
       });
+      syncProgress();
     }
 
     function renderRun() {
@@ -851,6 +538,7 @@
       } else if (document.getElementById('runStatus').classList.contains('loading')) {
         setStatus('runStatus', '', '');
       }
+      syncProgress();
       var lr = state.lastRun;
       var box = document.getElementById('lastRun');
       if (!lr) {
@@ -858,11 +546,12 @@
         return;
       }
       var how = lr.reason === 'scheduled' ? 'automatic' : lr.reason === 'test' ? 'test run' : 'started from this page';
-      var html = '<strong>Last update:</strong> ' + esc(when(lr.finishedAt)) + ' (' + how + '). ' +
+      var html = '<span class="lr-k">Last update:</span> ' + esc(when(lr.finishedAt)) + ' (' + how + '). ' +
         esc(lr.updated) + ' of ' + esc(lr.total) + ' student' + (lr.total === 1 ? '' : 's') + ' updated.';
       if (lr.failed && lr.failed.length) {
         html += '<ul>' + lr.failed.map(function (f) {
-          return '<li>⚠️ <strong>' + esc(f.name) + ':</strong> ' + esc(f.message) + '</li>';
+          return '<li><span class="flag">Needs attention</span><span class="lr-name">' + esc(f.name) + ':</span> ' +
+            '<span class="lr-msg">' + esc(f.message) + '</span></li>';
         }).join('') + '</ul>';
       }
       box.innerHTML = html;
@@ -890,8 +579,11 @@
       showBanner('');
       document.getElementById('updateAllBtn').disabled = true;
       setStatus('runStatus', 'loading', 'Starting the update…');
+      state.starting = true;
+      syncProgress();
       startPolling(4000);
       call('startUpdateAll').then(function (res) {
+        state.starting = false;
         apply(res);
         if (res.run) {
           setStatus('runStatus', 'loading',
@@ -904,6 +596,7 @@
           setStatus('runStatus', 'success', 'Update finished.');
         }
       }).catch(function (err) {
+        state.starting = false;
         stopPolling();
         setStatus('runStatus', 'error', errText(err));
         renderRun();
@@ -999,8 +692,7 @@
 
     call('getAppState').then(function (s) {
       state.user = s.user;
-      document.getElementById('userChip').innerHTML = 'Signed in as <strong>' + esc(s.user) + '</strong>';
-      document.getElementById('contact').textContent = s.contact;
+      document.getElementById('userChip').innerHTML = 'Signed in as <span class="who-v">' + esc(s.user) + '</span>';
       var note = document.getElementById('autoNote');
       if (s.automaticUpdatesOn) {
         note.textContent = 'Automatic updates run every day at about 7 pm and about midnight on Google’s ' +
