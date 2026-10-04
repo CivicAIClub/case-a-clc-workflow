@@ -46,6 +46,7 @@ Hand out the quick start and token guides. "If anything looks wrong, email us a 
 | "Could not reach Canvas at …" | The Canvas base URL is wrong. | Set it to `https://pomfret.instructure.com`. |
 | "Quota exceeded", "RESOURCE_EXHAUSTED" or "429" | Google limits how fast one account can edit Docs. AutoPlanner already slows down and retries. | Wait 2–3 minutes, then update students one at a time. Don't click Update repeatedly. |
 | "Unauthorized: the secret … does not match" | The server and the Apps Script have different secrets. | Club: make `APPS_SCRIPT_SECRET` in Render match the Script Property. |
+| "AutoPlanner only updates Docs in the … folder, and this student's Doc is not in it" | That student's Doc was moved out of the shared folder. | Move it back into **AutoPlanner – CLC Student Planners** and click Update again. |
 | "DOCS_FOLDER_ID is set, but this account cannot open that Drive folder" | The shared folder was deleted, moved, or unshared from the account that runs the script. | Club: fix the folder or the `DOCS_FOLDER_ID` Script Property. |
 | Two Docs for one student | The student was added on a second computer, or the browser's data was cleared. | Keep the Doc with the Status/Notes, delete the other, and stick to one computer. |
 | The schedule didn't run | The page was closed or the computer was asleep at that time. | Click **Update all students' Docs**. |

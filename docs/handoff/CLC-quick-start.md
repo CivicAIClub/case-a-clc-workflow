@@ -24,6 +24,8 @@ If you see **"Waking up the server, this can take up to a minute…"**, just wai
 
 Every Doc is in the Google Drive folder **AutoPlanner – CLC Student Planners**. Find it in Drive under **Shared with me** (add a shortcut to My Drive to keep it handy). Each Doc is called "*Student Name* - CLC Assignments". Open the **Document tabs** sidebar on the left to see one tab per week under **CLC Planner**.
 
+Keep the Docs in this folder. AutoPlanner only updates Docs that are inside it; if one gets moved out, move it back.
+
 ## 5. Status and Notes
 
 Type in the white **Status** and **Notes** cells, in either table. Status starts as "⬜ Not started"; change it to anything, for example "🟡 In progress" or "✅ Complete". These are kept every time the Doc updates.

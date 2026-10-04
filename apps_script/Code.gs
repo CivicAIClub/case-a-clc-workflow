@@ -9,7 +9,9 @@
  *
  * OPTIONAL Script Properties (Project Settings → Script Properties):
  *   DOCS_FOLDER_ID      Drive folder ID (or the folder's URL). New student Docs are created
- *                       there; Docs that already exist are not moved.
+ *                       there; Docs that already exist are not moved. While it is set, only
+ *                       Docs inside this folder can be updated, so a request can never change
+ *                       any other Doc the deploying account can edit.
  *   APPS_SCRIPT_SECRET  Shared secret. When set, requests whose `secret` field doesn't match
  *                       are rejected. The backend sends it from its APPS_SCRIPT_SECRET env var.
  * After changing either one, select `checkSetup` in the editor and click Run to confirm.
@@ -201,12 +203,32 @@ function getDocsFolder() {
   }
 }
 
+/** Throws unless the Doc's Drive file sits directly in `folder`. Checked before any edit. */
+function assertDocIsInFolder(docId, folder) {
+  var file;
+  try {
+    file = DriveApp.getFileById(docId);
+  } catch (err) {
+    throw new Error('Could not open the saved Google Doc (' + docId + '): ' + err);
+  }
+  var parents = file.getParents();
+  while (parents.hasNext()) {
+    if (parents.next().getId() === folder.getId()) return;
+  }
+  // The message never names the Doc, so it can't reveal the title of a Doc outside the folder.
+  throw new Error(
+    'AutoPlanner only updates Docs in the "' + folder.getName() + '" folder, and this ' +
+      "student's Doc is not in it. Move the Doc back into that folder and try again."
+  );
+}
+
 /** Run from the editor (select checkSetup → Run). Authorizes Drive access and logs the settings. */
 function checkSetup() {
   var folder = getDocsFolder();
   Logger.log(
     folder
-      ? 'DOCS_FOLDER_ID OK: new Docs will be created in "' + folder.getName() + '".'
+      ? 'DOCS_FOLDER_ID OK: new Docs will be created in "' + folder.getName() + '", ' +
+          'and only Docs in that folder can be updated.'
       : 'DOCS_FOLDER_ID is not set: new Docs will be created in My Drive.'
   );
   Logger.log(
@@ -247,8 +269,13 @@ function upsertPlannerDocument(data) {
   var isNew = !docId;
   var desiredTitle = buildDocumentTitle(data);
   var doc;
+  // Look up the folder first, so a bad DOCS_FOLDER_ID fails before any Doc is created or changed.
+  var folder = getDocsFolder();
 
   if (docId) {
+    if (folder) {
+      assertDocIsInFolder(docId, folder);
+    }
     doc = DocumentApp.openById(docId);
     try {
       doc.setName(desiredTitle);
@@ -256,8 +283,6 @@ function upsertPlannerDocument(data) {
       /* ignore — e.g. insufficient permission on shared drives */
     }
   } else {
-    // Look up the folder first, so a bad DOCS_FOLDER_ID fails before a stray Doc is created.
-    var folder = getDocsFolder();
     doc = DocumentApp.create(desiredTitle);
     docId = doc.getId();
     if (folder) {

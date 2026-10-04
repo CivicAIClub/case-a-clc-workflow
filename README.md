@@ -80,7 +80,7 @@ The script runs as the account that deployed it, so the Docs are owned by that a
 
 | Script Property | Required | What it does |
 |---|---|---|
-| `DOCS_FOLDER_ID` | no | ID (or URL) of a Drive folder. New student Docs are created there, so everyone the folder is shared with can open them. Docs that already exist stay where they are. Unset: new Docs go to the deployer's My Drive. |
+| `DOCS_FOLDER_ID` | no, but set it for any hosted backend | ID (or URL) of a Drive folder. New student Docs are created there, so everyone the folder is shared with can open them. Docs that already exist stay where they are. While it's set, the script **only updates Docs inside this folder**, so a request can't change any other Doc the deploying account can edit. Unset: new Docs go to the deployer's My Drive and any Doc ID is accepted. |
 | `APPS_SCRIPT_SECRET` | no, but set it for any hosted backend | Shared secret. When set, the script rejects requests that don't carry the same value, which the backend sends from its `APPS_SCRIPT_SECRET` env var. Unset: every request is accepted. |
 
 After any later change to `Code.gs`, redeploy a **new version** (Manage deployments → ✏️ → Version: **New version** → Deploy). The URL stays the same. Script Properties take effect immediately; they don't need a new version.
