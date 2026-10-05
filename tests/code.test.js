@@ -525,7 +525,9 @@ test('rebuilding an EXISTING week tab: same title and place, Status and Notes ke
   const rebuilt = docs.find('t.n1');
   assert.strictEqual(rebuilt.tabProperties.title, W);
   assert.ok(!docs.find('t.old'), 'the old tab is gone');
-  assert.ok(docs.find('t.next'), 'a week not in the schedule is left alone');
+  assert.ok(!docs.find('t.next') && docs.titles('t.0')[1] === W2, 'a week with nothing due now is rebuilt too (same title, same place)');
+  assert.ok(!(docs.written['t.n2'] || []).includes('later week'), "an assignment no longer due that week doesn't stay in it");
+  assert.ok((docs.written['t.n2'] || []).includes('No assignments due this week.'));
   assert.ok(docs.written['t.n1'].includes('In progress') && docs.written['t.n1'].includes('keep me'), 'Status and Notes written into the new tab');
   assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
   assert.ok(docs.batches.some((b) => b.join() === 'deleteTab,updateDocumentTabProperties'), 'delete and rename in one batch');
@@ -550,6 +552,225 @@ test('an update cut off mid-rebuild leaves the old tab untouched; the next one r
   const id = again.docs.service.Documents.get().tabs[0].childTabs[0].tabProperties.tabId;
   assert.deepStrictEqual(again.docs.titles('t.0'), [W]);
   assert.ok(again.docs.written[id].includes('In progress') && !again.docs.written[id].includes('half-written'));
+});
+
+// The fake Doc lays out each week tab's tables (By Class per class, then By Day) the way the real
+// writer does, so Status and Notes can round-trip through several updates and staff edits.
+function withRendering(t, docs) {
+  const realBuild = t.ctx.buildWeekTabRequests_;
+  t.ctx.buildWeekTabRequests_ = (tabId, weekKey, weekData, courses, colorMap, saved, width) => {
+    const st = (u) => saved.status[u] || 'Not started';
+    const nt = (u) => saved.notes[u] || '';
+    const row = (a, middle) => ({ tableCells: [tcell(a.assignment, a.url), tcell(middle), tcell(a.due_time), tcell(a.priority), tcell(st(a.url)), tcell(nt(a.url))] });
+    const content = [{ startIndex: 1, endIndex: 2, paragraph: { elements: [] } }];
+    toPlain(t.ctx.groupAssignmentsByCourse_(weekData.days || [], courses)).forEach((g) => {
+      const rows = [{ tableCells: [tcell(g.course)] }, { tableCells: ['Assignment', 'Day', 'Due Time', 'Priority', 'Status', 'Notes'].map((x) => tcell(x)) }];
+      g.assignments.forEach((a) => rows.push(row(a, a.day)));
+      content.push({ table: { columns: 6, tableRows: rows } });
+    });
+    const dayRows = [{ tableCells: ['Assignment', 'Course', 'Due Time', 'Priority', 'Status', 'Notes'].map((x) => tcell(x)) }];
+    (weekData.days || []).forEach((d) => (d.assignments || []).forEach((a) => dayRows.push(row(a, a.course))));
+    content.push({ table: { columns: 6, tableRows: dayRows } });
+    docs.find(tabId).documentTab.body.content = content;
+    return realBuild(tabId, weekKey, weekData, courses, colorMap, saved, width);
+  };
+}
+
+const WA = 'Week of Jan 12 – Jan 18, 2099';
+const WB = 'Week of Jan 5 – Jan 11, 2099';
+// The selfTest scenario: X (url 1) is due in week A with Y; week B has Z. "Moved" puts X in week B.
+function scheduleAB(xInB) {
+  const item = (n, name, week, date) => ({ day: 'Monday', assignment: name, course: 'Biology', due_time: '8:30 AM', priority: 'Upcoming',
+    days_until_due: 9, due_date: date, week_start: week, url: url(n) });
+  const a = [item(2, 'Y', '2099-01-12', '2099-01-12')];
+  const b = [item(3, 'Z', '2099-01-05', '2099-01-05')];
+  (xInB ? b : a).push(item(1, 'X', xInB ? '2099-01-05' : '2099-01-12', xInB ? '2099-01-05' : '2099-01-12'));
+  return Object.assign({}, base, { documentId: 'DOC1', courses: ['Biology'], weeks: {
+    '2099-01-05': { week_label: 'Jan 5 – Jan 11', days: [{ day: 'Monday', assignments: b }] },
+    '2099-01-12': { week_label: 'Jan 12 – Jan 18', days: [{ day: 'Monday', assignments: a }] },
+  } });
+}
+function copiesOf(docs, u) {
+  const out = [];
+  docs.service.Documents.get().tabs[0].childTabs.forEach((tab) => {
+    (tab.documentTab.body.content || []).filter((e) => e.table).forEach((e) => {
+      const isDay = e.table.tableRows[0].tableCells[1] && e.table.tableRows[0].tableCells[1].content[0].paragraph.elements[0].textRun.content === 'Course\n';
+      e.table.tableRows.forEach((r) => {
+        const c = r.tableCells;
+        const link = c[0].content[0].paragraph.elements[0].textRun.textStyle;
+        if (c.length === 6 && link && link.link && link.link.url === u) {
+          const txt = (i) => c[i].content[0].paragraph.elements[0].textRun.content.replace(/\n$/, '');
+          out.push({ week: tab.tabProperties.title, table: isDay ? 'day' : 'class', status: txt(4), note: txt(5) });
+        }
+      });
+    });
+  });
+  return out;
+}
+function staffTypes(docs, weekTitle, u, kind, status, note) {
+  const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === weekTitle);
+  const live = docs.find(tab.tabProperties.tabId);
+  live.documentTab.body.content.filter((e) => e.table).forEach((e) => {
+    const isDay = e.table.tableRows[0].tableCells[1] && e.table.tableRows[0].tableCells[1].content[0].paragraph.elements[0].textRun.content === 'Course\n';
+    if ((kind === 'day') !== !!isDay) return;
+    e.table.tableRows.forEach((r) => {
+      const link = r.tableCells[0].content[0].paragraph.elements[0].textRun.textStyle;
+      if (r.tableCells.length === 6 && link && link.link && link.link.url === u) { r.tableCells[4] = tcell(status); r.tableCells[5] = tcell(note); }
+    });
+  });
+}
+
+test('notes follow assignments: the selfTest sequence twice in a row (no clean-up between), and with clean-up', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  const X = url(1);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  const round = (status, note) => {
+    staffTypes(docs, WA, X, 'class', status, note); // selfTest types into the By Class row only
+    t.ctx.upsertPlannerDocument_(scheduleAB(true));
+    assert.deepStrictEqual(copiesOf(docs, X), [
+      { week: WB, table: 'class', status, note }, { week: WB, table: 'day', status, note },
+    ], 'followed the assignment to week B, and only there');
+    t.ctx.upsertPlannerDocument_(scheduleAB(false));
+    assert.deepStrictEqual(copiesOf(docs, X), [
+      { week: WA, table: 'class', status, note }, { week: WA, table: 'day', status, note },
+    ], 'came back to week A, and only there');
+  };
+  round('In progress', 'note 1');
+  round('Complete', 'note 2'); // the run that failed live: By Day still said "In progress" / "note 1"
+  // selfTest's clean-up: the original values back in both tables, recorded as written.
+  staffTypes(docs, WA, X, 'class', 'Not started', '');
+  staffTypes(docs, WA, X, 'day', 'Not started', '');
+  t.ctx.recordWritten_('DOC1', X, '2099-01-12', 'Not started', '');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']]);
+  round('In progress', 'note 3');
+  round('In progress', 'note 3 edited'); // same Status, new Note
+});
+
+// The Doc exactly as the first selfTest on #13 found it: both tables of week A still had the 10:58 PM
+// run's "In progress" and note, and there was no "last written" record yet.
+function liveStateBeforeRun1() {
+  const X = url(1);
+  const stale = 'selfTest note Oct 4 10:58 PM';
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'class', 'In progress', stale);
+  staffTypes(docs, WA, X, 'day', 'In progress', stale);
+  delete t.svc.props['written.DOC1'];
+  return { t, docs, X, stale };
+}
+
+// One selfTest, step by step, as App.gs runs it (typing goes into the By Class row).
+function selfTestRound(t, docs, X, typed) {
+  const copies = () => copiesOf(docs, X);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false)); // "Doc: create or update yours"
+  const first = copies()[0];
+  const original = /^selfTest note /.test(first.note) ? { status: 'Not started', note: '' } : { status: first.status, note: first.note };
+  const testStatus = original.status === 'In progress' ? 'Complete' : 'In progress';
+  staffTypes(docs, WA, X, 'class', testStatus, typed);
+  t.ctx.upsertPlannerDocument_(scheduleAB(true)); // moved
+  assert.deepStrictEqual(copies().map((c) => [c.week, c.status, c.note]), [[WB, testStatus, typed], [WB, testStatus, typed]], 'followed');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false)); // normal
+  assert.deepStrictEqual(copies().map((c) => [c.week, c.status, c.note]), [[WA, testStatus, typed], [WA, testStatus, typed]], 'came back, one week tab');
+  // everyday: a By Class edit survives a plain update
+  const everyday = testStatus === 'Complete' ? 'In progress' : 'Complete';
+  staffTypes(docs, WA, X, 'class', everyday, typed + ' (edited)');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copies().map((c) => [c.status, c.note]), [[everyday, typed + ' (edited)'], [everyday, typed + ' (edited)']], 'everyday');
+  // clean-up: original values back in both tables, recorded as written
+  staffTypes(docs, WA, X, 'class', original.status, original.note);
+  staffTypes(docs, WA, X, 'day', original.status, original.note);
+  t.ctx.recordWritten_('DOC1', X, '2099-01-12', original.status, original.note);
+  return original;
+}
+
+test('selfTest from the exact live state (stale values in both tables, no record): two runs in a row pass', () => {
+  const { t, docs, X } = liveStateBeforeRun1();
+  const o1 = selfTestRound(t, docs, X, 'selfTest note Oct 5 1:30 PM');
+  assert.deepStrictEqual(o1, { status: 'Not started', note: '' }, "the old test note isn't kept as the original");
+  selfTestRound(t, docs, X, 'selfTest note Oct 5 1:40 PM');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']], 'clean after both runs');
+});
+
+test('an update that read the Doc just before staff typed keeps the typed value (the race that failed the first #13 selfTest)', () => {
+  const { t, docs, X } = liveStateBeforeRun1();
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  // Staff (or selfTest) type right after the update has read the Doc, before it rebuilds the tab.
+  const realCollect = t.ctx.collectSavedData_;
+  let typed = false;
+  t.ctx.collectSavedData_ = (parent, written) => {
+    const result = realCollect(parent, written);
+    if (!typed) { typed = true; staffTypes(docs, WA, X, 'class', 'Complete', 'typed mid-update'); }
+    return result;
+  };
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Complete', 'typed mid-update'], ['Complete', 'typed mid-update']]);
+  t.ctx.collectSavedData_ = realCollect;
+  // ... and while the new tab is being written (the last look before the old tab is deleted).
+  const realChunked = t.ctx.batchUpdateChunked_;
+  let once = false;
+  t.ctx.batchUpdateChunked_ = (docId, reqs) => {
+    realChunked(docId, reqs);
+    if (!once) { once = true; staffTypes(docs, WA, X, 'class', 'In progress', 'typed during the write'); }
+  };
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['In progress', 'typed during the write'], ['In progress', 'typed during the write']]);
+  assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+});
+
+test('"last written" records are compact, split over more properties when big, and the first format still reads', () => {
+  const t = setup();
+  const map = {};
+  for (let i = 0; i < 320; i++) map[String(1000000 + i)] = { w: '2026-10-05', s: ['Not started', 'In progress', 'Complete', 'Waiting on teacher'][i % 4], n: t.ctx.noteFingerprint_(i % 2 ? 'a note ' + i : '') };
+  t.ctx.saveWritten_('DOCX', map);
+  const parts = Object.keys(t.svc.props).filter((k) => k.indexOf('written.DOCX') === 0);
+  assert.deepStrictEqual(parts.sort(), ['written.DOCX', 'written.DOCX.1'], '320 assignments: two parts');
+  parts.forEach((k) => assert.ok(t.svc.props[k].length < 8500, k + ' fits in one property'));
+  assert.deepStrictEqual(toPlain(t.ctx.readWritten_('DOCX')), map);
+  // Fewer assignments later: the extra part is removed.
+  t.ctx.saveWritten_('DOCX', { 1: { w: '2026-10-12', s: 'Complete', n: '' } });
+  assert.deepStrictEqual(Object.keys(t.svc.props).filter((k) => k.indexOf('written.DOCX') === 0), ['written.DOCX']);
+  assert.ok(t.svc.props['written.DOCX'].length < 40, 'about 28 characters per assignment: ' + t.svc.props['written.DOCX']);
+  t.svc.props['written.OLD'] = JSON.stringify({ 5: { w: '2026-10-05', s: 'In progress', n: 'abc' } });
+  assert.deepStrictEqual(toPlain(t.ctx.readWritten_('OLD')), { 5: { w: '2026-10-05', s: 'In progress', n: 'abc' } });
+});
+
+test('an empty insertText is never sent (clearing a cell only deletes), and Drive\'s "Invalid file or folder ID" means deleted', () => {
+  const t = setup();
+  const sent = [];
+  t.ctx.Docs = { Documents: { batchUpdate: (body) => { sent.push(toPlain(body.requests)); return { replies: [] }; } } };
+  t.ctx.docsBatchUpdate_('D', [{ insertText: { text: '', location: { index: 5 } } }, { deleteContentRange: { range: { startIndex: 1, endIndex: 3 } } }]);
+  t.ctx.docsBatchUpdate_('D', [{ insertText: { text: '', location: { index: 5 } } }]);
+  assert.deepStrictEqual(sent, [[{ deleteContentRange: { range: { startIndex: 1, endIndex: 3 } } }]], 'only the delete; nothing at all for an empty-only batch');
+  assert.ok(t.ctx.DRIVE_NOT_FOUND.test('Exception: Invalid file or folder ID: 1abc'));
+  t.ctx.DriveApp.getFileById = () => { throw new Error('Exception: Invalid file or folder ID: 1abc'); };
+  assert.throws(() => t.ctx.savedDocFile_('1abc'), /^Error: Could not open the saved Google Doc \(1abc\)/);
+});
+
+test('an edit in either table wins: By Day only, or changing back to "Not started" or an empty note', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  const X = url(1);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'day', 'Complete', 'typed in By Day');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.table, c.status, c.note]), [['class', 'Complete', 'typed in By Day'], ['day', 'Complete', 'typed in By Day']]);
+  staffTypes(docs, WA, X, 'class', 'Not started', '');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']]);
+});
+
+test('two weeks disagree: the copy from the week the assignment was in last time wins', () => {
+  const t = setup();
+  const X = url(1);
+  const weekA = weekTab('t.a', 'Week of Jan 12 – Jan 18, 2099', [trow(X, 'Complete', 'new')]);
+  const weekB = weekTab('t.b', 'Week of Jan 5 – Jan 11, 2099', [trow(X, 'Not started', 'stale')]);
+  const written = { '1': { w: '2099-01-12', s: 'In progress', n: t.ctx.noteFingerprint_('old') } };
+  assert.deepStrictEqual(toPlain(t.ctx.collectSavedData_({ childTabs: [weekB, weekA] }, written)),
+    { notes: { [X]: 'new' }, status: { [X]: 'Complete' } });
 });
 
 test('titles that already exist elsewhere in the Doc: a dragged-out week is moved back, and an existing "Past weeks" is reused', () => {

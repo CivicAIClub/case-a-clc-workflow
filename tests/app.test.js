@@ -330,6 +330,45 @@ test('the page warns when no update has finished for over a day', () => {
   assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, null);
 });
 
+test('token dates: "Token expires …" on the row, a warning 14 days ahead, and the date in the expired message', () => {
+  const t = setup();
+  const soon = new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString();
+  const later = '2099-01-02T05:00:00Z';
+  t.ctx.fetchCanvasTokenExpiry_ = (token) => (token === TOKEN_A ? { expiresAt: later, createdAt: '2026-10-04T20:54:53Z' } : token === TOKEN_B ? { expiresAt: soon, createdAt: null } : null);
+  const a = addAs(t, STAFF, TOKEN_A, '').student;
+  const b = addAs(t, STAFF, TOKEN_B, '').student;
+  const c = addAs(t, STAFF, TOKEN_C, '').student;
+  assert.strictEqual(a.tokenDate, 'Token expires Jan 2, 2099');
+  assert.match(c.tokenDate, /^Token added [A-Z][a-z]{2} \d{1,2}, \d{4}$/, "Canvas didn't say: the date it was added");
+  const state = toPlain(t.ctx.getAppState());
+  assert.deepStrictEqual(state.tokensExpiring.map((x) => [x.name, x.expired]), [['Blake Sample', false]]);
+  // Expired: the next update says so, with the date.
+  const rec = JSON.parse(t.svc.props['student.' + b.id]);
+  rec.tokenExpiresAt = '2026-01-02T05:00:00Z';
+  t.svc.props['student.' + b.id] = JSON.stringify(rec);
+  t.badTokens.add(TOKEN_B);
+  const after = toPlain(t.ctx.updateStudentNow(b.id));
+  assert.strictEqual(after.last.message, "This student's Canvas token expired on Jan 2, 2026. Ask the student for a new token, then click Edit on their row, paste it and click Save.");
+  assert.strictEqual(after.tokenDate, 'Token expired Jan 2, 2026');
+  assert.ok(toPlain(t.ctx.getAppState()).tokensExpiring.some((x) => x.name === 'Blake Sample' && x.expired));
+});
+
+test('students added before expiry dates existed are checked with Canvas once, at their next update', () => {
+  const t = setup();
+  t.ctx.fetchCanvasTokenExpiry_ = () => null;
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  const rec = JSON.parse(t.svc.props['student.' + student.id]);
+  delete rec.tokenChecked; delete rec.tokenExpiresAt; delete rec.tokenAddedAt;
+  t.svc.props['student.' + student.id] = JSON.stringify(rec);
+  let asked = 0;
+  t.ctx.fetchCanvasTokenExpiry_ = () => { asked++; return { expiresAt: '2099-01-02T05:00:00Z', createdAt: '2026-09-01T12:00:00Z' }; };
+  const once = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.strictEqual(once.tokenDate, 'Token expires Jan 2, 2099');
+  t.ctx.updateStudentNow(student.id);
+  assert.strictEqual(asked, 1);
+  assert.strictEqual(JSON.parse(t.svc.props['student.' + student.id]).tokenAddedAt, '2026-09-01T12:00:00Z');
+});
+
 test('friendlyError_ scrubs the token and translates Docs quota errors', () => {
   const t = setup();
   assert.strictEqual(t.ctx.friendlyError_(new Error('Error: bad ' + TOKEN_A), TOKEN_A), 'bad [token]');
@@ -508,6 +547,33 @@ test('selfTest runs every check after a failure (unless it needs the failed one)
   u.ctx.DriveApp.getFileById = () => { throw new Error('Invalid argument: id'); };
   u.ctx.selfTestKeepToken();
   assert.match(u.sb.logs.join('\n'), /SKIP A Doc deleted for good: Drive's message \(shown as is\): Drive said "Invalid argument: id"/);
+});
+
+test("selfTest holds your row: updates skip it meanwhile, and selfTest stops early if an update is already running on it", () => {
+  const t = setup({ TEST_CANVAS_TOKEN: TOKEN_A });
+  const { student } = addAs(t, STAFF, TOKEN_A, 'Demo');
+  t.svc.setActive(OWNER);
+  let skippedDuring = null;
+  t.ctx.writeDocWithRecovery_ = () => {
+    if (skippedDuring === null) skippedDuring = toPlain(t.ctx.updateOneStudent_(student.id));
+    return 'DOC-SELF';
+  };
+  t.ctx.assertDocIsInFolder_ = () => {};
+  t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [] }] });
+  t.ctx.selfTestKeepToken();
+  assert.match(t.sb.logs.join('\n'), /PASS Your row is held for selfTest/);
+  assert.strictEqual(skippedDuring.skipped, true, 'an update during selfTest skips the row');
+  assert.ok(!t.svc.props['busy.' + student.id], 'released at the end');
+  // An update is already running on the row: selfTest stops before touching the Doc.
+  t.svc.props['busy.' + student.id] = String(Date.now());
+  const u = setup({ TEST_CANVAS_TOKEN: TOKEN_A });
+  t.sb.logs.length = 0;
+  let wrote = false;
+  t.ctx.writeDocWithRecovery_ = () => { wrote = true; return 'DOC-SELF'; };
+  t.ctx.selfTestKeepToken();
+  assert.match(t.sb.logs.join('\n'), /FAIL Your row is held for selfTest[^\n]*: Your row is being updated right now\. Run selfTest again in a few minutes\./);
+  assert.strictEqual(wrote, false);
+  void u;
 });
 
 test("selfTest's gray check: passes when a past week's Priority cells are gray, fails when one isn't", () => {

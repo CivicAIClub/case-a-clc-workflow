@@ -196,7 +196,10 @@ function docsGet_(docId, opts) {
  * @returns {*} API reply (e.g. for addDocumentTab replies)
  */
 function docsBatchUpdate_(docId, requests) {
-  if (!requests || !requests.length) return null;
+  // Docs refuses an insertText with no text ("Insert text requests must specify text to insert"),
+  // and inserting nothing changes nothing, so those are left out.
+  requests = (requests || []).filter(function (r) { return !(r && r.insertText && !r.insertText.text); });
+  if (!requests.length) return null;
   if (requests.length > 500) {
     throw new Error('docsBatchUpdate_: chunk > 500 requests');
   }
@@ -249,7 +252,7 @@ function getDocsFolder_() {
 var DOC_GONE_PREFIX = 'Could not open the saved Google Doc';
 // What Drive says when a file or folder doesn't exist (or this account can't see it). Any other
 // error is a hiccup, and must never make AutoPlanner start a new Doc.
-var DRIVE_NOT_FOUND = /No item with the given ID|Unexpected error while getting the method or property get(File|Folder)ById|do not have permission|Access denied/i;
+var DRIVE_NOT_FOUND = /No item with the given ID|Invalid file or folder ID|Unexpected error while getting the method or property get(File|Folder)ById|do not have permission|Access denied/i;
 
 /**
  * The saved Doc's Drive file. Throws an error starting with DOC_GONE_PREFIX when the Doc is in the
@@ -329,18 +332,14 @@ function upsertPlannerDocument_(data) {
   var today = Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
   archivePastWeeks_(docId, parentTabId, today);
 
-  var weeks = data.weeks || {};
+  var weeks = {};
+  Object.keys(data.weeks || {}).forEach(function (k) { weeks[k] = data.weeks[k]; });
   // Never write a week that has ended (an update running across Sunday midnight would otherwise
   // make a blank copy of the week it just filed).
   var weekKeys = Object.keys(weeks).sort().filter(function (k) { return k >= scheduleWeekStart_(today); });
   // Every class gets a table each week, in the same color every week.
   var courses = plannerCourseList_(data);
   var colorMap = buildCourseColorMap_(courses);
-
-  if (weekKeys.length === 0) {
-    rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
-    return { docUrl: doc.getUrl(), documentId: docId };
-  }
 
   // A week's tab somewhere else in the Doc (someone dragged it out of CLC Planner): every title must
   // be different, so a second one can't be made. Move it back first, so its Status and Notes are
@@ -349,7 +348,27 @@ function upsertPlannerDocument_(data) {
 
   // Read every current and upcoming week's Status and Notes before any tab is rebuilt, so they
   // follow an assignment that moved to another week.
-  var saved = collectSavedData_(findTabJsonById_(docsGet_(docId), parentTabId));
+  var beforeParent = findTabJsonById_(docsGet_(docId), parentTabId);
+  var saved = collectSavedData_(beforeParent, readWritten_(docId));
+
+  // Every current and upcoming week tab is rebuilt from fresh data, including a week where nothing
+  // is due any more, so an assignment is only ever in one week tab.
+  ((beforeParent && beforeParent.childTabs) || []).forEach(function (t) {
+    var key = weekKeyFromTabTitle_(t.tabProperties.title);
+    if (!key || key < scheduleWeekStart_(today) || weeks[key]) return;
+    weeks[key] = {
+      week_label: scheduleShortDate_(key) + ' \u2013 ' + scheduleShortDate_(scheduleAddDays_(key, 6)),
+      days: [],
+    };
+    weekKeys.push(key);
+  });
+  weekKeys.sort();
+
+  if (weekKeys.length === 0) {
+    saveWritten_(docId, {});
+    rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
+    return { docUrl: doc.getUrl(), documentId: docId };
+  }
 
   weekKeys.forEach(function (weekKey) {
     var weekData = weeks[weekKey];
@@ -372,9 +391,25 @@ function upsertPlannerDocument_(data) {
       );
     }
 
-    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved);
+    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, beforeParent);
     sleepDocsChunkGap_();
   });
+
+  // Remember what was written, so next time an edit in either table can be told apart.
+  var written = {};
+  weekKeys.forEach(function (weekKey) {
+    (weeks[weekKey].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) {
+        if (!a.url) return;
+        written[assignmentKey_(a.url)] = {
+          w: weekKey,
+          s: saved.status[a.url] || STATUS_DEFAULT,
+          n: noteFingerprint_(saved.notes[a.url] || ''),
+        };
+      });
+    });
+  });
+  saveWritten_(docId, written);
 
   // The home tab last, so its "Open this week" link can point at this week's (new) tab.
   rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
@@ -659,30 +694,202 @@ function archiveMoveRequests_(ended, pastId) {
 }
 
 /**
- * Status and Notes from every current and upcoming week tab, by Canvas link, so they follow an
- * assignment whose due date moves to another week. "Past weeks" is never read. When a link has
- * values in two weeks, a typed Status beats the default, and between two typed values the most
- * recent week's wins (Notes the same way).
+ * Status and Notes for every assignment, by Canvas link, from every current and upcoming week tab
+ * ("Past weeks" is never read), so they follow an assignment whose due date moves to another week.
+ *
+ * Each value can appear in several places: By Class and By Day in one tab, and (until the next
+ * rebuild) more than one week. `written` says what AutoPlanner wrote last time for each assignment
+ * (see readWritten_); a copy that differs from it is a staff edit, and an edit always wins. If
+ * there's no record (or no edit), a typed value beats the default. Between several edits, the copy
+ * from the week the assignment was in last time wins, then By Class, then the most recent week.
  */
-function collectSavedData_(parentTabJson) {
-  var result = { notes: {}, status: {} };
-  ((parentTabJson && parentTabJson.childTabs) || []).map(function (t, i) {
-    return { key: weekKeyFromTabTitle_((t.tabProperties || {}).title), tab: t, i: i };
-  }).filter(function (w) {
-    return w.key;
-  }).sort(function (a, b) {
-    // Two copies of one week (an update stopped mid-rebuild): the top one, which staff see and
-    // edit, is read last, so its values win.
-    return a.key < b.key ? -1 : a.key > b.key ? 1 : b.i - a.i;
-  }).forEach(function (w) {
-    var d = readExistingDataFromTab_(w.tab);
-    Object.keys(d.status).forEach(function (url) {
-      var cur = result.status[url];
-      if (!cur || cur === STATUS_DEFAULT || d.status[url] !== STATUS_DEFAULT) result.status[url] = d.status[url];
+function collectSavedData_(parentTabJson, written) {
+  var record = written || {};
+  var copies = {};
+  ((parentTabJson && parentTabJson.childTabs) || []).forEach(function (t) {
+    var key = weekKeyFromTabTitle_((t.tabProperties || {}).title);
+    if (!key) return; // "Past weeks", "(updating)" leftovers and other tabs are never read
+    eachAssignmentCopy_(t, function (url, kind, status, note) {
+      (copies[url] = copies[url] || []).push({ week: key, kind: kind, status: status, note: note });
     });
-    Object.keys(d.notes).forEach(function (url) { result.notes[url] = d.notes[url]; });
+  });
+  var result = { notes: {}, status: {} };
+  Object.keys(copies).forEach(function (url) {
+    var list = copies[url];
+    var last = record[assignmentKey_(url)];
+    var order = function (a, b) {
+      var lastWeek = last ? last.w : null;
+      var aw = a.week === lastWeek ? 0 : 1, bw = b.week === lastWeek ? 0 : 1;
+      if (aw !== bw) return aw - bw;
+      var ak = a.kind === 'day' ? 1 : 0, bk = b.kind === 'day' ? 1 : 0;
+      if (ak !== bk) return ak - bk;
+      return a.week < b.week ? 1 : a.week > b.week ? -1 : 0;
+    };
+    var pick = function (get, fingerprint, writtenPrint) {
+      var edits = list.filter(function (c) { return fingerprint(get(c)) !== writtenPrint; }).sort(order);
+      return edits.length ? get(edits[0]) : get(list.slice().sort(order)[0]);
+    };
+    result.status[url] = pick(function (c) { return c.status; }, function (v) { return v; },
+      last ? last.s : STATUS_DEFAULT);
+    result.notes[url] = pick(function (c) { return c.note; }, noteFingerprint_,
+      last ? last.n : noteFingerprint_(''));
   });
   return result;
+}
+
+/**
+ * Status and Notes typed into a week tab between two reads of it: { status: {url}, notes: {url} }
+ * with the new values. Rows that weren't in the first read don't count. If both tables changed, By
+ * Class wins.
+ */
+function changedSince_(beforeTab, nowTab) {
+  var before = {};
+  eachAssignmentCopy_(beforeTab, function (url, kind, status, note) {
+    before[kind + ' ' + url] = { status: status, note: note };
+  });
+  var now = [];
+  eachAssignmentCopy_(nowTab, function (url, kind, status, note) {
+    now.push({ url: url, kind: kind, status: status, note: note });
+  });
+  var out = { status: {}, notes: {} };
+  now.sort(function (a, b) { return (a.kind === 'day' ? 0 : 1) - (b.kind === 'day' ? 0 : 1); }).forEach(function (c) {
+    var b = before[c.kind + ' ' + c.url];
+    if (!b) return;
+    if (c.status !== b.status) out.status[c.url] = c.status;
+    if (c.note !== b.note) out.notes[c.url] = c.note;
+  });
+  return out;
+}
+
+/** Puts changes from changedSince_ into `saved`; gives back how many values changed. */
+function applyChanges_(saved, changes) {
+  var n = 0;
+  Object.keys(changes.status).forEach(function (u) { saved.status[u] = changes.status[u]; n++; });
+  Object.keys(changes.notes).forEach(function (u) { saved.notes[u] = changes.notes[u]; n++; });
+  return n;
+}
+
+/** Calls fn(url, 'class' | 'day', status, note) for every assignment row in a week tab. */
+function eachAssignmentCopy_(tabJson, fn) {
+  var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
+  content.forEach(function (el) {
+    if (!el.table || (el.table.columns || 0) < 6) return;
+    var rows = el.table.tableRows || [];
+    var isDay = rows.slice(0, 2).some(function (r) {
+      var c = r.tableCells || [];
+      return c.length > 1 && getCellText_(c[1]) === 'Course';
+    });
+    rows.forEach(function (row) {
+      var cells = row.tableCells || [];
+      if (cells.length < 6) return;
+      var url = getCellLinkUrl_(cells[0]);
+      if (!url) return;
+      fn(url, isDay ? 'day' : 'class', normalizeStatus_(getCellText_(cells[4])) || STATUS_DEFAULT, getCellText_(cells[5]));
+    });
+  });
+}
+
+// ---- What AutoPlanner wrote last time, per Doc (one Script Property, "written.<docId>") ----------
+// { "<assignment id>": "<week yyyymmdd><Status><Notes fingerprint>" }, e.g. "20261005I1x9k2" for the
+// week of Oct 5, "In progress" and a note. The three usual Statuses are one letter (N, I, C); any
+// other text is kept between "|"s. About 28 characters per assignment. The record only covers the
+// current and upcoming weeks, so it doesn't grow over the year.
+
+function assignmentKey_(url) {
+  var m = /\/assignments\/(\d+)/.exec(String(url || ''));
+  return m ? m[1] : String(url || '');
+}
+
+/** A short fingerprint of a note (FNV-1a), so notes themselves are never stored outside the Doc. */
+function noteFingerprint_(note) {
+  var s = String(note || '');
+  var h = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return s ? h.toString(36) : '';
+}
+
+var WRITTEN_STATUS_CODES = { 'Not started': 'N', 'In progress': 'I', Complete: 'C' };
+
+/** "<week yyyymmdd><Status code><Notes fingerprint>" from { w, s, n }. */
+function encodeWritten_(record) {
+  var code = WRITTEN_STATUS_CODES[record.s] || '|' + String(record.s || '').replace(/\|/g, '') + '|';
+  return String(record.w || '').replace(/-/g, '') + code + (record.n || '');
+}
+
+/** { w, s, n } from an encoded record (or a record in the first, longer format). */
+function decodeWritten_(v) {
+  if (v && typeof v === 'object') return v;
+  var str = String(v || '');
+  var w = str.slice(0, 4) + '-' + str.slice(4, 6) + '-' + str.slice(6, 8);
+  var rest = str.slice(8);
+  if (rest.charAt(0) === '|') {
+    var end = rest.indexOf('|', 1);
+    return { w: w, s: rest.slice(1, end), n: rest.slice(end + 1) };
+  }
+  var names = { N: 'Not started', I: 'In progress', C: 'Complete' };
+  return { w: w, s: names[rest.charAt(0)] || STATUS_DEFAULT, n: rest.slice(1) };
+}
+
+// A Script Property holds 9 KB, so a big record is split over "written.<docId>", "written.<docId>.1"
+// and so on (about 290 assignments each).
+var WRITTEN_PART_CHARS = 8000;
+var WRITTEN_MAX_PARTS = 10;
+
+function writtenPartKey_(docId, i) {
+  return 'written.' + docId + (i ? '.' + i : '');
+}
+
+/** { "<assignment id>": { w, s, n } } for this Doc. */
+function readWritten_(docId) {
+  var props = PropertiesService.getScriptProperties();
+  var out = {};
+  for (var i = 0; i < WRITTEN_MAX_PARTS; i++) {
+    var json = props.getProperty(writtenPartKey_(docId, i));
+    if (!json) break;
+    var raw;
+    try {
+      raw = JSON.parse(json) || {};
+    } catch (e) {
+      raw = {};
+    }
+    Object.keys(raw).forEach(function (k) { out[k] = decodeWritten_(raw[k]); });
+  }
+  return out;
+}
+
+/** Saves { "<assignment id>": { w, s, n } } in the compact form, in as many parts as it needs. */
+function saveWritten_(docId, map) {
+  var props = PropertiesService.getScriptProperties();
+  var parts = [{}];
+  var size = 2;
+  Object.keys(map).forEach(function (k) {
+    var v = encodeWritten_(map[k]);
+    var add = k.length + v.length + 6;
+    if (size + add > WRITTEN_PART_CHARS) {
+      parts.push({});
+      size = 2;
+    }
+    parts[parts.length - 1][k] = v;
+    size += add;
+  });
+  if (parts.length > WRITTEN_MAX_PARTS) {
+    console.warn('The "last written" record for ' + docId + ' needs ' + parts.length + ' parts; not kept.');
+    parts = [];
+  }
+  for (var i = 0; i < WRITTEN_MAX_PARTS; i++) {
+    if (i < parts.length) props.setProperty(writtenPartKey_(docId, i), JSON.stringify(parts[i]));
+    else props.deleteProperty(writtenPartKey_(docId, i));
+  }
+}
+
+/** Records one value as written (selfTest uses it after putting a test value back). */
+function recordWritten_(docId, url, week, status, note) {
+  var map = readWritten_(docId);
+  map[assignmentKey_(url)] = { w: week, s: status, n: noteFingerprint_(note) };
+  saveWritten_(docId, map);
 }
 
 function addWeekChildTab_(docId, parentTabId, title, insertIndex) {
@@ -1263,11 +1470,16 @@ function tabBodyHasHeavyContent_(tabJson) {
  * Writes one week tab from scratch: a heading, the help line, one table per class, and the By Day
  * table. The tab has just been created or cleared, so it holds one empty paragraph at index 1.
  */
-function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved) {
+function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, snapshot) {
   var docProbe = docsGet_(docId);
   var tabProbe = findTabJsonById_(docProbe, tabId);
   // Status and Notes from all current and upcoming weeks (see collectSavedData_), or this tab's own.
   var savedData = saved || readExistingDataFromTab_(tabProbe);
+  // Anything typed into this tab since the update started (`snapshot` is the CLC Planner tab as it
+  // was then) wins. `saved` is shared by the whole update, so it also follows a moved assignment.
+  var before = snapshot ? findTabJsonById_({ tabs: [snapshot] }, tabId) : null;
+  if (before && tabProbe) applyChanges_(savedData, changedSince_(before, tabProbe));
+  var width = tabContentWidth_(tabProbe);
 
   var parentJson = findTabJsonById_(docProbe, parentTabId);
   var oldTabId = null;
@@ -1287,11 +1499,20 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   }
 
   var requests = buildWeekTabRequests_(
-    tabId, weekKey, weekData, courses, colorMap, savedData, tabContentWidth_(tabProbe)
+    tabId, weekKey, weekData, courses, colorMap, savedData, width
   );
   batchUpdateChunked_(docId, requests);
 
   if (oldTabId) {
+    // A last look at the old tab: if staff typed in it while the new one was being written, write
+    // the new one again with their edits (once; the window is only a few seconds).
+    var oldNow = findTabJsonById_(docsGet_(docId), oldTabId);
+    if (oldNow && applyChanges_(savedData, changedSince_(tabProbe, oldNow))) {
+      docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
+      tabId = addWeekChildTab_(docId, parentTabId, tempTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
+      sleepDocsChunkGap_();
+      batchUpdateChunked_(docId, buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, savedData, width));
+    }
     // One batch, all or nothing (checked live): the old tab goes, and the new one takes its title
     // and its place in the sidebar.
     docsBatchUpdate_(docId, [
@@ -1392,6 +1613,7 @@ function buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, save
       dayRows.push(assignmentRow_(a, a.course, colorMap[a.course] || '#EAEDED', saved));
     });
   });
+  if (dayRows.length === 1) dayRows.push({ kind: 'empty', cells: [NO_ASSIGNMENTS_TEXT] });
   appendTable_(reqs, tabId, at, dayRows, scaledColumnWidths_(BY_DAY_WIDTHS, contentWidth));
   return reqs;
 }
