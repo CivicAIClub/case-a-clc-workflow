@@ -29,6 +29,9 @@ var APP_DAILY_HOURS = [19, 0]; // 7 pm and midnight, America/New_York
 // One student's Doc takes about 2 minutes (measured: 16 assignments, 97 s to create, 126 s to
 // update). Starting nobody new after 2 minutes leaves each student about 4 minutes of the 6.
 var APP_BATCH_BUDGET_MS = 2 * 60 * 1000; // don't start another student after this
+var APP_DEFAULT_STUDENT_SECONDS = 150; // a student's update time until their first update is timed
+var APP_RUN_RESERVE_MS = 30 * 1000; // kept free at the end of a batch for saving and scheduling
+var APP_SAFETY_GRACE_MS = 2 * 60 * 1000; // the safety trigger fires this long after the time limit
 var APP_CONTINUE_AFTER_MS = 60 * 1000; // next batch of a long run
 var APP_SAFETY_CONTINUE_AFTER_MS = 8 * 60 * 1000; // resumes a run if a batch is cut off
 var APP_RUN_STALE_MS = 15 * 60 * 1000; // a run with no progress this long is treated as stopped
@@ -38,6 +41,9 @@ var APP_NOTICE_DAYS = 7; // how long a one-off message (e.g. "made a new Doc") s
 var APP_MAX_FAILURES_KEPT = 20;
 var APP_STALE_AFTER_MS = 26 * 3600 * 1000; // no finished update for this long means something is wrong
 var APP_TOKEN_WARN_DAYS = 14; // the page warns this long before a student's Canvas token expires
+// Drive said "Invalid argument" about a student's Doc: it's treated as gone only if an update at least
+// this much later says the same (7 pm and midnight are 5 hours apart).
+var APP_DOC_UNSURE_CONFIRM_MS = 4 * 3600 * 1000;
 
 // =====================================================================================
 // The web page
@@ -520,6 +526,8 @@ function updateOneStudent_(id) {
   }
   var token = getToken_(id);
   var result;
+  var docInfo = {};
+  var startedAt = Date.now();
   // Students added before AutoPlanner knew about expiry dates: ask Canvas once.
   var tokenInfo = student.tokenChecked ? null : fetchCanvasTokenExpiry_(token, canvasBaseUrl_());
   var applyTokenInfo = function (s) {
@@ -540,23 +548,28 @@ function updateOneStudent_(id) {
           '). Click Edit and paste ' + student.name + "'s own token."
       );
     }
-    var docInfo = {};
     var docId = writeDocWithRecovery_(student, schedule, docInfo);
     student = getStudent_(id) || student;
     applyTokenInfo(student);
+    delete student.docUnsureSince;
     student.name = schedule.student_full_name || student.name;
     student.docId = docId;
     if (docInfo.replaced) student.notice = { at: new Date().toISOString(), message: docInfo.replaced };
     var count = schedule.total_assignments || 0;
+    student.lastSeconds = Math.round((Date.now() - startedAt) / 1000);
     student.last = {
       at: new Date().toISOString(),
       ok: true,
-      message: 'Updated: ' + count + ' assignment' + (count === 1 ? '' : 's') + ' in the next ' + APP_WEEKS_AHEAD + ' weeks.',
+      message: docInfo.weeksDone < docInfo.weeksTotal
+        ? 'Updated ' + docInfo.weeksDone + ' of ' + docInfo.weeksTotal + ' weeks: Google Docs was slow, so the other ' +
+          'weeks will be updated at the next update (their Status and Notes are kept).'
+        : 'Updated: ' + count + ' assignment' + (count === 1 ? '' : 's') + ' in the next ' + APP_WEEKS_AHEAD + ' weeks.',
     };
     result = { ok: true, name: student.name, message: student.last.message };
   } catch (err) {
     student = getStudent_(id) || student;
     applyTokenInfo(student);
+    if (docInfo.docUnsureSince) student.docUnsureSince = docInfo.docUnsureSince;
     var message = friendlyError_(err, token);
     if (err && err.canvasKind === 'auth' && student.tokenExpiresAt && new Date(student.tokenExpiresAt).getTime() <= Date.now()) {
       message = "This student's Canvas token expired on " + shortDate_(student.tokenExpiresAt) + '. Ask the student for a ' +
@@ -581,10 +594,29 @@ function writeDocWithRecovery_(student, schedule, info) {
   payload.studentFullName = schedule.student_full_name;
   var docId = student.docId || findReusableDoc_(schedule.student_full_name, student.id);
   if (docId) payload.documentId = docId;
+  if (info && info.noDeadline) payload.noDeadline = true;
+  var done = function (res) {
+    if (info) {
+      info.weeksDone = res.weeksDone;
+      info.weeksTotal = res.weeksTotal;
+    }
+    return res.documentId;
+  };
   try {
-    return upsertPlannerDocument_(payload).documentId;
+    return done(upsertPlannerDocument_(payload));
   } catch (err) {
-    if (!docId || String(err.message || err).indexOf(DOC_GONE_PREFIX) === -1) throw err;
+    var msg = String(err.message || err);
+    if (docId && msg.indexOf(DOC_UNSURE_PREFIX) === 0) {
+      // Not sure yet: remember when it started, and only treat the Doc as gone once an update at
+      // least APP_DOC_UNSURE_CONFIRM_MS later still can't find it.
+      var since = student.docUnsureSince ? new Date(student.docUnsureSince).getTime() : 0;
+      if (!since || Date.now() - since < APP_DOC_UNSURE_CONFIRM_MS) {
+        if (info) info.docUnsureSince = student.docUnsureSince || new Date().toISOString();
+        throw err;
+      }
+    } else if (!docId || msg.indexOf(DOC_GONE_PREFIX) === -1) {
+      throw err;
+    }
     // The saved Doc is gone (deleted or in the trash): start again with a reused or new Doc.
     delete payload.documentId;
     var other = findReusableDoc_(schedule.student_full_name, student.id);
@@ -593,7 +625,7 @@ function writeDocWithRecovery_(student, schedule, info) {
       throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
     }
     if (other) payload.documentId = other;
-    var newId = upsertPlannerDocument_(payload).documentId;
+    var newId = done(upsertPlannerDocument_(payload));
     if (info) {
       info.replaced = payload.documentId
         ? 'Their Doc was deleted, so AutoPlanner switched to their other Doc in the shared folder.'
@@ -657,8 +689,21 @@ function startRun_(reason, startedBy) {
  */
 function processRunBatch_(runId) {
   var batchStart = Date.now();
-  replaceContinueTrigger_(APP_SAFETY_CONTINUE_AFTER_MS);
+  // The safety trigger fires only after this execution must have ended (the time limit has
+  // passed), so it never runs alongside a batch that's still going.
+  replaceContinueTrigger_(runtimeLimitMs_() + APP_SAFETY_GRACE_MS);
+  var first = true;
   while (true) {
+    // After the first student, start the next one only if their usual time fits in what's left of
+    // this execution; otherwise they start fresh in the next batch.
+    if (!first && !nextStudentFits_(runId)) {
+      var waiting = readJson_('run.current');
+      if (waiting && waiting.id === runId && waiting.queue.length) {
+        replaceContinueTrigger_(APP_CONTINUE_AFTER_MS);
+        return;
+      }
+    }
+    first = false;
     var id = takeNextStudent_(runId);
     if (id === null) {
       finishRun_(runId);
@@ -675,6 +720,15 @@ function processRunBatch_(runId) {
       }
     }
   }
+}
+
+/** True if the next student's update (their last time, plus a quarter) fits in this execution. */
+function nextStudentFits_(runId) {
+  var run = readJson_('run.current');
+  if (!run || run.id !== runId || !run.queue.length) return true;
+  var next = getStudent_(run.queue[0]);
+  var expected = (next && next.lastSeconds ? next.lastSeconds : APP_DEFAULT_STUDENT_SECONDS) * 1250;
+  return msLeftInExecution_() - APP_RUN_RESERVE_MS > expected;
 }
 
 /** Pops the next student ID off the queue (null when done), and marks it in progress. */
@@ -766,7 +820,7 @@ function continueRun(e) {
     recordResult_(run.id, {
       ok: false,
       name: stuck ? stuck.name : 'A student',
-      message: 'Took longer than Apps Script allows (6 minutes). It will be tried again at the next update.',
+      message: "Was stopped partway by Apps Script's time limit. It will be tried again at the next update.",
     });
     PropertiesService.getScriptProperties().deleteProperty('busy.' + run.inProgress);
   }
@@ -857,6 +911,13 @@ function checkSetup() {
       ? 'OK   ALLOWED_USERS: ' + users.length + ' people: ' + users.join(', ')
       : 'FIX  ALLOWED_USERS is empty: nobody can open the page.'
   );
+  var measured = finishTimeLimitProbe_();
+  if (measured) Logger.log('OK   measureTimeLimit: Apps Script stopped it after about ' + measured + ' s; saved.');
+  if (readJson_('probe.timeLimit')) Logger.log('NOTE measureTimeLimit is still running (or stopped less than a minute ago). Run checkSetup again later.');
+  var limitSet = Number(getScriptProperty_('RUNTIME_LIMIT_SECONDS'));
+  Logger.log(limitSet >= 60
+    ? 'OK   Apps Script time limit: ' + limitSet + ' s per run (measured).'
+    : 'NOTE Apps Script time limit: not measured; assuming ' + DEFAULT_RUNTIME_LIMIT_SECONDS + ' s. Run measureTimeLimit once to measure it.');
   Logger.log('OK   Canvas: ' + canvasBaseUrl_());
   var excluded = courseExcludeKeywords_();
   Logger.log('     COURSE_EXCLUDE: ' + (excluded.length ? excluded.join(', ') : '(none: every class is shown)'));
@@ -879,6 +940,122 @@ function checkSetup() {
 // Editor-only: selfTest (runs entirely as you, with your own Canvas token)
 // =====================================================================================
 
+/**
+ * Finds this account's real Apps Script time limit (6 minutes is the documented default; Workspace
+ * accounts can get longer). Run it from the editor and leave it: it keeps going until Apps Script
+ * stops it (up to 31 minutes). Then run checkSetup, which saves the result in RUNTIME_LIMIT_SECONDS.
+ */
+function measureTimeLimit() {
+  requireOwner_();
+  var props = PropertiesService.getScriptProperties();
+  var t0 = Date.now();
+  props.setProperty('probe.timeLimit', JSON.stringify({ startedAt: t0, lastAt: t0, seconds: 0 }));
+  Logger.log('Measuring the time limit: leave this running. It stops on its own (up to 31 minutes); then run checkSetup.');
+  while (Date.now() - t0 < 31 * 60 * 1000) {
+    Utilities.sleep(15 * 1000);
+    var sec = Math.round((Date.now() - t0) / 1000);
+    props.setProperty('probe.timeLimit', JSON.stringify({ startedAt: t0, lastAt: Date.now(), seconds: sec }));
+    if (sec % 60 < 15) Logger.log('Still running after ' + sec + ' s');
+  }
+  props.deleteProperty('probe.timeLimit');
+  props.setProperty('RUNTIME_LIMIT_SECONDS', '1800');
+  Logger.log('Not stopped in 31 minutes: RUNTIME_LIMIT_SECONDS set to 1800 (30 minutes).');
+}
+
+/**
+ * After measureTimeLimit was stopped by Apps Script: its last heartbeat (every 15 s) is just under
+ * the limit, so the limit is saved rounded down to a whole minute (on the safe side).
+ */
+function finishTimeLimitProbe_() {
+  var probe = readJson_('probe.timeLimit');
+  if (!probe || Date.now() - probe.lastAt < 60 * 1000) return null;
+  var limit = probe.seconds >= 1700 ? 1800 : Math.max(60, Math.floor(probe.seconds / 60) * 60);
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('RUNTIME_LIMIT_SECONDS', String(limit));
+  props.deleteProperty('probe.timeLimit');
+  return limit;
+}
+
+/**
+ * The everyday case on its own (about 2 minutes): a Status and Note changed in By Class survive a
+ * plain update, in both By Class and By Day. Uses your row's Doc and TEST_CANVAS_TOKEN (kept).
+ */
+function selfTestEveryday() {
+  requireOwner_();
+  Logger.log("NOTE selfTestEveryday edits your planner Doc for about 2 minutes. Don't open or edit that Doc " +
+    'until it finishes: an edit there can change the result.');
+  var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
+  var row = null;
+  var held = false;
+  var t0 = Date.now();
+  var restore = null;
+  try {
+    if (!token) throw new Error('Add the TEST_CANVAS_TOKEN Script Property first.');
+    var schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD, undefined, courseExcludeKeywords_());
+    row = listStudents_().filter(function (s) {
+      return s.canvasUserId !== null && s.canvasUserId !== undefined && String(s.canvasUserId) === String(schedule.canvas_user_id);
+    })[0] || null;
+    if (!row || !row.docId) throw new Error("Add yourself as a student first (selfTestEveryday uses your row's Doc).");
+    if (!claimStudent_(row.id)) throw new Error('Your row is being updated right now. Run selfTestEveryday again in a few minutes.');
+    held = true;
+    var docId = row.docId;
+    var target = findFirstAssignmentRow_(docId);
+    if (!target) throw new Error('No assignments in the next ' + APP_WEEKS_AHEAD + ' weeks to test with.');
+    var before = findRowsByUrl_(docId, target.url);
+    var original = { status: normalizeStatus_(getCellText_(target.status)) || STATUS_DEFAULT, note: getCellText_(target.note) };
+    if (/^selfTest(Everyday)? note /.test(original.note)) original = { status: STATUS_DEFAULT, note: '' };
+    restore = { docId: docId, url: target.url, week: before.length ? before[0].weekKey : null, original: original };
+    var newStatus = original.status === 'Complete' ? 'In progress' : 'Complete';
+    var newNote = 'selfTestEveryday note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
+    writeStatusAndNote_(docId, target, newStatus, newNote);
+    PropertiesService.getScriptProperties().setProperty('busy.' + row.id, String(Date.now()));
+    startUpdateStats_();
+    writeDocWithRecovery_({ id: row.id, docId: docId }, schedule, { noDeadline: true });
+    var timing = updateStatsText_();
+    updateStats_ = null;
+    var rows = findRowsByUrl_(docId, target.url);
+    if (rows.length !== 2) throw new Error('Expected the assignment once in By Class and once in By Day, found ' + rows.length + ' rows.');
+    rows.forEach(function (r) {
+      if (r.status !== newStatus) throw new Error(r.table + ' Status is "' + r.status + '", expected "' + newStatus + '"');
+      if (r.note !== newNote) throw new Error(r.table + ' Notes lost the edit');
+    });
+    Logger.log('PASS A staff edit in By Class survives a plain update: "' + newStatus + '" and a note on "' +
+      target.title + '", kept in By Class and By Day. The update ' + timing);
+  } catch (err) {
+    Logger.log('FAIL A staff edit in By Class survives a plain update: ' + friendlyError_(err, token));
+  } finally {
+    if (restore) {
+      try {
+        restoreTestValues_(restore.docId, restore.url, restore.original);
+        Logger.log('PASS Clean-up: the test assignment\'s Status and Note are back to what they were');
+      } catch (err2) {
+        Logger.log('FAIL Clean-up: ' + friendlyError_(err2, token));
+      }
+    }
+    if (held) PropertiesService.getScriptProperties().deleteProperty('busy.' + row.id);
+    Logger.log('selfTestEveryday finished in ' + Math.round((Date.now() - t0) / 1000) + ' s (TEST_CANVAS_TOKEN kept).');
+  }
+}
+
+/** Puts a test assignment's Status and Note back in every row, and records them as written. */
+function restoreTestValues_(docId, url, original) {
+  // One row at a time, reading the Doc again each time (each edit moves the text after it).
+  for (var n = 0; n < 8; n++) {
+    var cells = rowCellsByUrl_(docId, url).filter(function (r) {
+      return getCellText_(r.status) !== original.status || getCellText_(r.note) !== original.note;
+    })[0];
+    if (!cells) break;
+    writeStatusAndNote_(docId, cells, original.status, original.note);
+  }
+  var rows = findRowsByUrl_(docId, url);
+  if (!rows.length) throw new Error('the test assignment is not in any week tab');
+  rows.forEach(function (r) {
+    if (r.status !== original.status || r.note !== original.note) throw new Error(r.table + ' still has the test values');
+  });
+  recordWritten_(docId, url, rows[0].weekKey, original.status, original.note);
+  return rows.length;
+}
+
 /** Full check with your own token; deletes TEST_CANVAS_TOKEN at the end. */
 function selfTest() {
   runSelfTest_(false);
@@ -891,6 +1068,8 @@ function selfTestKeepToken() {
 
 function runSelfTest_(keepToken) {
   requireOwner_();
+  Logger.log("NOTE selfTest edits your planner Doc for about 4 minutes. Don't open or edit that Doc " +
+    'until it finishes: an edit there can change the results.');
   var results = [];
   function check(name, fn) {
     try {
@@ -977,8 +1156,12 @@ function runSelfTest_(keepToken) {
       })[0] || null;
       if (!selfRow) return { skip: "you're not on the student list, so selfTest uses a Doc of its own" };
       if (!claimStudent_(selfRow.id)) {
+        var since = Number(PropertiesService.getScriptProperties().getProperty('busy.' + selfRow.id) || 0);
         selfRow = null;
-        throw new Error('Your row is being updated right now. Run selfTest again in a few minutes.');
+        throw new Error('Your row is being updated right now (held since ' +
+          Utilities.formatDate(new Date(since), APP_TIME_ZONE, 'h:mm:ss a') + '). Run selfTest again in a few ' +
+          'minutes. A hold lapses on its own ' + Math.round(APP_STUDENT_BUSY_MS / 60000) + ' minutes after it was set, ' +
+          'even if the update that set it stopped midway.');
       }
       held = true;
       return 'updates skip ' + selfRow.name + ' until selfTest finishes';
@@ -986,16 +1169,66 @@ function runSelfTest_(keepToken) {
     step('doc', ['folder', 'canvas', 'hold'], 'Doc: create or update yours in the shared folder', function () {
       var row = selfRow;
       selfStudent = { id: row ? row.id : 'selftest', docId: row && row.docId ? row.docId : findReusableDoc_(schedule.student_full_name, null) };
-      var how = row && row.docId ? "used your student row's Doc" : selfStudent.docId ? 'reused' : 'created';
+      // An existing Doc isn't updated here: the "normal update" below is a full update, and the
+      // layout checks run after it. That keeps selfTest well inside Apps Script's 6-minute limit.
+      if (selfStudent.docId) {
+        docId = selfStudent.docId;
+        assertDocIsInFolder_(docId, getDocsFolder_());
+        doc = docsGet_(docId, { includeTabsContent: true });
+        return (row && row.docId ? "your student row's Doc" : 'your Doc in the folder') +
+          ': https://docs.google.com/document/d/' + docId + '/edit';
+      }
       keepHold();
       var t0 = Date.now();
-      docId = writeDocWithRecovery_(selfStudent, schedule);
+      docId = writeDocWithRecovery_(selfStudent, schedule, { noDeadline: true });
       firstSeconds = Math.round((Date.now() - t0) / 1000);
       assertDocIsInFolder_(docId, getDocsFolder_());
       doc = docsGet_(docId, { includeTabsContent: true }); // full read: the Past weeks check looks inside
-      return how + ' in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
+      return 'created in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
     });
-    step('classes', ['doc'], 'Every class has its own By Class table in every week', function () {
+    step('type', ['doc'], 'Doc: type a test Status and Note into a By Class table', function () {
+      target = findFirstAssignmentRow_(docId);
+      if (!target) throw new Error('No assignments in the next ' + APP_WEEKS_AHEAD + ' weeks to test with.');
+      // What to put back at the end. A note left by an earlier selfTest counts as no note.
+      original = { status: normalizeStatus_(getCellText_(target.status)) || STATUS_DEFAULT, note: getCellText_(target.note) };
+      if (/^selfTest note /.test(original.note)) original = { status: STATUS_DEFAULT, note: '' };
+      testStatus = original.status === 'In progress' ? 'Complete' : 'In progress';
+      testNote = 'selfTest note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
+      writeStatusAndNote_(docId, target, testStatus, testNote);
+      return '"' + testStatus + '" and a note on "' + target.title + '"';
+    });
+    step('moved', ['type'], 'Doc: run an update with that assignment moved to another week (timed)', function () {
+      keepHold();
+      var from = weekKeyOfTab_(docsGet_(docId), target.tabId);
+      movedTo = Object.keys(schedule.weeks || {}).sort().filter(function (k) { return k !== from; })[0] || null;
+      startUpdateStats_();
+      writeDocWithRecovery_(selfStudent, movedTo ? scheduleWithMovedAssignment_(schedule, target.url, movedTo) : schedule, { noDeadline: true });
+      var timing = updateStatsText_();
+      updateStats_ = null;
+      return (movedTo ? 'moved from the week of ' + from + ' to ' + movedTo + '; ' : 'only one week, so not moved; ') + timing;
+    });
+    step('followed', ['moved'], 'Status and Note followed the assignment to its new week', function () {
+      var rows = findRowsByUrl_(docId, target.url);
+      if (rows.length < 2) throw new Error('Expected the assignment in both tables, found ' + rows.length + '.');
+      rows.forEach(function (r) {
+        if (movedTo && r.weekKey !== movedTo) throw new Error('found in the week of ' + r.weekKey + ', expected ' + movedTo);
+        if (r.status !== testStatus) throw new Error(r.table + ' Status is "' + r.status + '"');
+        if (r.note !== testNote) throw new Error(r.table + ' Notes is "' + r.note + '"');
+      });
+      return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
+    });
+    step('normal', ['doc'], 'Doc: run a normal update (the real due date again)', function () {
+      keepHold();
+      tabsBefore = weekTabsOf_(docsGet_(docId)).map(function (w) { return { title: w.title, id: w.tab.tabProperties.tabId }; });
+      startUpdateStats_();
+      writeDocWithRecovery_(selfStudent, schedule, { noDeadline: true });
+      var timing = updateStatsText_();
+      updateStats_ = null;
+      doc = docsGet_(docId, { includeTabsContent: true }); // full read for the layout checks below
+      var limit = Number(getScriptProperty_('RUNTIME_LIMIT_SECONDS'));
+      return timing + '. Time limit: ' + (limit >= 60 ? limit + ' s (measured)' : DEFAULT_RUNTIME_LIMIT_SECONDS + ' s (assumed; run measureTimeLimit)');
+    });
+    step('classes', ['normal'], 'Every class has its own By Class table in every week', function () {
       var weeks = currentWeeks();
       if (weeks.length !== Object.keys(schedule.weeks || {}).length) {
         throw new Error('Found ' + weeks.length + ' week tabs for the ' + Object.keys(schedule.weeks || {}).length + ' weeks with work due.');
@@ -1010,7 +1243,7 @@ function runSelfTest_(keepToken) {
       });
       return weeks.length + ' week tabs × ' + plannerCourseList_(schedule).length + ' classes';
     });
-    step('empty', ['doc'], 'A class with nothing due shows "' + NO_ASSIGNMENTS_TEXT + '"', function () {
+    step('empty', ['normal'], 'A class with nothing due shows "' + NO_ASSIGNMENTS_TEXT + '"', function () {
       var seen = 0;
       currentWeeks().forEach(function (w) {
         tablesOfTab_(w).forEach(function (t) {
@@ -1023,7 +1256,7 @@ function runSelfTest_(keepToken) {
       });
       return seen ? seen + ' empty class tables, each with the single row' : { skip: 'every class had work due in every week' };
     });
-    step('plain', ['doc'], 'Status is plain text (no symbols) everywhere', function () {
+    step('plain', ['normal'], 'Status is plain text (no symbols) everywhere', function () {
       var n = 0;
       currentWeeks().forEach(function (w) {
         tablesOfTab_(w).forEach(function (t) {
@@ -1038,7 +1271,7 @@ function runSelfTest_(keepToken) {
       });
       return n + ' Status cells checked';
     });
-    step('widths', ['doc'], 'All By Class tables share one set of column widths, By Day another, all full width', function () {
+    step('widths', ['normal'], 'All By Class tables share one set of column widths, By Day another, all full width', function () {
       var full = null;
       var sets = { 'By Class': {}, 'By Day': {} };
       currentWeeks().forEach(function (w) {
@@ -1056,7 +1289,7 @@ function runSelfTest_(keepToken) {
       });
       return 'By Class ' + Object.keys(sets['By Class'])[0] + ' | By Day ' + Object.keys(sets['By Day'])[0] + ' (pt)';
     });
-    step('help', ['doc'], 'The Status/Notes help line is on every week tab', function () {
+    step('help', ['normal'], 'The Status/Notes help line is on every week tab', function () {
       var tabs = currentWeeks();
       tabs.forEach(function (w) {
         var body = w.tab && w.tab.documentTab && w.tab.documentTab.body;
@@ -1064,7 +1297,7 @@ function runSelfTest_(keepToken) {
       });
       return tabs.length + ' tabs';
     });
-    step('home', ['doc'], 'Home tab: name, last updated, this-week summary and class table', function () {
+    step('home', ['normal'], 'Home tab: name, last updated, this-week summary and class table', function () {
       var home = findTabJsonById_(doc, findRootTabIdByTitle_(doc, PARENT_TAB_TITLE));
       var body = home && home.documentTab && home.documentTab.body;
       if (!body) throw new Error('No CLC Planner tab.');
@@ -1092,7 +1325,7 @@ function runSelfTest_(keepToken) {
       }
       return expected.name + '; ' + updated + '; ' + week + '; ' + expected.rows.length + ' classes';
     });
-    step('past', ['doc'], 'Past weeks: ended weeks are filed under "Past weeks", newest first', function () {
+    step('past', ['normal'], 'Past weeks: ended weeks are filed under "Past weeks", newest first', function () {
       var parent = findTabJsonById_(doc, findRootTabIdByTitle_(doc, PARENT_TAB_TITLE));
       var today = Utilities.formatDate(new Date(), APP_TIME_ZONE, 'yyyy-MM-dd');
       var stray = endedWeekTabs_(parent, today);
@@ -1112,48 +1345,6 @@ function runSelfTest_(keepToken) {
       (past.childTabs || []).forEach(function (t) { grayCells += assertPriorityGray_(t); });
       return keys.length + ' past week' + (keys.length === 1 ? '' : 's') + ', newest first; ' +
         grayCells + ' Priority cells gray';
-    });
-    step('type', ['doc'], 'Doc: type a test Status and Note into a By Class table', function () {
-      target = findFirstAssignmentRow_(docId);
-      if (!target) throw new Error('No assignments in the next ' + APP_WEEKS_AHEAD + ' weeks to test with.');
-      // What to put back at the end. A note left by an earlier selfTest counts as no note.
-      original = { status: normalizeStatus_(getCellText_(target.status)) || STATUS_DEFAULT, note: getCellText_(target.note) };
-      if (/^selfTest note /.test(original.note)) original = { status: STATUS_DEFAULT, note: '' };
-      testStatus = original.status === 'In progress' ? 'Complete' : 'In progress';
-      testNote = 'selfTest note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
-      writeStatusAndNote_(docId, target, testStatus, testNote);
-      return '"' + testStatus + '" and a note on "' + target.title + '"';
-    });
-    step('moved', ['type'], 'Doc: run an update with that assignment moved to another week (timed)', function () {
-      keepHold();
-      var from = weekKeyOfTab_(docsGet_(docId), target.tabId);
-      movedTo = Object.keys(schedule.weeks || {}).sort().filter(function (k) { return k !== from; })[0] || null;
-      var t0 = Date.now();
-      writeDocWithRecovery_(selfStudent, movedTo ? scheduleWithMovedAssignment_(schedule, target.url, movedTo) : schedule);
-      var s = Math.round((Date.now() - t0) / 1000);
-      if (s * 1000 > 6 * 60 * 1000 - APP_BATCH_BUDGET_MS) {
-        throw new Error('took ' + s + ' s: too close to the 6-minute limit for the 2-minute batch budget');
-      }
-      return (movedTo ? 'moved from the week of ' + from + ' to ' + movedTo + '; ' : 'only one week, so not moved; ') +
-        'took ' + s + ' s (first write ' + firstSeconds + ' s; each student must fit in the ' +
-        (6 * 60 - APP_BATCH_BUDGET_MS / 1000) + ' s left after the batch budget)';
-    });
-    step('followed', ['moved'], 'Status and Note followed the assignment to its new week', function () {
-      var rows = findRowsByUrl_(docId, target.url);
-      if (rows.length < 2) throw new Error('Expected the assignment in both tables, found ' + rows.length + '.');
-      rows.forEach(function (r) {
-        if (movedTo && r.weekKey !== movedTo) throw new Error('found in the week of ' + r.weekKey + ', expected ' + movedTo);
-        if (r.status !== testStatus) throw new Error(r.table + ' Status is "' + r.status + '"');
-        if (r.note !== testNote) throw new Error(r.table + ' Notes is "' + r.note + '"');
-      });
-      return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
-    });
-    step('normal', ['doc'], 'Doc: run a normal update (the real due date again)', function () {
-      keepHold();
-      tabsBefore = weekTabsOf_(docsGet_(docId)).map(function (w) { return { title: w.title, id: w.tab.tabProperties.tabId }; });
-      var t0 = Date.now();
-      writeDocWithRecovery_(selfStudent, schedule);
-      return 'took ' + Math.round((Date.now() - t0) / 1000) + ' s';
     });
     step('rebuilt', ['normal'], 'Existing week tabs were rebuilt in place: same titles and order, all titles unique, no "(updating)" tab left', function () {
       var now = docsGet_(docId);
@@ -1184,44 +1375,9 @@ function runSelfTest_(keepToken) {
       });
       return 'week of ' + rows[0].weekKey;
     });
-    step('everyday', ['cameback'], 'A staff edit in By Class (Status and Note) survives a plain update', function () {
-      // Apps Script stops any run at 6 minutes; leave room for the clean-up after this update.
-      if (Date.now() - selfTestStart > 270 * 1000) {
-        return { skip: 'not enough time left in this run (' + Math.round((Date.now() - selfTestStart) / 1000) + ' s so far); run selfTest again' };
-      }
-      var row = rowCellsByUrl_(docId, target.url).filter(function (r) { return r.kind === 'By Class'; })[0];
-      if (!row) throw new Error('the test assignment has no By Class row');
-      var newStatus = testStatus === 'Complete' ? 'In progress' : 'Complete';
-      var newNote = testNote + ' (edited)';
-      writeStatusAndNote_(docId, row, newStatus, newNote);
-      keepHold();
-      writeDocWithRecovery_(selfStudent, schedule);
-      var rows = findRowsByUrl_(docId, target.url);
-      if (rows.length !== 2) throw new Error('Expected the assignment once in By Class and once in By Day, found ' + rows.length + ' rows.');
-      rows.forEach(function (r) {
-        if (r.status !== newStatus) throw new Error(r.table + ' Status is "' + r.status + '", expected "' + newStatus + '"');
-        if (r.note !== newNote) throw new Error(r.table + ' Notes lost the edit');
-      });
-      return '"' + testStatus + '" → "' + newStatus + '" and a changed note, kept in both tables (' +
-        Math.round((Date.now() - selfTestStart) / 1000) + ' s into selfTest)';
-    });
     step('cleanup', ['type'], "Clean-up: the test assignment's Status and Note are back to what they were", function () {
-      // One row at a time, reading the Doc again each time (each edit moves the text after it).
-      for (var n = 0; n < 8; n++) {
-        var row = rowCellsByUrl_(docId, target.url).filter(function (r) {
-          return getCellText_(r.status) !== original.status || getCellText_(r.note) !== original.note;
-        })[0];
-        if (!row) break;
-        writeStatusAndNote_(docId, row, original.status, original.note);
-      }
-      var rows = findRowsByUrl_(docId, target.url);
-      if (!rows.length) throw new Error('the test assignment is not in any week tab');
-      rows.forEach(function (r) {
-        if (r.status !== original.status || r.note !== original.note) throw new Error(r.table + ' still has the test values');
-      });
-      // Recorded as written, so the next update (and the next selfTest) starts clean.
-      recordWritten_(docId, target.url, rows[0].weekKey, original.status, original.note);
-      return '"' + original.status + '"' + (original.note ? ' and its note' : ' and no note') + ' back in ' + rows.length + ' rows';
+      var n = restoreTestValues_(docId, target.url, original);
+      return '"' + original.status + '"' + (original.note ? ' and its note' : ' and no note') + ' back in ' + n + ' rows';
     });
     step('trashed', ['folder'], 'A Doc in the trash is never written to (so the student gets a fresh Doc)', function () {
       // A throwaway Doc in your My Drive, trashed at once; Google empties the trash after 30 days.
@@ -1401,7 +1557,7 @@ function rowCellsByUrl_(docId, url) {
       (el.table.tableRows || []).forEach(function (row) {
         var cells = row.tableCells || [];
         if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
-          rows.push({ tabId: w.tab.tabProperties.tabId, kind: tableKind_(el.table), status: cells[4], note: cells[5] });
+          rows.push({ tabId: w.tab.tabProperties.tabId, url: url, kind: tableKind_(el.table), status: cells[4], note: cells[5] });
         }
       });
     });

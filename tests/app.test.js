@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createSandbox, toPlain, REPO_ROOT } = require('./helpers/gas-sandbox');
 const { fakeServices } = require('./helpers/gas-services');
+const { fakeDocs, withRendering, copiesOf, staffTypes } = require('./helpers/fake-docs');
 
 const OWNER = 'owner@pomfret.org';
 const STAFF = 'staff@pomfret.org';
@@ -75,8 +76,8 @@ test('only the intended functions are callable from the page (no trailing unders
     for (const m of src.matchAll(/^function (\w+)\(/gm)) if (!m[1].endsWith('_')) publicNames.push(m[1]);
   }
   assert.deepStrictEqual(publicNames.sort(), [
-    'addStudent', 'checkSetup', 'continueRun', 'doGet', 'editStudent', 'getAppState', 'getRunStatus',
-    'removeStudent', 'scheduleTestRun', 'scheduledRun', 'selfTest', 'selfTestKeepToken', 'setupTriggers',
+    'addStudent', 'checkSetup', 'continueRun', 'doGet', 'editStudent', 'getAppState', 'getRunStatus', 'measureTimeLimit',
+    'removeStudent', 'scheduleTestRun', 'scheduledRun', 'selfTest', 'selfTestEveryday', 'selfTestKeepToken', 'setupTriggers',
     'startUpdateAll', 'updateStudentNow',
   ].sort());
 });
@@ -436,7 +437,63 @@ test('if a batch is cut off mid-student, the safety trigger records it and carri
   const last = JSON.parse(t.svc.props['run.last']);
   assert.strictEqual(last.total, 2);
   assert.strictEqual(last.updated, 1);
-  assert.match(last.failed[0].message, /longer than Apps Script allows/);
+  assert.match(last.failed[0].message, /^Was stopped partway by Apps Script's time limit\. It will be tried again at the next update\.$/);
+});
+
+test('batches use the real time limit: the safety trigger fires after it, and a student who would not fit waits for the next batch', () => {
+  const t = setup({ RUNTIME_LIMIT_SECONDS: '1800' });
+  addAs(t, STAFF, TOKEN_A, '');
+  addAs(t, STAFF, TOKEN_B, '');
+  // Pretend 23 minutes of a 30-minute limit are gone after the first student, and the next one
+  // usually takes 6 minutes: they shouldn't start in this batch even inside the 2-minute budget.
+  t.ctx.APP_BATCH_BUDGET_MS = 60 * 60 * 1000;
+  const second = JSON.parse(t.svc.props[Object.keys(t.svc.props).filter((k) => k.indexOf('student.') === 0).sort()[1]]);
+  second.lastSeconds = 360;
+  t.svc.props['student.' + second.id] = JSON.stringify(second);
+  let calls = 0;
+  const realLeft = t.ctx.msLeftInExecution_;
+  t.ctx.msLeftInExecution_ = () => (++calls > 0 ? 7 * 60 * 1000 : realLeft());
+  const res = toPlain(t.ctx.startUpdateAll());
+  assert.strictEqual(res.run.done, 1, 'stopped after the first student');
+  const triggers = t.svc.triggers.filter((x) => x.handler === 'continueRun');
+  assert.deepStrictEqual(triggers.map((x) => x.config.after), [60 * 1000], 'the next batch, a minute later');
+  // With 30 minutes left they'd fit; the safety trigger is set to the limit plus 2 minutes.
+  t.ctx.msLeftInExecution_ = () => 30 * 60 * 1000;
+  t.ctx.continueRun({ triggerUid: triggers[0].uid });
+  assert.strictEqual(JSON.parse(t.svc.props['run.last']).updated, 2);
+  const u = setup({ RUNTIME_LIMIT_SECONDS: '1800' });
+  addAs(u, STAFF, TOKEN_A, '');
+  u.ctx.updateOneStudent_ = () => { throw new Error('Exceeded maximum execution time'); };
+  assert.throws(() => u.ctx.startUpdateAll());
+  assert.strictEqual(u.svc.triggers.find((x) => x.handler === 'continueRun').config.after, 32 * 60 * 1000);
+});
+
+test('measureTimeLimit: once Apps Script has stopped it, checkSetup saves the limit (rounded down to a minute)', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  t.svc.props['probe.timeLimit'] = JSON.stringify({ startedAt: Date.now() - 400000, lastAt: Date.now() - 90000, seconds: 345 });
+  t.ctx.checkSetup();
+  assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '300');
+  assert.ok(!t.svc.props['probe.timeLimit']);
+  assert.match(t.sb.logs.join('\n'), /Apps Script time limit: 300 s per run \(measured\)/);
+  t.svc.props['probe.timeLimit'] = JSON.stringify({ startedAt: Date.now() - 1900000, lastAt: Date.now() - 90000, seconds: 1785 });
+  t.ctx.checkSetup();
+  assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '1800');
+  // Still running: nothing saved yet.
+  t.svc.props['probe.timeLimit'] = JSON.stringify({ startedAt: Date.now() - 100000, lastAt: Date.now() - 5000, seconds: 95 });
+  t.ctx.checkSetup();
+  assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '1800');
+  assert.match(t.sb.logs.join('\n'), /measureTimeLimit is still running/);
+});
+
+test('a student whose update stopped between weeks (time running out) is told so on their row, and their time is kept', () => {
+  const t = setup();
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.upsertPlannerDocument_ = (payload) => ({ docUrl: 'u', documentId: payload.documentId || 'DOC-A', weeksDone: 2, weeksTotal: 4 });
+  const r = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.strictEqual(r.last.ok, true);
+  assert.strictEqual(r.last.message, 'Updated 2 of 4 weeks: Google Docs was slow, so the other weeks will be updated at the next update (their Status and Notes are kept).');
+  assert.ok(Number.isInteger(JSON.parse(t.svc.props['student.' + student.id]).lastSeconds));
 });
 
 test('setupTriggers installs 7 pm and midnight New York triggers, idempotently, and removes the old secret', () => {
@@ -523,7 +580,8 @@ test("selfTest uses your student row's Doc when you're on the list (no second co
   t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [] }] });
   t.ctx.selfTestKeepToken();
   assert.deepStrictEqual(calls[0], { id: student.id, docId: 'MY-DOC' });
-  assert.match(t.sb.logs.join('\n'), /PASS Doc: create or update yours in the shared folder: used your student row's Doc/);
+  assert.match(t.sb.logs.join('\n'), /PASS Doc: create or update yours in the shared folder: your student row's Doc: https:\/\/docs\.google\.com\/document\/d\/MY-DOC\/edit/);
+  assert.match(t.sb.logs[0], /^NOTE selfTest edits your planner Doc for about 4 minutes\. Don't open or edit that Doc until it finishes/);
   assert.match(t.sb.logs.join('\n'), /PASS Not authorized page: the CLC-staff message, and no data or actions/);
 });
 
@@ -571,9 +629,108 @@ test("selfTest holds your row: updates skip it meanwhile, and selfTest stops ear
   let wrote = false;
   t.ctx.writeDocWithRecovery_ = () => { wrote = true; return 'DOC-SELF'; };
   t.ctx.selfTestKeepToken();
-  assert.match(t.sb.logs.join('\n'), /FAIL Your row is held for selfTest[^\n]*: Your row is being updated right now\. Run selfTest again in a few minutes\./);
+  assert.match(t.sb.logs.join('\n'), /FAIL Your row is held for selfTest[^\n]*: Your row is being updated right now \(held since [0-9:]+ [AP]M\)\. Run selfTest again in a few minutes\. A hold lapses on its own 7 minutes after it was set, even if the update that set it stopped midway\./);
   assert.strictEqual(wrote, false);
   void u;
+});
+
+// The real Doc writer and selfTest on the fake Docs API (the other App tests replace the writer).
+function liveSetup() {
+  const svc = fakeServices({ owner: OWNER, active: STAFF, props: { ALLOWED_USERS: `${OWNER}, ${STAFF}`, DOCS_FOLDER_ID: 'FOLDER123', TEST_CANVAS_TOKEN: TOKEN_A } });
+  const sb = createSandbox({ files: ['apps_script/Code.gs', 'apps_script/Canvas.gs', 'apps_script/App.gs'], globals: svc.globals });
+  const ctx = sb.context;
+  const docs = fakeDocs([{ tabProperties: { tabId: 't.0', title: 'CLC Planner' },
+    documentTab: { body: { content: [{ startIndex: 1, endIndex: 2, paragraph: { elements: [{ startIndex: 1, endIndex: 2, textRun: { content: '\n' } }] } }] } }, childTabs: [] }]);
+  ctx.Docs = docs.service;
+  ctx.DocumentApp = { openById: (id) => ({ setName: () => {}, getUrl: () => 'https://docs/' + id }), create: () => { throw new Error('no new Docs here'); } };
+  ctx.sleepDocsChunkGap_ = () => {};
+  withRendering({ ctx }, docs);
+  const u = (n) => 'https://pomfret.instructure.com/courses/1/assignments/' + n;
+  const item = (n, name, week) => ({ day: 'Monday', assignment: name, course: 'Biology', due_time: '8:30 AM', priority: 'Upcoming', days_until_due: 9, due_date: week, week_start: week, url: u(n) });
+  ctx.fetchCanvasProfile_ = () => CANVAS[TOKEN_A];
+  ctx.fetchCanvasTokenExpiry_ = () => null;
+  ctx.fetchStudentSchedule_ = () => ({
+    student_full_name: 'Avery Example', canvas_user_id: 101, total_assignments: 3, generated_at: 'x', courses: ['Biology'],
+    weeks: {
+      '2099-01-05': { week_label: 'Jan 5 – Jan 11', days: [{ day: 'Monday', assignments: [item(1, 'X', '2099-01-05'), item(2, 'Y', '2099-01-05')] }] },
+      '2099-01-12': { week_label: 'Jan 12 – Jan 18', days: [{ day: 'Monday', assignments: [item(3, 'Z', '2099-01-12')] }] },
+    },
+  });
+  // selfTest edits cells by position; the fake has no positions, so edits go by tab, link and table.
+  ctx.writeStatusAndNote_ = (docId, target, status, note) => {
+    const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.tabId === target.tabId);
+    staffTypes(docs, tab.tabProperties.title, target.url, target.kind === 'By Day' ? 'day' : 'class', status, note);
+  };
+  svc.setActive(STAFF);
+  const student = toPlain(ctx.addStudent(TOKEN_A, 'Demo')).student;
+  const rec = JSON.parse(svc.props['student.' + student.id]);
+  rec.docId = 'DOC1';
+  svc.props['student.' + student.id] = JSON.stringify(rec);
+  svc.addFile('DOC1', 'Avery Example - CLC Assignments', 'FOLDER123');
+  ctx.updateStudentNow(student.id); // the Doc as the real writer makes it
+  svc.setActive(OWNER);
+  return { svc, sb, ctx, docs, X: u(1), student };
+}
+
+test('selfTestEveryday (real code, fake Docs API): the By Class edit survives a plain update, then everything is put back', () => {
+  const { sb, ctx, docs, X, svc, student } = liveSetup();
+  ctx.selfTestEveryday();
+  const log = sb.logs.join('\n');
+  assert.match(sb.logs[0], /^NOTE selfTestEveryday edits your planner Doc for about 2 minutes/);
+  assert.match(log, /PASS A staff edit in By Class survives a plain update: "Complete" and a note on "X", kept in By Class and By Day/);
+  assert.match(log, /PASS Clean-up/);
+  assert.match(log, /selfTestEveryday finished in \d+ s \(TEST_CANVAS_TOKEN kept\)/);
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']]);
+  assert.ok(!svc.props['busy.' + student.id], 'hold released');
+  assert.ok(svc.props.TEST_CANVAS_TOKEN, 'token kept');
+});
+
+test('selfTest (real code, fake Docs API): two runs in a row pass the type, move, come-back and clean-up checks', () => {
+  const { sb, ctx, docs, X } = liveSetup();
+  for (const run of [1, 2]) {
+    sb.logs.length = 0;
+    ctx.selfTestKeepToken();
+    const log = sb.logs.join('\n');
+    for (const name of ['Your row is held for selfTest', 'Doc: create or update yours in the shared folder', 'Doc: type a test Status and Note',
+      'Status and Note followed the assignment to its new week', 'Doc: run a normal update', 'Existing week tabs were rebuilt in place',
+      'Status and Note came back with it, in exactly one week tab', 'Clean-up']) {
+      assert.match(log, new RegExp('PASS ' + name.replace(/[()]/g, '\\$&')), 'run ' + run + ': ' + name + '\n' + log);
+    }
+    assert.ok(log.indexOf('PASS Doc: run a normal update') < log.indexOf('Every class has its own By Class table'), 'layout checks come after the update');
+    assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']], 'run ' + run + ' cleaned up');
+  }
+});
+
+test('Drive says "Invalid argument" about a Doc: no new Doc the first time; a new one only when an update 4+ hours later agrees', () => {
+  const t = setup();
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.updateStudentNow(student.id);
+  const oldId = JSON.parse(t.svc.props['student.' + student.id]).docId;
+  t.ctx.DriveApp.getFileById = (id) => { if (id === oldId) throw new Error('Exception: Invalid argument: id'); throw new Error('No item with the given ID could be found'); };
+  const writes = [];
+  t.ctx.upsertPlannerDocument_ = (payload) => {
+    if (payload.documentId) t.ctx.savedDocFile_(payload.documentId);
+    writes.push(payload.documentId || 'new');
+    return { docUrl: 'u', documentId: payload.documentId || 'FRESH-DOC' };
+  };
+  const first = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.deepStrictEqual(writes, [], 'no new Doc yet');
+  assert.match(first.last.message, /^Google Drive couldn't find this student's Doc just now\. If it is still missing at an update 4 or more hours from now, AutoPlanner will make a new one\.$/);
+  // An hour later: still waiting.
+  const rec = JSON.parse(t.svc.props['student.' + student.id]);
+  rec.docUnsureSince = new Date(Date.now() - 1 * 3600 * 1000).toISOString();
+  t.svc.props['student.' + student.id] = JSON.stringify(rec);
+  t.ctx.updateStudentNow(student.id);
+  assert.deepStrictEqual(writes, []);
+  // Five hours after the first miss (the next scheduled update): it's gone, so a new Doc.
+  const rec2 = JSON.parse(t.svc.props['student.' + student.id]);
+  rec2.docUnsureSince = new Date(Date.now() - 5 * 3600 * 1000).toISOString();
+  t.svc.props['student.' + student.id] = JSON.stringify(rec2);
+  const after = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.deepStrictEqual(writes, ['new']);
+  assert.match(after.docUrl, /FRESH-DOC/);
+  assert.strictEqual(after.notice.message, 'Their Doc was deleted, so AutoPlanner made a new one.');
+  assert.ok(!JSON.parse(t.svc.props['student.' + student.id]).docUnsureSince, 'cleared once it worked');
 });
 
 test("selfTest's gray check: passes when a past week's Priority cells are gray, fails when one isn't", () => {

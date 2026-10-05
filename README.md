@@ -40,7 +40,10 @@ Time-driven triggers (7 pm, midnight) → App.gs → same path, in batches
 
 - **Web app:** executes as the owner (`USER_DEPLOYING`) and is open to **Anyone within Pomfret School** (`DOMAIN`). On top of that, every function the page can call checks the visitor's email (`Session.getActiveUser()`) against the `ALLOWED_USERS` Script Property.
 - **Storage:** the student list, tokens and run summaries live in **Script Properties**, one property per student, with writes protected by `LockService`. Tokens never leave the server: the page only ever gets the last 4 characters, and tokens are never logged or put in messages.
-- **Long runs:** Apps Script stops any run at 6 minutes, and one student's Doc takes about 2 minutes. A run therefore starts no new student after 2 minutes; if students are left, it schedules `continueRun` a minute later. A safety trigger resumes a run whose batch was cut off.
+- **Long runs:** Apps Script stops any run at the account's time limit (6 minutes by default; `measureTimeLimit` measures the real one and saves it in `RUNTIME_LIMIT_SECONDS`). One student's Doc takes about 2–4 minutes.
+  - A batch starts no new student after 2 minutes, nor one whose last update time wouldn't fit in what's left; it then schedules `continueRun` a minute later.
+  - Inside an update, a week is rebuilt only if it fits before the limit; otherwise the update stops cleanly between weeks and the rest is done next time.
+  - A safety trigger, set to fire after the limit has passed, resumes a run whose batch was cut off.
 - **Existing Docs:** when a student is added again, AutoPlanner finds their "First Last - CLC Assignments" Doc in the shared folder and reuses it.
 
 ## Repository layout
@@ -94,17 +97,23 @@ Only needed for a brand-new project, for example to move AutoPlanner to a CLC st
 
    Properties named `student.*`, `token.*`, `busy.*`, `run.*` and `trigger.*` are written by the app. Don't edit them by hand.
 4. In the editor, open **App.gs** (the function menu only lists functions from the open file). Run **setupTriggers** and approve the permissions. It installs the daily updates and logs a setup check.
-5. Run **selfTest**. Using your own token, it:
+5. Run **selfTest** (about 4 minutes). Don't open or edit your planner Doc while it runs. Using your own token, it:
    - fetches your Canvas assignments
-   - creates or reuses your Doc in the folder
-   - types a test Status and Note, runs an update, and checks both survived in both tables
+   - creates or reuses your Doc in the folder, and holds your student row so no other update writes it meanwhile
+   - types a test Status and Note, moves that assignment to another week and back with two updates, and checks both followed it, in both tables, in exactly one week tab
+   - checks the layout after a full update, then puts the test assignment's Status and Note back
 
-   Every line of the log should say `PASS`.
+   Every line of the log should say `PASS` (a `SKIP` says why it skipped).
+
+   Each update's line shows where its time went (Doc reads, writes, pauses, each week).
+
+   **selfTestEveryday** (about 2 minutes) checks the everyday case on its own: a Status and Note changed in By Class survive a plain update, in both tables. It keeps `TEST_CANVAS_TOKEN`.
 6. **Deploy → New deployment →** ⚙ **Web app**. Set **Execute as: Me** and **Who has access: Anyone within Pomfret School**, then click **Deploy**.
 
 Other functions you can run from the editor (they only run for the owner):
 - **checkSetup** logs the current setup.
 - **scheduleTestRun** schedules one extra update about 5 minutes from now, to test the automatic updates. The daily triggers are not touched.
+- **measureTimeLimit** finds this account's real Apps Script time limit. Run it once and leave it; it stops on its own (up to 31 minutes). Then run **checkSetup**, which saves the result in `RUNTIME_LIMIT_SECONDS`.
 
 ## Tests
 
@@ -133,7 +142,7 @@ A test fails if a new public function appears.
 ## Limits
 
 Google Workspace limits that matter here:
-- 6 minutes per run (hence the batches)
+- the per-run time limit (6 minutes by default; measure it with `measureTimeLimit`)
 - 6 hours of trigger runtime per day
 - 100,000 Canvas requests per day
 - 20 triggers per user per script

@@ -51,7 +51,8 @@ Hand out the quick start and token guides. "If anything looks wrong, email Cayde
 | "Canvas tokens expiring: …" under **Update all students now** | Those tokens expire within two weeks (Pomfret limits tokens to about 90 days). | Ask those students for new tokens before then, and renew them the same way. |
 | "That token belongs to …" / "now belongs to a different Canvas user" | Someone else's token was pasted on this row. | Paste this student's own token, or use **Add student** for the other one. |
 | "Google is limiting how fast Docs can be edited" | Google's per-minute limit on Doc edits. | Nothing; it's retried at the next update. Don't click Update repeatedly. |
-| "Took longer than Apps Script allows" | A very large planner ran past Google's 6-minute limit. | It's retried at the next update; tell the club if it keeps happening. |
+| "Updated 2 of 4 weeks: Google Docs was slow…" | Google was slow, so the update stopped between weeks instead of running out of time. | Nothing; the other weeks are updated next time. |
+| "Was stopped partway by Apps Script's time limit" | A very large planner ran past Google's time limit. | It's retried at the next update; tell the club if it keeps happening. |
 | "AutoPlanner only updates Docs in the … folder" | The student's Doc was moved out of the shared folder. | Move it back into **AutoPlanner – CLC Student Planners**, then click **Update**. |
 | A week's tab is gone from under **CLC Planner** | The week ended. | Open **Past weeks**: it's there, with its Status and Notes (and a gray Priority column). |
 | "Their Doc was deleted, so AutoPlanner made a new one." | Someone deleted the student's Doc. | Nothing; the new Doc is in the shared folder. The old one is in the owner's Drive trash for 30 days. |
