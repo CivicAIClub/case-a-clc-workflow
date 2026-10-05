@@ -230,6 +230,7 @@ function getDocsFolder_() {
   try {
     folder = DriveApp.getFolderById(id);
   } catch (err) {
+    if (!DRIVE_NOT_FOUND.test(String(err))) throw err; // a Drive hiccup: shown as a temporary problem
     throw new Error(
       "DOCS_FOLDER_ID is set, but this account cannot open that Drive folder. It may have been " +
         'deleted, or AutoPlanner\'s owner lost access to it. Contact Cayden Auyang or Luke Ryan.'
@@ -246,6 +247,9 @@ function getDocsFolder_() {
 
 // App.gs looks for this text to make a fresh Doc when the saved one is gone.
 var DOC_GONE_PREFIX = 'Could not open the saved Google Doc';
+// What Drive says when a file or folder doesn't exist (or this account can't see it). Any other
+// error is a hiccup, and must never make AutoPlanner start a new Doc.
+var DRIVE_NOT_FOUND = /No item with the given ID|Unexpected error while getting the method or property get(File|Folder)ById|do not have permission|Access denied/i;
 
 /**
  * The saved Doc's Drive file. Throws an error starting with DOC_GONE_PREFIX when the Doc is in the
@@ -262,6 +266,9 @@ function savedDocFile_(docId) {
       lastErr = err;
       if (attempt === 0) Utilities.sleep(2000);
     }
+  }
+  if (!file && !DRIVE_NOT_FOUND.test(String(lastErr))) {
+    throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
   }
   if (!file) throw new Error(DOC_GONE_PREFIX + ' (' + docId + '): ' + lastErr);
   if (file.isTrashed()) throw new Error(DOC_GONE_PREFIX + ' (' + docId + '): it is in the trash.');
@@ -316,10 +323,13 @@ function upsertPlannerDocument_(data) {
 
   var parentTabId = prepareParentTab_(docId, isNew);
   // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
-  archivePastWeeks_(docId, parentTabId, Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd'));
+  var today = Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
+  archivePastWeeks_(docId, parentTabId, today);
 
   var weeks = data.weeks || {};
-  var weekKeys = Object.keys(weeks).sort();
+  // Never write a week that has ended (an update running across Sunday midnight would otherwise
+  // make a blank copy of the week it just filed).
+  var weekKeys = Object.keys(weeks).sort().filter(function (k) { return k >= scheduleWeekStart_(today); });
   // Every class gets a table each week, in the same color every week.
   var courses = plannerCourseList_(data);
   var colorMap = buildCourseColorMap_(courses);
@@ -590,12 +600,14 @@ function archiveMoveRequests_(ended, pastId) {
  */
 function collectSavedData_(parentTabJson) {
   var result = { notes: {}, status: {} };
-  ((parentTabJson && parentTabJson.childTabs) || []).map(function (t) {
-    return { key: weekKeyFromTabTitle_((t.tabProperties || {}).title), tab: t };
+  ((parentTabJson && parentTabJson.childTabs) || []).map(function (t, i) {
+    return { key: weekKeyFromTabTitle_((t.tabProperties || {}).title), tab: t, i: i };
   }).filter(function (w) {
     return w.key;
   }).sort(function (a, b) {
-    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+    // Two copies of one week (an update stopped mid-rebuild): the top one, which staff see and
+    // edit, is read last, so its values win.
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : b.i - a.i;
   }).forEach(function (w) {
     var d = readExistingDataFromTab_(w.tab);
     Object.keys(d.status).forEach(function (url) {
@@ -1193,11 +1205,12 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
 
   var parentJson = findTabJsonById_(docProbe, parentTabId);
   if (tabBodyHasHeavyContent_(tabProbe) || !clearTabBodyDocsApi_(docId, tabId)) {
-    // Write a new tab just above the old one, and delete the old one only once the new one is
-    // complete: if an update stops halfway, the old tab, with its Status and Notes, is still there.
+    // Write a new tab just below the old one, and delete the old one only once the new one is
+    // complete: if an update stops halfway, the old tab, with its Status and Notes, is still there
+    // and still the first one staff see (and the one the home tab links to).
     var kids = parentJson.childTabs || [];
     var at = kids.map(function (t) { return t.tabProperties.tabId; }).indexOf(tabId);
-    tabId = addWeekChildTab_(docId, parentTabId, tabTitle, at >= 0 ? at : nextChildTabInsertIndex_(parentJson));
+    tabId = addWeekChildTab_(docId, parentTabId, tabTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
     sleepDocsChunkGap_();
   }
 

@@ -652,7 +652,7 @@ function recordResult_(runId, result) {
     if (result.ok) run.updated++;
     else if (result.skipped && result.message === 'That student was removed.') run.total--;
     else if (run.failed.length < APP_MAX_FAILURES_KEPT) {
-      run.failed.push({ name: result.name || 'A student', message: String(result.message || '').substring(0, 150) });
+      run.failed.push({ name: result.name || 'A student', message: String(result.message || '').substring(0, 200) });
     } else {
       run.moreFailed = (run.moreFailed || 0) + 1;
     }
@@ -673,7 +673,7 @@ function finishRun_(runId) {
       total: run.total,
       updated: run.updated,
       failed: run.failed.slice(0, APP_MAX_FAILURES_KEPT).map(function (f) {
-        return { name: f.name, message: String(f.message || '').substring(0, 150) };
+        return { name: f.name, message: String(f.message || '').substring(0, 200) };
       }),
       moreFailed: run.moreFailed || 0,
     };
@@ -1095,7 +1095,9 @@ function runSelfTest_(keepToken) {
         return false;
       };
       if (!refused(temp.getId())) throw new Error('a trashed Doc was opened for writing');
-      if (!refused('no-such-doc-' + Utilities.getUuid())) throw new Error('a missing Doc was not reported as gone');
+      // A made-up ID shaped like a real one (44 characters), for a Doc that doesn't exist.
+      var missing = ('1' + Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '').substring(0, 44);
+      if (!refused(missing)) throw new Error('a missing Doc was not reported as gone');
       return 'both refused before any edit; updateOneStudent_ then makes a new Doc and tells staff on the row';
     }) &&
     check("Doc reads skip Past weeks' content, so updates stay fast all year", function () {

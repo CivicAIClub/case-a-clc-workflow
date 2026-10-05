@@ -461,12 +461,42 @@ test('rebuilding a week: the new tab is written before the old one is deleted, s
     return log;
   };
   const other = weekTab('t.oct12', 'Week of Oct 12 – Oct 18, 2026');
-  // Normal: new tab at the old one's place, filled, then the old one deleted.
-  assert.deepStrictEqual(run([other, withTable('t.old')]), [['add', 1], ['fill', 't.new'], ['delete', 't.old']]);
-  // Stopped while filling: the old tab is never deleted.
-  assert.deepStrictEqual(run([other, withTable('t.old')], true), [['add', 1], ['stopped']]);
-  // The next update finds the half-written copy first; both copies go once the new tab is complete.
-  assert.deepStrictEqual(run([other, withTable('t.half'), withTable('t.old')]), [['add', 1], ['fill', 't.new'], ['delete', 't.half', 't.old']]);
+  // Normal: new tab just below the old one, filled, then the old one deleted (the new one takes its place).
+  assert.deepStrictEqual(run([other, withTable('t.old')]), [['add', 2], ['fill', 't.new'], ['delete', 't.old']]);
+  // Stopped while filling: the old tab is never deleted, and it's still the top copy.
+  assert.deepStrictEqual(run([other, withTable('t.old')], true), [['add', 2], ['stopped']]);
+  // The next update rebuilds from the old (top) copy; both copies go once the new tab is complete.
+  assert.deepStrictEqual(run([other, withTable('t.old'), withTable('t.half')]), [['add', 2], ['fill', 't.new'], ['delete', 't.old', 't.half']]);
+  // With two copies, the top one's Status and Notes win (it's the one staff see and edit).
+  const X = url(1);
+  const two = { childTabs: [weekTab('t.top', title, [trow(X, 'Complete', 'edited this morning')]), weekTab('t.half', title, [trow(X, 'In progress', 'old note')])] };
+  assert.deepStrictEqual(toPlain(t.ctx.collectSavedData_(two)), { notes: { [X]: 'edited this morning' }, status: { [X]: 'Complete' } });
+});
+
+test('an update that runs across Sunday midnight never writes the week it just filed', () => {
+  const t = setup();
+  const filled = [];
+  t.ctx.fillWeekTabDocsApi_ = (d, p, title) => filled.push(title);
+  t.ctx.addWeekChildTab_ = () => 't.new';
+  t.ctx.sleepDocsChunkGap_ = () => {};
+  t.ctx.rebuildHomeTab_ = () => {};
+  const week = (label) => ({ week_label: label, days: [] });
+  // The schedule still has last week (fetched before midnight); "today" is now later.
+  t.ctx.upsertPlannerDocument_(Object.assign({}, base, { weeks: { '2020-01-06': week('Jan 6 – Jan 12'), '2099-01-05': week('Jan 5 – Jan 11') } }));
+  assert.deepStrictEqual(filled, ['Week of Jan 5 – Jan 11, 2099']);
+});
+
+test('a Drive hiccup is never mistaken for a deleted Doc or folder', () => {
+  const t = setup({ DOCS_FOLDER_ID: 'FOLDER123' });
+  t.svc.addFile('DOC1', 'Test Student - CLC Assignments', 'FOLDER123');
+  const realGet = t.ctx.DriveApp.getFileById;
+  t.ctx.DriveApp.getFileById = () => { throw new Error('Exception: Service error: Drive'); };
+  assert.throws(() => t.ctx.savedDocFile_('DOC1'), (e) =>
+    e.message === "Google Drive didn't answer about this student's Doc. They'll be tried again at the next update." && e.message.indexOf(t.ctx.DOC_GONE_PREFIX) === -1);
+  t.ctx.DriveApp.getFileById = realGet;
+  assert.throws(() => t.ctx.savedDocFile_('NOPE'), /^Error: Could not open the saved Google Doc \(NOPE\): Error: No item with the given ID/);
+  t.ctx.DriveApp.getFolderById = () => { throw new Error('Exception: Service error: Drive'); };
+  assert.throws(() => t.ctx.getDocsFolder_(), (e) => /Service error: Drive/.test(e.message) && !/deleted/.test(e.message));
 });
 
 test('notes follow an assignment to its new week; the typed value wins; past weeks are never read', () => {
