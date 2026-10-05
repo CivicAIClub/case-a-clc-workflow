@@ -33,6 +33,9 @@
  *   Assignment row: class color on the first three cells, priority color (PRIORITY_COLORS)
  *              on Priority, white Status and Notes.
  *   "No assignments due this week." row: merged, white, italic #666666.
+ *   Added by staff (bottom of every week tab, after By Day): heading, one help line, and a table
+ *              Assignment 152 | Class 80 | Day 56 | Status 64 | Notes 116 (pt), header as above,
+ *              white rows. Its rows are written back exactly as staff typed them (STAFF_*).
  *   Spacing:   each heading sits directly on its table; exactly one empty paragraph after
  *              every table. The Status/Notes help line above the tables is 10 pt, #444444.
  */
@@ -47,6 +50,14 @@ var CELL_PAD_SIDE_PT = 5;
 var ROW_MIN_HEIGHT_PT = 22;
 
 var PARENT_TAB_TITLE = 'CLC Planner';
+
+// "Added by staff": rows staff add for work that isn't on Canvas. Every update rewrites the week tab,
+// so this table is read first and written back exactly (text, paragraphs, links and text styles).
+var STAFF_TITLE = 'Added by staff';
+var STAFF_HELP_LINE = 'Add anything not on Canvas here. AutoPlanner never changes this table.';
+var STAFF_HEADERS = ['Assignment', 'Class', 'Day', 'Status', 'Notes'];
+var STAFF_WIDTHS = [152, 80, 56, 64, 116];
+var STAFF_EMPTY_ROWS = 2;
 
 /** Drive title: First Last - CLC Assignments */
 function buildDocumentTitle_(data) {
@@ -438,6 +449,7 @@ function upsertPlannerDocument_(data) {
     return { docUrl: doc.getUrl(), documentId: docId };
   }
 
+  var staffCounts = {};
   var weeksDone = [];
   var slowestWeekMs = 60 * 1000;
   var stoppedEarly = false;
@@ -473,7 +485,7 @@ function upsertPlannerDocument_(data) {
       probe = null;
     }
 
-    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, beforeParent, probe);
+    staffCounts[weekKey] = fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, beforeParent, probe);
     sleepDocsChunkGap_();
     weeksDone.push(weekKey);
     var took = Date.now() - weekStartedAt;
@@ -505,7 +517,7 @@ function upsertPlannerDocument_(data) {
   saveWritten_(docId, written);
 
   // The home tab last, so its "Open this week" link can point at this week's (new) tab.
-  rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
+  rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date(), staffCounts);
 
   return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId, weeksDone: weeksDone.length, weeksTotal: weekKeys.length };
 }
@@ -1242,11 +1254,12 @@ var HOME_RULE_FG = '#BFBFBF'; // thin gray rules (the text color at about 25% on
 var HOME_SWATCH = '   '; // three no-break spaces, shaded with the priority color
 
 /** Rebuilds the home tab. Runs after the week tabs, so "Open this week" can link to its tab. */
-function rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, now) {
+function rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, now, staffCounts) {
   var doc = docsGet_(docId);
   var tab = findTabJsonById_(doc, parentTabId);
   if (!tab || !tab.documentTab || !tab.documentTab.body) return;
   var summary = homeSummary_(data, courses, now || new Date());
+  summary.staffCount = (staffCounts && staffCounts[summary.weekKey]) || 0;
   var weekTab = findChildTabIdByTitle_(tab, buildWeekTabTitle_(summary.weekKey, summary.weekRange));
   var requests = homeClearRequests_(tab, parentTabId).concat(
     buildHomeTabRequests_(parentTabId, summary, weekTab, tabContentWidth_(tab), colorMap)
@@ -1312,6 +1325,7 @@ function homeSummary_(data, courses, now) {
   var weekRange = scheduleShortDate_(weekKey) + ' – ' + scheduleShortDate_(scheduleAddDays_(weekKey, 6));
   return {
     name: cellText_(data.studentFullName || data.student_full_name) || 'Student',
+    teacherName: cellText_(data.teacherName),
     updated: Utilities.formatDate(now, SCHEDULE_TIME_ZONE, "EEEE, MMM d 'at' h:mm a"),
     weekend: weekend,
     weekKey: weekKey,
@@ -1371,21 +1385,29 @@ function buildHomeTabRequests_(tabId, summary, weekTabId, contentWidth, colorMap
       ? plural(summary.weekCount) + ' this week · ' + summary.soonCount + ' due today or tomorrow.'
       : 'Nothing is due this week. ' + summary.soonCount + ' due today or tomorrow.';
   }
-  var a = [summary.name, HOME_SUBTITLE, 'Last updated ' + summary.updated, summary.heading, summaryLine];
-  if (weekTabId) a.push(summary.weekend ? 'Open the coming week →' : 'Open this week →');
+  // Rows staff typed into this week's "Added by staff" table, if any.
+  if (summary.staffCount) summaryLine = summaryLine.replace(/\.$/, '') + ' · ' + summary.staffCount + ' added by staff.';
+  var a = [summary.name, HOME_SUBTITLE];
+  // The student's CLC teacher, if they have one (nothing for Unassigned).
+  var iTeacher = summary.teacherName ? a.push('CLC teacher: ' + summary.teacherName) - 1 : -1;
+  var iUpdated = a.push('Last updated ' + summary.updated) - 1;
+  var iHeading = a.push(summary.heading) - 1;
+  var iSummary = a.push(summaryLine) - 1;
+  var iLink = weekTabId ? a.push(summary.weekend ? 'Open the coming week →' : 'Open this week →') - 1 : -1;
   if (!summary.rows.length) a.push('No current classes found in Canvas.');
   var aStart = insertLines(1, a);
   var lineEnd = function (i) { return aStart[i] + a[i].length; };
   para(aStart[0], lineEnd(0) + 1, { namedStyleType: 'HEADING_1' }, 'namedStyleType');
   text(aStart[1], lineEnd(1), { fontSize: pt(9), foregroundColor: color(MUTED_FG), bold: true }, 'fontSize,foregroundColor,bold');
-  text(aStart[2], lineEnd(2), { fontSize: pt(10), foregroundColor: color(HELP_FG) }, 'fontSize,foregroundColor');
-  para(aStart[3], lineEnd(3) + 1, { namedStyleType: 'HEADING_4', borderTop: rule, spaceAbove: pt(18) }, 'namedStyleType,borderTop,spaceAbove');
-  text(aStart[4], lineEnd(4), { foregroundColor: color(DATA_FG) }, 'foregroundColor');
-  if (weekTabId) {
-    text(aStart[5], lineEnd(5), { link: { tabId: weekTabId }, foregroundColor: color(LINK_FG) }, 'link,foregroundColor');
-    para(aStart[5], lineEnd(5) + 1, { spaceBelow: pt(8) }, 'spaceBelow');
+  if (iTeacher >= 0) text(aStart[iTeacher], lineEnd(iTeacher), { fontSize: pt(10), foregroundColor: color(HELP_FG) }, 'fontSize,foregroundColor');
+  text(aStart[iUpdated], lineEnd(iUpdated), { fontSize: pt(10), foregroundColor: color(HELP_FG) }, 'fontSize,foregroundColor');
+  para(aStart[iHeading], lineEnd(iHeading) + 1, { namedStyleType: 'HEADING_4', borderTop: rule, spaceAbove: pt(18) }, 'namedStyleType,borderTop,spaceAbove');
+  text(aStart[iSummary], lineEnd(iSummary), { foregroundColor: color(DATA_FG) }, 'foregroundColor');
+  if (iLink >= 0) {
+    text(aStart[iLink], lineEnd(iLink), { link: { tabId: weekTabId }, foregroundColor: color(LINK_FG) }, 'link,foregroundColor');
+    para(aStart[iLink], lineEnd(iLink) + 1, { spaceBelow: pt(8) }, 'spaceBelow');
   } else {
-    para(aStart[4], lineEnd(4) + 1, { spaceBelow: pt(8) }, 'spaceBelow');
+    para(aStart[iSummary], lineEnd(iSummary) + 1, { spaceBelow: pt(8) }, 'spaceBelow');
   }
   var at = lineEnd(a.length - 1); // the newline of the last line: the table goes right under it
 
@@ -1574,6 +1596,8 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   var before = snapshot ? findTabJsonById_({ tabs: [snapshot] }, tabId) : null;
   if (before && tabProbe) applyChanges_(savedData, changedSince_(before, tabProbe));
   var width = tabContentWidth_(tabProbe);
+  // "Added by staff" rows, read from the tab now so they're written back exactly.
+  var staffRows = readStaffRows_(tabProbe);
 
   var parentJson = findTabJsonById_(docProbe, parentTabId);
   var oldTabId = null;
@@ -1593,19 +1617,23 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   }
 
   var requests = buildWeekTabRequests_(
-    tabId, weekKey, weekData, courses, colorMap, savedData, width
+    tabId, weekKey, weekData, courses, colorMap, savedData, width, staffRows
   );
   batchUpdateChunked_(docId, requests);
 
   if (oldTabId) {
-    // A last look at the old tab: if staff typed in it while the new one was being written, write
-    // the new one again with their edits (once; the window is only a few seconds).
+    // A last look at the old tab: if staff typed in it while the new one was being written (in
+    // Status, Notes or the "Added by staff" table), write the new one again with their edits
+    // (once; the window is only a few seconds).
     var oldNow = findTabJsonById_(docsGet_(docId), oldTabId);
-    if (oldNow && applyChanges_(savedData, changedSince_(tabProbe, oldNow))) {
+    var staffNow = oldNow ? readStaffRows_(oldNow) : staffRows;
+    var staffChanged = JSON.stringify(staffNow) !== JSON.stringify(staffRows);
+    if (staffChanged) staffRows = staffNow;
+    if (oldNow && (applyChanges_(savedData, changedSince_(tabProbe, oldNow)) || staffChanged)) {
       docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
       tabId = addWeekChildTab_(docId, parentTabId, tempTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
       sleepDocsChunkGap_();
-      batchUpdateChunked_(docId, buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, savedData, width));
+      batchUpdateChunked_(docId, buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, savedData, width, staffRows));
     }
     // One batch, all or nothing (checked live): the old tab goes, and the new one takes its title
     // and its place in the sidebar.
@@ -1614,6 +1642,7 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
       { updateDocumentTabProperties: { tabProperties: { tabId: tabId, title: tabTitle }, fields: 'title' } },
     ]);
   }
+  return countStaffRows_(staffRows);
 }
 
 /** Usable page width in points (page width minus margins); 468 on US Letter with 1" margins. */
@@ -1652,7 +1681,7 @@ function cellText_(value) {
  * an empty paragraph at i + 4 + r*(2C + 1) + 2c, and the empty paragraph Docs adds after the
  * table sits at i + 3 + R*(2C + 1). Merging cells doesn't move any index.
  */
-function buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, saved, contentWidth) {
+function buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, saved, contentWidth, staffRows) {
   var reqs = [];
   var days = weekData.days || [];
   var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
@@ -1708,8 +1737,180 @@ function buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, save
     });
   });
   if (dayRows.length === 1) dayRows.push({ kind: 'empty', cells: [NO_ASSIGNMENTS_TEXT] });
-  appendTable_(reqs, tabId, at, dayRows, scaledColumnWidths_(BY_DAY_WIDTHS, contentWidth));
+  at = appendTable_(reqs, tabId, at, dayRows, scaledColumnWidths_(BY_DAY_WIDTHS, contentWidth));
+
+  // 4. "Added by staff": a spacer paragraph, the heading, the help line, then the table.
+  reqs.push({ insertText: { text: '\n' + STAFF_TITLE + '\n' + STAFF_HELP_LINE, location: { tabId: tabId, index: at } } });
+  named(at + 1, at + 2 + STAFF_TITLE.length, 'HEADING_3');
+  var helpAt = at + 2 + STAFF_TITLE.length;
+  reqs.push(textStyleRequest_(range(helpAt, helpAt + STAFF_HELP_LINE.length), { fontSize: { magnitude: HELP_FONT_PT, unit: 'PT' }, foregroundColor: optionalColorFromHex_(HELP_FG) }, 'fontSize,foregroundColor'));
+  appendStaffTable_(reqs, tabId, helpAt + STAFF_HELP_LINE.length, staffRows, scaledColumnWidths_(STAFF_WIDTHS, contentWidth));
   return reqs;
+}
+
+/**
+ * The "Added by staff" table, inserted at `at` (a paragraph's newline): the header, then each row
+ * exactly as it was read (readStaffRows_), or STAFF_EMPTY_ROWS empty rows for a new week. Same
+ * position math as appendTable_, for 5 columns; a cell is { text, runs: [{ s, e, style }] } and
+ * its text may hold paragraph breaks. Returns the index of the empty paragraph after the table.
+ */
+function appendStaffTable_(reqs, tabId, at, staffRows, widths) {
+  var C = STAFF_HEADERS.length;
+  var blank = function () {
+    var r = [];
+    for (var c = 0; c < C; c++) r.push({ text: '', runs: [] });
+    return r;
+  };
+  var data = staffRows && staffRows.length ? staffRows : [];
+  if (!data.length) for (var k = 0; k < STAFF_EMPTY_ROWS; k++) data.push(blank());
+  var rows = [STAFF_HEADERS.map(function (h) { return { text: h, runs: [] }; })].concat(data);
+  var R = rows.length;
+  var tableStart = at + 1;
+  var emptyAfter = at + 3 + R * (2 * C + 1);
+  var emptyIndex = function (r, c) { return at + 4 + r * (2 * C + 1) + 2 * c; };
+  var cell = function (r, c) { return rows[r][c] || { text: '', runs: [] }; };
+  var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
+  var color = function (hex) { return optionalColorFromHex_(hex); };
+
+  reqs.push({ insertTable: { rows: R, columns: C, location: { tabId: tabId, index: at } } });
+  reqs.push({ updateParagraphStyle: { range: { tabId: tabId, startIndex: emptyAfter, endIndex: emptyAfter + 1 }, paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, fields: 'namedStyleType' } });
+  for (var r = R - 1; r >= 0; r--) {
+    for (var c = C - 1; c >= 0; c--) {
+      if (cell(r, c).text) reqs.push({ insertText: { text: cell(r, c).text, location: { tabId: tabId, index: emptyIndex(r, c) } } });
+    }
+  }
+  var start = [];
+  var shift = 0;
+  for (r = 0; r < R; r++) {
+    start.push([]);
+    for (c = 0; c < C; c++) {
+      start[r].push(emptyIndex(r, c) + shift);
+      shift += cell(r, c).text.length;
+    }
+  }
+  var cellEnd = function (r, c) { return start[r][c] + cell(r, c).text.length; };
+
+  reqs.push(cellStyleRequest_(tabId, tableStart, 0, 0, R, C, {
+    paddingTop: { magnitude: CELL_PAD_TOP_BOTTOM_PT, unit: 'PT' },
+    paddingBottom: { magnitude: CELL_PAD_TOP_BOTTOM_PT, unit: 'PT' },
+    paddingLeft: { magnitude: CELL_PAD_SIDE_PT, unit: 'PT' },
+    paddingRight: { magnitude: CELL_PAD_SIDE_PT, unit: 'PT' },
+    contentAlignment: 'MIDDLE',
+  }, 'paddingTop,paddingBottom,paddingLeft,paddingRight,contentAlignment'));
+  widths.forEach(function (w, i) {
+    reqs.push({
+      updateTableColumnProperties: {
+        tableStartLocation: { tabId: tabId, index: tableStart },
+        columnIndices: [i],
+        tableColumnProperties: { widthType: 'FIXED_WIDTH', width: { magnitude: w, unit: 'PT' } },
+        fields: 'widthType,width',
+      },
+    });
+  });
+  reqs.push(textStyleRequest_(range(start[0][0], cellEnd(R - 1, C - 1) + 1), {
+    fontSize: { magnitude: TABLE_FONT_PT, unit: 'PT' },
+    foregroundColor: color(DATA_FG),
+  }, 'fontSize,foregroundColor'));
+  reqs.push(cellStyleRequest_(tabId, tableStart, 0, 0, 1, C, { backgroundColor: color(HEADER_BG) }, 'backgroundColor'));
+  reqs.push(textStyleRequest_(range(start[0][0], cellEnd(0, C - 1)), { bold: true, foregroundColor: color(HEADER_FG) }, 'bold,foregroundColor'));
+  reqs.push({ updateParagraphStyle: { range: range(start[0][1], cellEnd(0, 3) + 1), paragraphStyle: { alignment: 'CENTER' }, fields: 'alignment' } });
+  reqs.push(cellStyleRequest_(tabId, tableStart, 1, 0, R - 1, C, { backgroundColor: color(EDITABLE_BG) }, 'backgroundColor'));
+  // Each row's own text styles, exactly as staff left them.
+  for (r = 1; r < R; r++) {
+    for (c = 0; c < C; c++) {
+      (cell(r, c).runs || []).forEach(function (run) {
+        var fields = Object.keys(run.style || {});
+        if (run.e > run.s && fields.length) {
+          reqs.push(textStyleRequest_(range(start[r][c] + run.s, start[r][c] + run.e), run.style, fields.join(',')));
+        }
+      });
+    }
+  }
+  reqs.push({
+    updateTableRowStyle: {
+      tableStartLocation: { tabId: tabId, index: tableStart },
+      rowIndices: [0],
+      tableRowStyle: { minRowHeight: { magnitude: ROW_MIN_HEIGHT_PT, unit: 'PT' } },
+      fields: 'minRowHeight',
+    },
+  });
+  return emptyAfter + shift;
+}
+
+/**
+ * The rows of a week tab's "Added by staff" table, exactly as typed (the header row isn't
+ * included): [[cell, ...], ...], each cell { text, runs }. null when the tab has no such table.
+ * The table is the one under the "Added by staff" heading or, if staff removed the heading, the
+ * last 5-column table.
+ */
+function readStaffRows_(tabJson) {
+  var table = findStaffTable_(tabJson);
+  if (!table) return null;
+  return (table.tableRows || []).slice(1).map(function (row) {
+    var cells = row.tableCells || [];
+    var out = [];
+    for (var c = 0; c < STAFF_HEADERS.length; c++) out.push(readRichCell_(cells[c]));
+    return out;
+  });
+}
+
+function findStaffTable_(tabJson) {
+  var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
+  var afterHeading = false;
+  for (var i = 0; i < content.length; i++) {
+    var el = content[i];
+    if (el.paragraph && paragraphPlainText_(el.paragraph).trim() === STAFF_TITLE) afterHeading = true;
+    else if (el.table && afterHeading) return el.table;
+  }
+  var five = content.filter(function (e) { return e.table && (e.table.columns || 0) === STAFF_HEADERS.length; });
+  return five.length ? five[five.length - 1].table : null;
+}
+
+function paragraphPlainText_(paragraph) {
+  return (paragraph.elements || []).map(function (pe) { return pe.textRun ? pe.textRun.content || '' : ''; }).join('');
+}
+
+// Text styles carried over from a staff cell. Characters Docs would strip on insert are left out
+// here, so every position after them stays right.
+var STAFF_STYLE_FIELDS = ['bold', 'italic', 'underline', 'strikethrough'];
+var DOCS_STRIPPED_CHARS = /[\u0000-\u0008\u000c-\u001f\ue000-\uf8ff]/g;
+
+function readRichCell_(cell) {
+  var text = '';
+  var runs = [];
+  ((cell && cell.content) || []).forEach(function (se) {
+    if (!se.paragraph) return;
+    (se.paragraph.elements || []).forEach(function (pe) {
+      if (!pe.textRun) return;
+      var t = String(pe.textRun.content || '').replace(DOCS_STRIPPED_CHARS, '');
+      var style = staffRunStyle_(pe.textRun.textStyle);
+      if (t && style) runs.push({ s: text.length, e: text.length + t.length, style: style });
+      text += t;
+    });
+  });
+  // The last paragraph's newline belongs to the cell itself.
+  if (text.slice(-1) === '\n') text = text.slice(0, -1);
+  runs.forEach(function (r) { r.e = Math.min(r.e, text.length); });
+  return { text: text, runs: runs.filter(function (r) { return r.e > r.s; }) };
+}
+
+function staffRunStyle_(ts) {
+  if (!ts) return null;
+  var out = {};
+  STAFF_STYLE_FIELDS.forEach(function (f) { if (ts[f]) out[f] = true; });
+  if (ts.link && (ts.link.url || ts.link.tabId)) out.link = ts.link.url ? { url: ts.link.url } : { tabId: ts.link.tabId };
+  ['foregroundColor', 'backgroundColor'].forEach(function (f) {
+    var rgb = ts[f] && ts[f].color && ts[f].color.rgbColor;
+    if (rgb) out[f] = { color: { rgbColor: { red: rgb.red || 0, green: rgb.green || 0, blue: rgb.blue || 0 } } };
+  });
+  return Object.keys(out).length ? out : null;
+}
+
+/** Staff rows with anything typed in them (for the home tab's count). */
+function countStaffRows_(staffRows) {
+  return (staffRows || []).filter(function (row) {
+    return row.some(function (c) { return c.text.replace(/\s/g, ''); });
+  }).length;
 }
 
 /** One assignment's row. `middle` is the Day (By Class) or the Course (By Day). */

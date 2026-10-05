@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { createSandbox, toPlain } = require('./helpers/gas-sandbox');
 const { fakeServices } = require('./helpers/gas-services');
-const { fakeDocs, withRendering, copiesOf, staffTypes } = require('./helpers/fake-docs');
+const { fakeDocs, withRendering, copiesOf, staffTypes, staffWrites, richCell } = require('./helpers/fake-docs');
 
 function setup(props, opts) {
   const svc = fakeServices({ owner: 'owner@pomfret.org', props: props || {} });
@@ -109,10 +109,11 @@ function goldenWeek() {
   return { week_label: 'Oct 5 – Oct 11', days };
 }
 
-test('week tab: the exact requests that were checked against the live Docs API (2026-10-04)', () => {
-  // These 107 requests built a tab correctly in a real Google Doc (one class with nothing due,
-  // one class with an assignment, By Day). If you change the layout, check it in a real Doc
-  // again, then regenerate this file.
+test('week tab: the exact requests that were checked against the live Docs API (2026-10-04, staff table 2026-10-05)', () => {
+  // These requests built a tab correctly in a real Google Doc (one class with nothing due, one
+  // class with an assignment, By Day; then the "Added by staff" section, checked live on
+  // 2026-10-05 with rich rows that read back exactly). If you change the layout, check it in a
+  // real Doc again, then regenerate this file.
   const t = setup();
   const courses = ['Calculus III', 'Psychology'];
   const saved = { status: { [url(2)]: 'In progress' }, notes: { [url(2)]: 'Ask about the lab report' } };
@@ -131,7 +132,7 @@ test('week tab: one table per class (A to Z, including empty ones) plus By Day; 
     const reqs = toPlain(t.ctx.buildWeekTabRequests_('t.1', '2026-10-05', week, courses.slice().sort(),
       t.ctx.buildCourseColorMap_(courses), { status: {}, notes: {} }, width));
     const tables = reqs.filter((r) => r.insertTable);
-    assert.strictEqual(tables.length, courses.length + 1);
+    assert.strictEqual(tables.length, courses.length + 2, 'a table per class, By Day, and Added by staff');
     const titles = reqs.filter((r) => r.insertText && ['Advisory', 'Calculus III', 'Psychology', 'Statistics'].includes(r.insertText.text)).map((r) => r.insertText.text);
     // The first four are the class tables' title rows (By Day's Course cells come later).
     assert.deepStrictEqual(titles.slice(0, 4), ['Advisory', 'Calculus III', 'Psychology', 'Statistics']);
@@ -144,9 +145,10 @@ test('week tab: one table per class (A to Z, including empty ones) plus By Day; 
       (byTable[k] = byTable[k] || []).push(r.updateTableColumnProperties.tableColumnProperties.width.magnitude);
     });
     const sets = Object.values(byTable);
-    assert.strictEqual(sets.length, courses.length + 1);
+    assert.strictEqual(sets.length, courses.length + 2);
     sets.forEach((w) => assert.ok(Math.abs(w.reduce((a, b) => a + b, 0) - width) < 0.01, `widths ${w} sum to ${width}`));
-    assert.strictEqual(new Set(sets.slice(0, -1).map(String)).size, 1, 'all By Class tables share one width set');
+    assert.strictEqual(new Set(sets.slice(0, -2).map(String)).size, 1, 'all By Class tables share one width set');
+    assert.strictEqual(sets[sets.length - 1].length, 5, 'Added by staff has 5 columns');
     // The default Status is plain text.
     const statuses = reqs.filter((r) => r.insertText && !r.insertText.text.includes('\n') && /started|progress|Complete/.test(r.insertText.text)).map((r) => r.insertText.text);
     assert.ok(statuses.length === 4 && statuses.every((s) => s === 'Not started'), statuses.join('|'));
@@ -697,6 +699,102 @@ test('two weeks disagree: the copy from the week the assignment was in last time
   const written = { '1': { w: '2099-01-12', s: 'In progress', n: t.ctx.noteFingerprint_('old') } };
   assert.deepStrictEqual(toPlain(t.ctx.collectSavedData_({ childTabs: [weekB, weekA] }, written)),
     { notes: { [X]: 'new' }, status: { [X]: 'Complete' } });
+});
+
+// ---- "Added by staff" ------------------------------------------------------------------------
+
+const staffRowsIn = (docs, t, title) => {
+  const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === title);
+  return toPlain(t.ctx.readStaffRows_(tab));
+};
+const bold = { bold: true };
+const red = { foregroundColor: { color: { rgbColor: { red: 0.8, green: 0, blue: 0 } } } };
+const typedStaffRows = () => [
+  [{ text: 'Vocab quiz (told in class)', runs: [{ s: 0, e: 10, style: bold }] }, { text: 'Spanish', runs: [] }, { text: 'Thursday', runs: [] },
+    { text: 'In progress', runs: [] }, { text: 'Study list\nAsk for the review sheet', runs: [{ s: 11, e: 35, style: red }] }],
+  [{ text: '', runs: [] }, { text: '', runs: [] }, { text: '', runs: [] }, { text: '', runs: [] }, { text: '', runs: [] }],
+  [{ text: 'Field trip form', runs: [{ s: 0, e: 15, style: { link: { url: 'https://www.pomfret.org/' } } }] }, { text: 'Advisory', runs: [] },
+    { text: 'Friday', runs: [] }, { text: '', runs: [] }, { text: '', runs: [] }],
+];
+
+test('"Added by staff": a new week starts with 2 empty rows; typed rows come back exactly after every update', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(staffRowsIn(docs, t, WA).map((r) => r.map((c) => c.text)), [['', '', '', '', ''], ['', '', '', '', '']]);
+  typedStaffRows().forEach((row, i) => staffWrites(docs, WA, i, row));
+  for (let n = 0; n < 3; n++) t.ctx.upsertPlannerDocument_(scheduleAB(n === 1)); // updates, one with an assignment moved
+  assert.deepStrictEqual(staffRowsIn(docs, t, WA), typedStaffRows(), 'every row and cell, with paragraphs, links and styles');
+  assert.deepStrictEqual(staffRowsIn(docs, t, WB).map((r) => r.map((c) => c.text)), [['', '', '', '', ''], ['', '', '', '', '']], "other weeks' tables are their own");
+  // The Status and Notes rules never read this table.
+  assert.ok(!copiesOf(docs, 'https://www.pomfret.org/').length);
+});
+
+test('"Added by staff" survives a cut-off rebuild, and rows typed while a tab is being rewritten are kept', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffWrites(docs, WA, 0, typedStaffRows()[0]);
+  docs.failOnFill = true;
+  assert.throws(() => t.ctx.upsertPlannerDocument_(scheduleAB(false)));
+  docs.failOnFill = false;
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(staffRowsIn(docs, t, WA)[0], typedStaffRows()[0]);
+  // Typed into the old tab while the new one was being written: written again with it.
+  const realChunked = t.ctx.batchUpdateChunked_;
+  let once = false;
+  t.ctx.batchUpdateChunked_ = (docId, reqs) => {
+    realChunked(docId, reqs);
+    if (!once && reqs.some((r) => r.insertText && r.insertText.location.tabId !== 't.0')) {
+      once = true;
+      staffWrites(docs, WA, 1, ['Typed during the update', 'Biology', 'Monday', '', '']);
+    }
+  };
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(staffRowsIn(docs, t, WA)[1].map((c) => c.text), ['Typed during the update', 'Biology', 'Monday', '', '']);
+});
+
+test('"Added by staff" moves into Past weeks with its week, untouched; a deleted heading or table is handled', () => {
+  const ended = typedWeek('t.ended', 'Week of Jan 6 – Jan 12, 2020', 'Complete', 'old', 3);
+  const staffTable = { table: { columns: 5, tableRows: [{ tableCells: ['Assignment', 'Class', 'Day', 'Status', 'Notes'].map((x) => richCell({ text: x, runs: [] })) },
+    { tableCells: typedStaffRows()[0].map(richCell) }] } };
+  ended.documentTab.body.content.push(staffTable);
+  const before = JSON.stringify(ended);
+  const { t, docs } = rebuildSetup([ended]);
+  withRendering(t, docs);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  const past = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === 'Past weeks');
+  const moved = past.childTabs[0];
+  assert.strictEqual(moved.tabProperties.title, 'Week of Jan 6 – Jan 12, 2020');
+  assert.deepStrictEqual(toPlain(t.ctx.readStaffRows_(moved))[0], typedStaffRows()[0], 'the staff row went with its week');
+  assert.strictEqual(JSON.stringify(moved.documentTab), JSON.stringify(JSON.parse(before).documentTab), 'content untouched');
+  // Staff deleted the heading: the 5-column table is still found.
+  staffWrites(docs, WA, 0, ['Kept without its heading', '', '', '', '']);
+  const live = docs.find(docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === WA).tabProperties.tabId);
+  live.documentTab.body.content = live.documentTab.body.content.filter((e) => !(e.paragraph && ((e.paragraph.elements[0] || {}).textRun || {}).content === 'Added by staff\n'));
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.strictEqual(staffRowsIn(docs, t, WA)[0][0].text, 'Kept without its heading');
+  // Staff deleted the whole table: the next update adds an empty one.
+  const live2 = docs.find(docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === WA).tabProperties.tabId);
+  live2.documentTab.body.content = live2.documentTab.body.content.filter((e) => !(e.table && e.table.columns === 5));
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(staffRowsIn(docs, t, WA).map((r) => r.map((c) => c.text)), [['', '', '', '', ''], ['', '', '', '', '']]);
+});
+
+test('home tab: "· N added by staff" on the summary line, and "CLC teacher: …" under the subtitle (nothing for Unassigned)', () => {
+  const t = setup();
+  const data = homeData();
+  const courses = t.ctx.plannerCourseList_(data);
+  const s = toPlain(t.ctx.homeSummary_(Object.assign({}, data, { teacherName: 'Pat Teacher' }), courses, MONDAY_8AM));
+  s.staffCount = 2;
+  const texts = toPlain(t.ctx.buildHomeTabRequests_('t.0', s, 't.week', 468, t.ctx.buildCourseColorMap_(courses)))
+    .filter((r) => r.insertText).map((r) => r.insertText.text).join('\n');
+  assert.match(texts, /CLC PLANNER · SUPPORTED STUDY HALL\nCLC teacher: Pat Teacher\nLast updated /);
+  assert.match(texts, / this week · \d+ due today or tomorrow · 2 added by staff\.\n/);
+  const plain = toPlain(t.ctx.homeSummary_(data, courses, MONDAY_8AM));
+  const plainTexts = toPlain(t.ctx.buildHomeTabRequests_('t.0', plain, 't.week', 468, t.ctx.buildCourseColorMap_(courses)))
+    .filter((r) => r.insertText).map((r) => r.insertText.text).join('\n');
+  assert.doesNotMatch(plainTexts, /CLC teacher|added by staff/);
 });
 
 test('titles that already exist elsewhere in the Doc: a dragged-out week is moved back, and an existing "Past weeks" is reused', () => {

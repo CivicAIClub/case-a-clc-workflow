@@ -64,7 +64,7 @@ function fakeDocs(tabs) {
 // writer does, so Status and Notes can round-trip through several updates and staff edits.
 function withRendering(t, docs) {
   const realBuild = t.ctx.buildWeekTabRequests_;
-  t.ctx.buildWeekTabRequests_ = (tabId, weekKey, weekData, courses, colorMap, saved, width) => {
+  t.ctx.buildWeekTabRequests_ = (tabId, weekKey, weekData, courses, colorMap, saved, width, staffRows) => {
     const st = (u) => saved.status[u] || 'Not started';
     const nt = (u) => saved.notes[u] || '';
     const row = (a, middle) => ({ tableCells: [tcell(a.assignment, a.url), tcell(middle), tcell(a.due_time), tcell(a.priority), tcell(st(a.url)), tcell(nt(a.url))] });
@@ -77,9 +77,43 @@ function withRendering(t, docs) {
     const dayRows = [{ tableCells: ['Assignment', 'Course', 'Due Time', 'Priority', 'Status', 'Notes'].map((x) => tcell(x)) }];
     (weekData.days || []).forEach((d) => (d.assignments || []).forEach((a) => dayRows.push(row(a, a.course))));
     content.push({ table: { columns: 6, tableRows: dayRows } });
+    // "Added by staff": heading, help line, then the 5-column table, rows exactly as given.
+    const para = (text) => ({ paragraph: { elements: [{ textRun: { content: text + '\n', textStyle: {} } }] } });
+    content.push(para(''), para('Added by staff'), para('Add anything not on Canvas here. AutoPlanner never changes this table.'));
+    const rows = staffRows && staffRows.length ? staffRows : [0, 1].map(() => [0, 1, 2, 3, 4].map(() => ({ text: '', runs: [] })));
+    content.push({ table: { columns: 5, tableRows: [{ tableCells: ['Assignment', 'Class', 'Day', 'Status', 'Notes'].map((x) => tcell(x)) }]
+      .concat(rows.map((row) => ({ tableCells: row.map(richCell) }))) } });
+    content.push(para(''));
     docs.find(tabId).documentTab.body.content = content;
-    return realBuild(tabId, weekKey, weekData, courses, colorMap, saved, width);
+    return realBuild(tabId, weekKey, weekData, courses, colorMap, saved, width, staffRows);
   };
+}
+
+// A cell from { text, runs }: one text run per styled stretch, as the Docs API returns them.
+function richCell(cell) {
+  const text = cell.text;
+  const cuts = new Set([0, text.length]);
+  (cell.runs || []).forEach((r) => { cuts.add(r.s); cuts.add(r.e); });
+  const points = [...cuts].sort((a, b) => a - b);
+  const elements = [];
+  for (let i = 0; i + 1 < points.length; i++) {
+    const [s, e] = [points[i], points[i + 1]];
+    const style = {};
+    (cell.runs || []).filter((r) => r.s <= s && e <= r.e).forEach((r) => Object.assign(style, r.style));
+    elements.push({ textRun: { content: text.slice(s, e), textStyle: style } });
+  }
+  if (!elements.length) elements.push({ textRun: { content: '', textStyle: {} } });
+  elements[elements.length - 1].textRun.content += '\n';
+  return { content: [{ paragraph: { elements } }] };
+}
+
+/** Staff type into the "Added by staff" table of a week tab: row r (0 = first under the header). */
+function staffWrites(docs, weekTitle, r, cells) {
+  const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === weekTitle);
+  const live = docs.find(tab.tabProperties.tabId);
+  const table = live.documentTab.body.content.filter((e) => e.table && e.table.columns === 5).pop().table;
+  while (table.tableRows.length < r + 2) table.tableRows.push({ tableCells: [0, 1, 2, 3, 4].map(() => richCell({ text: '', runs: [] })) });
+  table.tableRows[r + 1] = { tableCells: cells.map((c) => richCell(typeof c === 'string' ? { text: c, runs: [] } : c)) };
 }
 
 function copiesOf(docs, u) {
@@ -113,4 +147,4 @@ function staffTypes(docs, weekTitle, u, kind, status, note) {
 }
 
 
-module.exports = { fakeDocs, withRendering, copiesOf, staffTypes, tcell };
+module.exports = { fakeDocs, withRendering, copiesOf, staffTypes, staffWrites, richCell, tcell };
