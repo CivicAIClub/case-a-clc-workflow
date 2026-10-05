@@ -468,6 +468,26 @@ test('batches use the real time limit: the safety trigger fires after it, and a 
   assert.strictEqual(u.svc.triggers.find((x) => x.handler === 'continueRun').config.after, 32 * 60 * 1000);
 });
 
+test('automatic batches use the measured limit (up to 25 minutes); page-started batches stay at 2 minutes', () => {
+  const t = setup();
+  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 2 * 60 * 1000, 'default 6-minute limit: 2 minutes');
+  t.svc.props.RUNTIME_LIMIT_SECONDS = '1800';
+  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 25 * 60 * 1000);
+  t.svc.props.RUNTIME_LIMIT_SECONDS = '600';
+  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 5 * 60 * 1000);
+  t.svc.props.RUNTIME_LIMIT_SECONDS = '1800';
+  const budgets = [];
+  const real = t.ctx.processRunBatch_;
+  t.ctx.processRunBatch_ = (id, budget) => { budgets.push(budget); return real(id, budget); };
+  addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.startUpdateAll();
+  t.svc.setActive(OWNER);
+  t.ctx.scheduleTestRun();
+  const oneOff = t.svc.triggers.find((x) => x.handler === 'scheduledRun' && x.config.at);
+  t.ctx.scheduledRun({ triggerUid: oneOff.uid });
+  assert.deepStrictEqual(budgets, [2 * 60 * 1000, 25 * 60 * 1000]);
+});
+
 test('measureTimeLimit: once Apps Script has stopped it, checkSetup saves the limit (rounded down to a minute)', () => {
   const t = setup();
   t.svc.setActive(OWNER);

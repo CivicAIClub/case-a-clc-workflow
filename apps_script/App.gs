@@ -934,8 +934,19 @@ function startRun_(reason, startedBy) {
     return fresh;
   });
   if (!run) return false;
-  processRunBatch_(run.id);
+  // From the page, the first batch is short, so the page hears back quickly; automatic runs use
+  // the longer batches the time limit allows.
+  processRunBatch_(run.id, reason === 'manual' ? APP_BATCH_BUDGET_MS : triggerBatchBudgetMs_());
   return true;
+}
+
+/**
+ * How long an automatic batch keeps starting students: 2 minutes with the default 6-minute limit;
+ * with a longer measured limit, up to 5 minutes short of it (25 minutes at most). The last student
+ * must still fit (nextStudentFits_).
+ */
+function triggerBatchBudgetMs_() {
+  return Math.max(APP_BATCH_BUDGET_MS, Math.min(runtimeLimitMs_() - 5 * 60 * 1000, 25 * 60 * 1000));
 }
 
 /**
@@ -943,7 +954,8 @@ function startRun_(reason, startedBy) {
  * the run or schedules continueRun a minute later. A safety trigger resumes the run if this
  * execution is cut off.
  */
-function processRunBatch_(runId) {
+function processRunBatch_(runId, budgetMs) {
+  var budget = budgetMs === undefined ? APP_BATCH_BUDGET_MS : budgetMs;
   var batchStart = Date.now();
   // The safety trigger fires only after this execution must have ended (the time limit has
   // passed), so it never runs alongside a batch that's still going.
@@ -968,7 +980,7 @@ function processRunBatch_(runId) {
     }
     var result = updateOneStudent_(id);
     recordResult_(runId, result);
-    if (Date.now() - batchStart > APP_BATCH_BUDGET_MS) {
+    if (Date.now() - batchStart > budget) {
       var run = readJson_('run.current');
       if (run && run.id === runId && run.queue.length) {
         replaceContinueTrigger_(APP_CONTINUE_AFTER_MS);
@@ -1080,7 +1092,7 @@ function continueRun(e) {
     });
     PropertiesService.getScriptProperties().deleteProperty('busy.' + run.inProgress);
   }
-  processRunBatch_(run.id);
+  processRunBatch_(run.id, triggerBatchBudgetMs_());
 }
 
 function deleteTriggersFor_(handler) {
