@@ -33,7 +33,8 @@ Every Doc is in the Google Drive folder **AutoPlanner – CLC Student Planners**
 - Each Doc is called "*Student Name* - CLC Assignments".
 - The **CLC Planner** tab at the top is a one-page summary: how many assignments each class has this week, when each is next due, and a link to this week's tab. On **Saturday and Sunday** it shows the **coming week** instead, and how many assignments are due that weekend.
 - Open the **Document tabs** sidebar on the left to see one tab per week under **CLC Planner**.
-- When a week ends, its tab moves into **Past weeks** (newest first), with the Status and Notes typed during it. AutoPlanner never changes those again.
+- Work due earlier in the week stays in its week, marked **Past due** in gray, until the week ends.
+- When a week ends, its tab moves into **Past weeks** (newest first), with the Status and Notes typed during it. Its Priority column turns gray, since those colors no longer apply. After that, AutoPlanner never changes it again.
 - Each week tab has a **By Class** section with a table for **every class** the student takes. A class with nothing due that week says "No assignments due this week."
 - Under that, **By Day** lists the same assignments by day.
 - **Keep the Docs in this folder.** AutoPlanner only updates Docs that are inside it. If one gets moved out, move it back.
@@ -54,7 +55,48 @@ AutoPlanner never changes these two columns, so what you type survives every upd
 - **New token** (for example after the old one expired): click **Edit** on their row, paste the new token, and click **Save**. Then click **Update**.
 - **Remove:** click **Remove**. Their Doc stays in the shared folder. If you add them again later, AutoPlanner reuses it.
 
-## 7. Who to contact
+## 7. Long-term care
+
+AutoPlanner is meant to run all year without anyone touching the code. Three things need a person.
+
+### Tokens expire on June 30, 2027
+
+Every student's token stops working on the expiration date they picked (the token guide says June 30, 2027). After that, their row says **Needs attention** with "Canvas didn't accept this student's token". Ask the student to make a new token with the [student token guide](student-token-guide.md), then click **Edit** on their row, paste it, click **Save**, and click **Update**. A student who deletes their token, or whose Canvas account changes, needs the same steps.
+
+### When a row says "Needs attention"
+
+The message next to it says what happened. Most fix themselves:
+
+| The message says | What to do |
+|---|---|
+| "Canvas didn't accept this student's token" or "Canvas refused this student's token" | Get a new token from the student (see above). |
+| "This token now belongs to a different Canvas user" | Click **Edit** and paste this student's own token. |
+| "Canvas is busy", "Canvas is getting too many requests", "Google is limiting how fast Docs can be edited", "Google Docs or Drive had a temporary problem", or "Google Drive didn't answer" | Nothing. AutoPlanner tries again at the next update (7 pm or midnight). If the same message is still there after two days, contact us. |
+| "AutoPlanner only updates Docs in the … folder" | Someone moved the Doc. Move it back into **AutoPlanner – CLC Student Planners**, then click **Update**. |
+| "Took longer than Apps Script allows" | Nothing; it's tried again at the next update. Contact us if it keeps happening. |
+| "…shared folder … is in the Drive trash" or "cannot open that Drive folder" | The shared folder was deleted or unshared. Its owner can restore it from the Drive trash; otherwise contact us. |
+
+Two more messages can appear on the page:
+
+- **"Their Doc was deleted, so AutoPlanner made a new one."** on a row: someone deleted the student's Doc, so AutoPlanner started a fresh one in the shared folder. Status and Notes typed in the old Doc stay in the owner's Drive trash for 30 days. This message goes away after a week.
+- **"Automatic updates haven't finished since …"** near **Update all students now**: the automatic updates have stopped. This usually means the account that owns AutoPlanner was closed or lost its permissions. Contact us, or follow "Moving AutoPlanner to a new owner" below.
+
+### Moving AutoPlanner to a new owner (before Cayden's account closes)
+
+Everything runs as one Google account: right now Cayden Auyang's Pomfret account. That includes the Apps Script project, its automatic updates, the saved tokens, the shared folder and every student's Doc. When that account closes, everything it owns stops or is deleted. So before Cayden graduates, move it all to a CLC staff member or the Civic AI Club's faculty advisor (the **new owner**). It takes about 20 minutes, with Cayden and the new owner both signed in.
+
+1. **Add the new owner to the list.** Cayden: open the Apps Script project → **Project Settings** (gear icon) → **Script Properties**. Check that the new owner's email is in `ALLOWED_USERS`; if not, add it (commas between emails) and click **Save script properties**.
+2. **Give them the project.** Cayden: in Google Drive, find the **AutoPlanner** Apps Script project. Click **Share**, add the new owner as **Editor**, and click **Send**. Open **Share** again, click the dropdown next to their name, and choose **Transfer ownership**. The new owner accepts from the email Google sends them.
+3. **Give them the folder and the Docs.** Cayden: open the folder **AutoPlanner – CLC Student Planners**, select everything in it (Cmd+A on a Mac, Ctrl+A on Windows), click **Share**, and transfer ownership to the new owner the same way. Then do the same for the folder itself (right-click it → **Share**). The new owner accepts again.
+   - If **Transfer ownership** isn't offered (Pomfret may block it for student accounts), ask Pomfret's Google Workspace admin to transfer the AutoPlanner project, the folder and the Docs in it from Cayden's account to the new owner.
+4. **New owner: publish the web page as yourself.** Open the project at [script.google.com](https://script.google.com). Click **Deploy → Manage deployments**, click the pencil (✏️), and check that **Execute as** says **Me** with *your* email. Set **Version** to **New version** and click **Deploy**. Allow the permissions Google asks for. The web address stays the same, so bookmarks keep working.
+5. **New owner: turn on the automatic updates as yourself.** In the editor, pick **setupTriggers** in the function menu at the top and click **Run**. Allow the permissions again if asked. Then run **checkSetup**: every line should start with **OK**.
+6. **Cayden: turn off your own automatic updates.** In the project, click **Triggers** (the clock icon) and delete the triggers that list Cayden as the owner. Until you do, both accounts start an update at 7 pm and midnight. That's harmless (the second one sees an update is already running and stops), but it's tidier to have one.
+7. **Check it the next morning.** Open AutoPlanner: **Last update** should show the midnight update, with no warning above it.
+
+The saved tokens, the student list and the settings move with the project, so nobody has to add students again. Anyone with edit access to the project can read the tokens, so only the owner should have it.
+
+## 8. Who to contact
 
 Civic AI Club, by school email:
 
