@@ -488,6 +488,28 @@ test("selfTest uses your student row's Doc when you're on the list (no second co
   assert.match(t.sb.logs.join('\n'), /PASS Not authorized page: the CLC-staff message, and no data or actions/);
 });
 
+test('selfTest runs every check after a failure (unless it needs the failed one), and shows Drive\'s own words for a deleted Doc', () => {
+  const t = setup({ TEST_CANVAS_TOKEN: TOKEN_A });
+  t.svc.setActive(OWNER);
+  t.ctx.writeDocWithRecovery_ = () => 'DOC-SELF';
+  t.ctx.assertDocIsInFolder_ = () => {};
+  // A Doc with no week tabs: the table checks fail, the later independent checks still run.
+  t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [] }] });
+  t.ctx.selfTestKeepToken();
+  const log = t.sb.logs.join('\n');
+  assert.match(log, /FAIL Every class has its own By Class table in every week/);
+  assert.match(log, /PASS A Doc deleted for good: Drive's message \(shown as is\): recognized as deleted: "No item with the given ID could be found"/);
+  assert.match(log, /(PASS|FAIL) Doc reads skip Past weeks' content/, 'a check after the failures still ran');
+  assert.match(log, /selfTest: FAILED \(\d+ failed, \d+ passed/);
+  assert.doesNotMatch(log, /later checks skipped/);
+  // Drive's words not recognized: shown, as a SKIP, not a FAIL.
+  const u = setup({ TEST_CANVAS_TOKEN: TOKEN_A });
+  u.svc.setActive(OWNER);
+  u.ctx.DriveApp.getFileById = () => { throw new Error('Invalid argument: id'); };
+  u.ctx.selfTestKeepToken();
+  assert.match(u.sb.logs.join('\n'), /SKIP A Doc deleted for good: Drive's message \(shown as is\): Drive said "Invalid argument: id"/);
+});
+
 test("selfTest's gray check: passes when a past week's Priority cells are gray, fails when one isn't", () => {
   const t = setup();
   const cell = (text, bg) => ({
