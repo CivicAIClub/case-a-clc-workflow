@@ -234,6 +234,8 @@
     .s-token { grid-area: token; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0; }
     .s-last { grid-area: last; font-size: var(--fs-ui); line-height: 1.45; color: var(--ink-2); }
     .s-last.bad { color: var(--ink); }
+    /* A one-off message from AutoPlanner, such as "made a new Doc", kept on the row for a week. */
+    .s-notice { display: block; margin-top: 4px; color: var(--ink); }
     .s-doc { grid-area: doc; font-size: var(--fs-ui); }
     .s-doc .none { color: var(--ink-2); }
     .row-actions { grid-area: actions; display: flex; gap: 16px; justify-content: flex-end; }
@@ -473,6 +475,7 @@
           ? (s.last.ok ? '' : '<span class="flag">Needs attention</span>') +
             esc(when(s.last.at)) + '. ' + esc(s.last.message)
           : 'Not updated yet.';
+        if (s.notice) last += '<span class="s-notice">' + esc(when(s.notice.at)) + '. ' + esc(s.notice.message) + '</span>';
         var card = document.createElement('div');
         card.className = 'student-card';
         card.innerHTML =
@@ -552,7 +555,7 @@
         html += '<ul>' + lr.failed.map(function (f) {
           return '<li><span class="flag">Needs attention</span><span class="lr-name">' + esc(f.name) + ':</span> ' +
             '<span class="lr-msg">' + esc(f.message) + '</span></li>';
-        }).join('') + '</ul>';
+        }).join('') + (lr.moreFailed ? '<li>…and ' + esc(lr.moreFailed) + ' more. Their rows say why.</li>' : '') + '</ul>';
       }
       box.innerHTML = html;
     }
@@ -694,7 +697,12 @@
       state.user = s.user;
       document.getElementById('userChip').innerHTML = 'Signed in as <span class="who-v">' + esc(s.user) + '</span>';
       var note = document.getElementById('autoNote');
-      if (s.automaticUpdatesOn) {
+      if (s.automaticUpdatesOn && s.updatesStaleSince) {
+        // The triggers exist but no update has finished for over a day: one is failing.
+        note.textContent = 'Automatic updates haven’t finished since ' + when(s.updatesStaleSince) +
+          '. Contact ' + s.contact + '.';
+        note.classList.add('off');
+      } else if (s.automaticUpdatesOn) {
         note.textContent = 'Automatic updates run every day at about 7 pm and about midnight on Google’s ' +
           'servers, so no computer needs to be on.';
       } else {

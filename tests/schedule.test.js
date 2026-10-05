@@ -32,7 +32,9 @@ function allAssignments(schedule) {
   return out;
 }
 
-test('matches the Python golden output exactly (including key order)', () => {
+// The golden file is the Python version's output, plus this week's past-due work (kept since the
+// final delivery so a week keeps all its assignments until it moves into Past weeks).
+test('matches the golden output exactly (including key order)', () => {
   const gs = loadSchedule();
   const input = JSON.parse(readFixture('schedule-input.json'));
   const golden = JSON.parse(readFixture('schedule-golden.json'));
@@ -55,11 +57,13 @@ test('generated_at is the local time in the school time zone, yyyy-MM-ddTHH:mm:s
   assert.equal(winter.generated_at, '2026-11-05T10:04:05'); // EST (UTC-5)
 });
 
-test('priority boundaries: 0 Today, 1 Tomorrow, 2-3 Due Soon, 4-7 This Week, 8+ Upcoming', () => {
+test('priority boundaries: earlier this week Past due, 0 Today, 1 Tomorrow, 2-3 Due Soon, 4-7 This Week, 8+ Upcoming', () => {
   const gs = loadSchedule();
-  // Noon New York time on each day from Oct 27 (yesterday) to Nov 5 (8 days out).
+  // Noon New York time on each day from Oct 25 (last Sunday) to Nov 5 (8 days out). Today is Wed Oct 28.
   const days = [
-    ['2026-10-27T16:00:00Z', null], // -1: past due, dropped
+    ['2026-10-25T16:00:00Z', null], // -3: last week, dropped (that week is in Past weeks)
+    ['2026-10-26T16:00:00Z', 'Past due'], // -2: this Monday, kept until the week ends
+    ['2026-10-27T16:00:00Z', 'Past due'], // -1
     ['2026-10-28T16:00:00Z', 'Today'], // 0
     ['2026-10-29T16:00:00Z', 'Tomorrow'], // 1
     ['2026-10-30T16:00:00Z', 'Due Soon'], // 2
@@ -73,15 +77,15 @@ test('priority boundaries: 0 Today, 1 Tomorrow, 2-3 Due Soon, 4-7 This Week, 8+ 
 
   const got = allAssignments(result).map((a) => [a.days_until_due, a.priority]);
   assert.deepStrictEqual(got, [
-    [0, 'Today'], [1, 'Tomorrow'], [2, 'Due Soon'], [3, 'Due Soon'],
+    [-2, 'Past due'], [-1, 'Past due'], [0, 'Today'], [1, 'Tomorrow'], [2, 'Due Soon'], [3, 'Due Soon'],
     [4, 'This Week'], [7, 'This Week'], [8, 'Upcoming'],
   ]);
-  assert.equal(result.total_assignments, 7);
+  assert.equal(result.total_assignments, 9);
 
   // The priority helper on its own, at every boundary.
-  const labels = [0, 1, 2, 3, 4, 7, 8, 30].map((d) => gs.schedulePriority_(d));
+  const labels = [-6, -1, 0, 1, 2, 3, 4, 7, 8, 30].map((d) => gs.schedulePriority_(d));
   assert.deepStrictEqual(toPlain(labels), [
-    'Today', 'Tomorrow', 'Due Soon', 'Due Soon', 'This Week', 'This Week', 'Upcoming', 'Upcoming',
+    'Past due', 'Past due', 'Today', 'Tomorrow', 'Due Soon', 'Due Soon', 'This Week', 'This Week', 'Upcoming', 'Upcoming',
   ]);
 });
 

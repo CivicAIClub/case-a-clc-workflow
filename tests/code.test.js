@@ -276,6 +276,20 @@ test('home tab on a weekend summarizes the coming week, with "due this weekend"'
   assert.ok(!/Open the coming week/.test(qt));
 });
 
+test('work from earlier this week (Past due) is counted in the week, but not as next due or due this weekend', () => {
+  const t = setup();
+  const data = homeData();
+  data.weeks['2026-09-28'] = { week_label: 'x', days: [{ day: 'Saturday', assignments: [
+    { assignment: 'Saturday quiz', course: 'Eng: Jane Austen-Garcia-B', due_time: '9:00 AM', priority: 'Past due',
+      days_until_due: -1, due_date: '2026-10-03', week_start: '2026-09-28', url: url(98) }] }] };
+  const courses = t.ctx.plannerCourseList_(data);
+  const s = toPlain(t.ctx.homeSummary_(data, courses, SUNDAY_8PM));
+  assert.strictEqual(s.soonCount, 0, "Saturday's quiz is past, so nothing is due this weekend");
+  const eng = s.rows.filter((r) => /Austen/.test(r.course))[0];
+  assert.notStrictEqual(eng.next, 'Sat, Oct 3', 'next due skips past-due work');
+  assert.strictEqual(t.ctx.PRIORITY_COLORS['Past due'], '#E0E0E0');
+});
+
 test('home tab flips at the midnight runs: Saturday 12:10 AM is weekend, Monday 12:05 AM is a weekday', () => {
   const t = setup();
   const data = homeData();
@@ -328,6 +342,161 @@ test('week rollover: ended weeks move into "Past weeks" (created once, newest fi
   assert.deepStrictEqual(sent, [{ updateDocumentTabProperties: { tabProperties: { tabId: 't.oct12', parentTabId: 't.past', index: 0 }, fields: 'parentTabId,index' } }]);
   assert.strictEqual(t.ctx.nextChildTabInsertIndex_(withPast), 1);
   assert.strictEqual(t.ctx.nextChildTabInsertIndex_(parent), 3);
+});
+
+test('past weeks: Priority cells turn gray just before the move; nothing else is touched', () => {
+  const t = setup();
+  const blank = () => tcell('');
+  const head = (second) => ({ tableCells: ['Assignment', second, 'Due Time', 'Priority', 'Status', 'Notes'].map((x) => tcell(x)) });
+  const item = (n, second, prio, status, note) => ({ tableCells: [tcell('Essay ' + n, url(n)), tcell(second), tcell('8:30 AM'), tcell(prio), tcell(status), tcell(note)] });
+  const merged = (text) => ({ tableCells: [tcell(text), blank(), blank(), blank(), blank(), blank()] });
+  const ended = {
+    tabProperties: { tabId: 't.oct5', title: 'Week of Oct 5 – Oct 11, 2026' },
+    documentTab: { body: { content: [
+      { startIndex: 1, paragraph: { elements: [] } },
+      { startIndex: 100, table: { columns: 6, tableRows: [merged('Psychology'), head('Day'), item(1, 'Monday', 'Today', 'In progress', 'kept'), item(2, 'Tuesday', 'Tomorrow', 'Not started', '')] } },
+      { startIndex: 200, table: { columns: 6, tableRows: [merged('Calculus III'), head('Day'), merged('No assignments due this week.')] } },
+      { startIndex: 300, table: { columns: 6, tableRows: [head('Course'), merged('Monday'), item(1, 'Psychology', 'Today', 'In progress', 'kept'), merged('Tuesday'), item(2, 'Psychology', 'Tomorrow', '', ''), item(3, 'Psychology', 'Due Soon', 'Complete', 'done')] } },
+    ] } },
+  };
+  const gray = { backgroundColor: { color: { rgbColor: { red: 224 / 255, green: 224 / 255, blue: 224 / 255 } } } };
+  const cellReq = (start, row, rowSpan) => ({ updateTableCellStyle: {
+    tableRange: { tableCellLocation: { tableStartLocation: { tabId: 't.oct5', index: start }, rowIndex: row, columnIndex: 3 }, rowSpan, columnSpan: 1 },
+    tableCellStyle: gray, fields: 'backgroundColor',
+  } });
+  const expected = [cellReq(100, 2, 2), cellReq(300, 2, 1), cellReq(300, 4, 2)];
+  assert.deepStrictEqual(toPlain(t.ctx.pastPriorityGrayRequests_(ended)), expected,
+    'only Priority cells that hold a priority: no class names, day rows, "No assignments" rows, Status or Notes');
+
+  const parent = { tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [ended, weekTab('t.past', 'Past weeks')] };
+  const sent = [];
+  t.ctx.docsGet_ = () => ({ tabs: [parent] });
+  t.ctx.docsBatchUpdate_ = (id, reqs) => { sent.push(toPlain(reqs)); return { replies: [] }; };
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-12'), 1);
+  const move = { updateDocumentTabProperties: { tabProperties: { tabId: 't.oct5', parentTabId: 't.past', index: 0 }, fields: 'parentTabId,index' } };
+  assert.deepStrictEqual(sent, [expected, [move]], 'gray first, then the move');
+  // If Google refuses the gray, the week still moves (the gray is only a look).
+  sent.length = 0;
+  t.ctx.docsBatchUpdate_ = (id, reqs) => {
+    if (reqs[0].updateTableCellStyle) throw new Error('Invalid requests[0].updateTableCellStyle');
+    sent.push(toPlain(reqs));
+    return { replies: [] };
+  };
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-12'), 1);
+  assert.deepStrictEqual(sent, [[move]]);
+  t.ctx.docsBatchUpdate_ = (id, reqs) => { sent.push(toPlain(reqs)); return { replies: [] }; };
+  // Once it's in Past weeks it is never looked at again.
+  parent.childTabs = [weekTab('t.past', 'Past weeks')];
+  parent.childTabs[0].childTabs = [ended];
+  sent.length = 0;
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-19'), 0);
+  assert.deepStrictEqual(sent, []);
+});
+
+test("Doc reads leave out Past weeks' content; if Google refuses that, a full read is used instead", () => {
+  const t = setup();
+  const asked = [];
+  let refuse = false;
+  t.ctx.Docs = { Documents: { get: (id, opts) => {
+    asked.push(toPlain(opts));
+    if (opts.fields && refuse) throw new Error('Invalid field selection tabs');
+    if (id === 'GONE') throw new Error('Requested entity was not found.');
+    return { tabs: [] };
+  } } };
+  const mask = 'tabs(tabProperties,documentTab,childTabs(tabProperties,documentTab,childTabs(tabProperties)))';
+  t.ctx.docsGet_('DOC');
+  assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }]);
+  t.ctx.docsGet_('DOC', { includeTabsContent: true });
+  assert.deepStrictEqual(asked[1], { includeTabsContent: true }, 'a full read when asked for one');
+  // A missing Doc is still an error, and doesn't switch reads to full.
+  assert.throws(() => t.ctx.docsGet_('GONE'), /not found/);
+  assert.strictEqual(t.ctx.docsGetFieldsRejected_, false);
+  // Google refuses the shorter read: the update still works, with full reads from then on.
+  refuse = true;
+  asked.length = 0;
+  t.ctx.docsGet_('DOC');
+  t.ctx.docsGet_('DOC');
+  assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }, { includeTabsContent: true }, { includeTabsContent: true }]);
+  assert.strictEqual(t.ctx.docsGetFieldsRejected_, true);
+});
+
+test('the shared folder deleted, unshared or in the trash: a plain message, and nothing is written', () => {
+  const gone = setup({ DOCS_FOLDER_ID: 'BAD' }, { badFolder: true });
+  assert.throws(() => gone.ctx.upsertPlannerDocument_(base), (e) =>
+    /cannot open that Drive folder\. It may have been deleted, or AutoPlanner's owner lost access to it\. Contact Cayden Auyang or Luke Ryan\.$/.test(e.message) &&
+    !/Exception|No item/.test(e.message));
+  const binned = setup({ DOCS_FOLDER_ID: 'FOLDER123' });
+  binned.svc.folderState.trashed = true;
+  assert.throws(() => binned.ctx.upsertPlannerDocument_(base), /shared folder "AutoPlanner – CLC Student Planners" is in the Drive trash/);
+  assert.deepStrictEqual(binned.calls, []);
+});
+
+test('a Doc in the trash, or gone, is never written: refused before it is opened (with or without a folder)', () => {
+  for (const props of [{ DOCS_FOLDER_ID: 'FOLDER123' }, {}]) {
+    const t = setup(props);
+    t.svc.addFile('BINNED', 'Test Student - CLC Assignments', 'FOLDER123', { trashed: true });
+    assert.throws(() => t.ctx.upsertPlannerDocument_(Object.assign({ documentId: 'BINNED' }, base)),
+      /^Error: Could not open the saved Google Doc \(BINNED\): it is in the trash\.$/);
+    assert.throws(() => t.ctx.upsertPlannerDocument_(Object.assign({ documentId: 'GONE' }, base)), /Could not open the saved Google Doc \(GONE\)/);
+    assert.deepStrictEqual(t.calls, [], 'never opened, renamed or written');
+    assert.deepStrictEqual(t.svc.sleepCalls, [2000], 'a missing Doc is looked up twice, 2 s apart, in case Drive had a hiccup');
+  }
+});
+
+test('rebuilding a week: the new tab is written before the old one is deleted, so a stopped update loses nothing', () => {
+  const t = setup();
+  const title = 'Week of Oct 5 – Oct 11, 2026';
+  const withTable = (id) => ({ tabProperties: { tabId: id, title }, documentTab: { body: { content: [
+    { startIndex: 1, endIndex: 2, paragraph: { elements: [] } }, { startIndex: 2, endIndex: 90, table: { columns: 6, tableRows: [trow(url(1), 'In progress', 'keep me')] } },
+  ] } } });
+  const run = (kids, failFill) => {
+    const log = [];
+    t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: kids }] });
+    t.ctx.sleepDocsChunkGap_ = () => {};
+    t.ctx.addWeekChildTab_ = (d, p, ttl, index) => { log.push(['add', index]); return 't.new'; };
+    t.ctx.batchUpdateChunked_ = (d, reqs) => { if (failFill) throw new Error('Exceeded maximum execution time'); log.push(['fill', reqs[0].insertText.location.tabId]); };
+    t.ctx.docsBatchUpdate_ = (d, reqs) => { log.push(['delete'].concat(reqs.map((r) => r.deleteTab.tabId))); return {}; };
+    const week = { week_label: 'Oct 5 – Oct 11', days: [] };
+    try { t.ctx.fillWeekTabDocsApi_('DOC', 't.0', title, kids[1].tabProperties.tabId, '2026-10-05', week, [], {}, { notes: {}, status: {} }); } catch (e) { log.push(['stopped']); }
+    return log;
+  };
+  const other = weekTab('t.oct12', 'Week of Oct 12 – Oct 18, 2026');
+  // Normal: new tab just below the old one, filled, then the old one deleted (the new one takes its place).
+  assert.deepStrictEqual(run([other, withTable('t.old')]), [['add', 2], ['fill', 't.new'], ['delete', 't.old']]);
+  // Stopped while filling: the old tab is never deleted, and it's still the top copy.
+  assert.deepStrictEqual(run([other, withTable('t.old')], true), [['add', 2], ['stopped']]);
+  // The next update rebuilds from the old (top) copy; both copies go once the new tab is complete.
+  assert.deepStrictEqual(run([other, withTable('t.old'), withTable('t.half')]), [['add', 2], ['fill', 't.new'], ['delete', 't.old', 't.half']]);
+  // With two copies, the top one's Status and Notes win (it's the one staff see and edit).
+  const X = url(1);
+  const two = { childTabs: [weekTab('t.top', title, [trow(X, 'Complete', 'edited this morning')]), weekTab('t.half', title, [trow(X, 'In progress', 'old note')])] };
+  assert.deepStrictEqual(toPlain(t.ctx.collectSavedData_(two)), { notes: { [X]: 'edited this morning' }, status: { [X]: 'Complete' } });
+});
+
+test('an update that runs across Sunday midnight never writes the week it just filed', () => {
+  const t = setup();
+  const filled = [];
+  t.ctx.fillWeekTabDocsApi_ = (d, p, title) => filled.push(title);
+  t.ctx.addWeekChildTab_ = () => 't.new';
+  t.ctx.sleepDocsChunkGap_ = () => {};
+  t.ctx.rebuildHomeTab_ = () => {};
+  const week = (label) => ({ week_label: label, days: [] });
+  // The schedule still has last week (fetched before midnight); "today" is now later.
+  t.ctx.upsertPlannerDocument_(Object.assign({}, base, { weeks: { '2020-01-06': week('Jan 6 – Jan 12'), '2099-01-05': week('Jan 5 – Jan 11') } }));
+  assert.deepStrictEqual(filled, ['Week of Jan 5 – Jan 11, 2099']);
+});
+
+test('a Drive hiccup is never mistaken for a deleted Doc or folder', () => {
+  const t = setup({ DOCS_FOLDER_ID: 'FOLDER123' });
+  t.svc.addFile('DOC1', 'Test Student - CLC Assignments', 'FOLDER123');
+  const realGet = t.ctx.DriveApp.getFileById;
+  t.ctx.DriveApp.getFileById = () => { throw new Error('Exception: Service error: Drive'); };
+  assert.throws(() => t.ctx.savedDocFile_('DOC1'), (e) =>
+    e.message === "Google Drive didn't answer about this student's Doc. They'll be tried again at the next update." && e.message.indexOf(t.ctx.DOC_GONE_PREFIX) === -1);
+  t.ctx.DriveApp.getFileById = realGet;
+  assert.throws(() => t.ctx.savedDocFile_('NOPE'), /^Error: Could not open the saved Google Doc \(NOPE\): Error: No item with the given ID/);
+  t.ctx.DriveApp.getFolderById = () => { throw new Error('Exception: Service error: Drive'); };
+  assert.throws(() => t.ctx.getDocsFolder_(), (e) => /Service error: Drive/.test(e.message) && !/deleted/.test(e.message));
 });
 
 test('notes follow an assignment to its new week; the typed value wins; past weeks are never read', () => {

@@ -9,7 +9,19 @@
         },
         {
           "day": "Tuesday",
-          "assignments": []
+          "assignments": [
+            {
+              "day": "Tuesday",
+              "assignment": "Poetry reflection",
+              "course": "English 10",
+              "due_time": "11:00 AM",
+              "priority": "Past due",
+              "days_until_due": -1,
+              "due_date": "2026-10-27",
+              "week_start": "2026-10-26",
+              "url": "https://pomfret.instructure.com/courses/1/assignments/104"
+            }
+          ]
         },
         {
           "day": "Wednesday",
@@ -308,5 +320,5 @@
       ]
     }
   },
-  "total_assignments": 18
+  "total_assignments": 19
 }

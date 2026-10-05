@@ -51,7 +51,9 @@ Hand out the quick start and token guides. "If anything looks wrong, email Cayde
 | "Google is limiting how fast Docs can be edited" | Google's per-minute limit on Doc edits. | Nothing; it's retried at the next update. Don't click Update repeatedly. |
 | "Took longer than Apps Script allows" | A very large planner ran past Google's 6-minute limit. | It's retried at the next update; tell the club if it keeps happening. |
 | "AutoPlanner only updates Docs in the … folder" | The student's Doc was moved out of the shared folder. | Move it back into **AutoPlanner – CLC Student Planners**, then click **Update**. |
-| A week's tab is gone from under **CLC Planner** | The week ended. | Open **Past weeks**: it's there, with its Status and Notes. |
+| A week's tab is gone from under **CLC Planner** | The week ended. | Open **Past weeks**: it's there, with its Status and Notes (and a gray Priority column). |
+| "Their Doc was deleted, so AutoPlanner made a new one." | Someone deleted the student's Doc. | Nothing; the new Doc is in the shared folder. The old one is in the owner's Drive trash for 30 days. |
+| "Automatic updates haven't finished since …" | The automatic updates stopped, usually because the owner's account changed. | Club: see "Long-term care" in the quick start. |
 | "An update for all students is running" | An update is already going (yours or the automatic one). | Wait; the progress shows under **Update**. |
 | "Automatic updates are not turned on yet" | The daily triggers aren't installed. | Club: run `setupTriggers` in the Apps Script editor. |
 | Club only: "Script function not found: doGet" | The deployment still points at an old version. | **Deploy → Manage deployments → ✏️ → Version: New version → Deploy.** |

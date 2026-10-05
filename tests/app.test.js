@@ -90,7 +90,10 @@ test('doGet: allowed users get the page; everyone else gets "Not authorized"', (
   assert.strictEqual(page.kind, 'html');
   assert.match(page.value, /Not authorized/);
   assert.match(page.value, /stranger@pomfret\.org/);
-  assert.match(page.value, /Cayden Auyang or Luke Ryan/);
+  assert.match(page.value, /This page is only for CLC staff\. If you need access, contact Cayden Auyang or Luke Ryan\./);
+  assert.match(page.value, /--ink:#0d0d0c;--paper:#f4f3ef/, 'same design tokens as the staff page');
+  assert.match(page.value, /<span class="brand-name">AutoPlanner<\/span>/, 'same header');
+  assert.doesNotMatch(page.value, /google\.script\.run|<script/, 'no data and no actions');
   t.svc.setActive('');
   assert.match(t.ctx.doGet().value, /did not tell AutoPlanner/);
   t.svc.setActive('<b>x</b>@pomfret.org');
@@ -211,6 +214,120 @@ test('updateStudentNow: success is recorded; an expired token gives a plain mess
   assert.strictEqual(bad.last.ok, false);
   assert.match(bad.last.message, /didn't accept this student's token/);
   assert.ok(!JSON.stringify(t.svc.props).replace(t.svc.props['token.' + student.id], '').includes(TOKEN_A));
+});
+
+test('a student whose Doc was trashed gets a fresh Doc and a plain message on their row for a week', () => {
+  const t = setup();
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.updateStudentNow(student.id);
+  const oldId = JSON.parse(t.svc.props['student.' + student.id]).docId;
+  t.svc.addFile(oldId, 'Avery Example - CLC Assignments', 'FOLDER123', { trashed: true });
+  // Like the real Doc writer: check the saved Doc first (the real check), then write.
+  const writes = [];
+  t.ctx.upsertPlannerDocument_ = (payload) => {
+    if (payload.documentId) t.ctx.savedDocFile_(payload.documentId);
+    writes.push(payload.documentId || 'new');
+    if (!payload.documentId) t.svc.addFile('FRESH-DOC', 'Avery Example - CLC Assignments', 'FOLDER123');
+    return { docUrl: 'u', documentId: payload.documentId || 'FRESH-DOC' };
+  };
+  const after = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.deepStrictEqual(writes, ['new'], 'nothing written to the trashed Doc');
+  assert.strictEqual(after.last.ok, true);
+  assert.match(after.docUrl, /FRESH-DOC/);
+  assert.strictEqual(after.notice.message, 'Their Doc was deleted, so AutoPlanner made a new one.');
+  // The next update writes the new Doc; the message stays for a week, then goes.
+  t.ctx.updateStudentNow(student.id);
+  assert.deepStrictEqual(writes, ['new', 'FRESH-DOC']);
+  assert.ok(toPlain(t.ctx.getAppState()).students[0].notice);
+  const rec = JSON.parse(t.svc.props['student.' + student.id]);
+  rec.notice.at = new Date(Date.now() - 8 * 24 * 3600 * 1000).toISOString();
+  t.svc.props['student.' + student.id] = JSON.stringify(rec);
+  assert.strictEqual(toPlain(t.ctx.getAppState()).students[0].notice, null);
+});
+
+test('a trashed Doc with another of their Docs in the folder: that one is used, and the row says so', () => {
+  const t = setup();
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.updateStudentNow(student.id);
+  const oldId = JSON.parse(t.svc.props['student.' + student.id]).docId;
+  t.svc.addFile(oldId, 'Avery Example - CLC Assignments', 'FOLDER123', { trashed: true });
+  t.svc.addFile('SPARE', 'Avery Example - CLC Assignments', 'FOLDER123');
+  t.ctx.upsertPlannerDocument_ = (payload) => {
+    if (payload.documentId) t.ctx.savedDocFile_(payload.documentId);
+    return { docUrl: 'u', documentId: payload.documentId };
+  };
+  const after = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.match(after.docUrl, /SPARE/);
+  assert.match(after.notice.message, /^Their Doc was deleted, so AutoPlanner switched to their other Doc/);
+});
+
+test('staff never see raw Google errors, and a Canvas 429 is not called a Docs problem', () => {
+  const t = setup();
+  const plain = /^Google Docs or Drive had a temporary problem\. This student will be tried again at the next update\. If it keeps happening, contact Cayden Auyang or Luke Ryan/;
+  for (const raw of [
+    'GoogleJsonResponseException: API call to docs.documents.batchUpdate failed with error: Internal error encountered.',
+    'Exception: Service error: Drive',
+    "We're sorry, a server error occurred. Please wait a bit and try again.",
+    'Could not open the saved Google Doc (abc): Exception: Unexpected error while getting the method or property getFileById',
+    'addDocumentTab failed — check Docs API service is enabled. Raw: {}',
+    'Exception: Service invoked too many times for one day: urlfetch.',
+  ]) assert.match(t.ctx.friendlyError_(new Error(raw)), plain, raw);
+  const canvasBusy = Object.assign(new Error('Canvas is busy or down right now (HTTP 429). Try again later.'), { canvasKind: 'unavailable' });
+  assert.strictEqual(t.ctx.friendlyError_(canvasBusy), 'Canvas is busy or down right now (HTTP 429). Try again later.');
+  assert.match(t.ctx.friendlyError_(new Error('Quota exceeded for quota metric write requests (429)')), /limiting how fast Docs/);
+  // Plain messages pass through untouched.
+  assert.strictEqual(t.ctx.friendlyError_(new Error("Canvas didn't accept this student's token.")), "Canvas didn't accept this student's token.");
+});
+
+test("a Drive hiccup on a Doc that isn't gone: no new Doc, and a plain message", () => {
+  const t = setup();
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.updateStudentNow(student.id);
+  const docId = JSON.parse(t.svc.props['student.' + student.id]).docId;
+  t.svc.addFile(docId, 'Avery Example - CLC Assignments', 'FOLDER123');
+  const writes = [];
+  t.ctx.upsertPlannerDocument_ = (payload) => {
+    writes.push(payload.documentId || 'new');
+    if (payload.documentId) throw new Error(t.ctx.DOC_GONE_PREFIX + ' (' + docId + '): Exception: Service error: Drive');
+    return { documentId: 'SHOULD-NOT-HAPPEN' };
+  };
+  const after = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.deepStrictEqual(writes, [docId], 'no second Doc');
+  assert.strictEqual(after.last.ok, false);
+  assert.match(after.last.message, /Google Drive didn't answer about this student's Doc/);
+  assert.match(after.docUrl, new RegExp(docId));
+});
+
+test('run summaries stay small (20 problems kept, the rest counted), and removed students leave the total', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  for (let i = 0; i < 25; i++) {
+    t.svc.props['student.s' + i] = JSON.stringify({ id: 's' + i, name: 'Student ' + i, label: '', canvasUserId: 900 + i });
+    t.svc.props['token.s' + i] = 'TOKEN-BAD-' + i;
+  }
+  t.ctx.startUpdateAll();
+  const last = JSON.parse(t.svc.props['run.last']);
+  assert.strictEqual(last.failed.length, 20);
+  assert.strictEqual(last.moreFailed, 5);
+  assert.ok(t.svc.props['run.last'].length < 9000, 'fits in one Script Property');
+  // A student removed while queued doesn't count as "not updated".
+  const run = { id: 'r1', queue: [], total: 3, updated: 0, failed: [], inProgress: 'x' };
+  t.svc.props['run.current'] = JSON.stringify(run);
+  t.ctx.recordResult_('r1', { ok: false, skipped: true, message: 'That student was removed.' });
+  assert.strictEqual(JSON.parse(t.svc.props['run.current']).total, 2);
+});
+
+test('the page warns when no update has finished for over a day', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  t.ctx.setupTriggers();
+  t.svc.setActive(STAFF);
+  assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, null, 'no update yet: nothing to warn about');
+  const old = new Date(Date.now() - 27 * 3600 * 1000).toISOString();
+  t.svc.props['run.last'] = JSON.stringify({ finishedAt: old, total: 1, updated: 1, failed: [] });
+  assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, old);
+  t.svc.props['run.last'] = JSON.stringify({ finishedAt: new Date().toISOString(), total: 1, updated: 1, failed: [] });
+  assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, null);
 });
 
 test('friendlyError_ scrubs the token and translates Docs quota errors', () => {
@@ -368,4 +485,24 @@ test("selfTest uses your student row's Doc when you're on the list (no second co
   t.ctx.selfTestKeepToken();
   assert.deepStrictEqual(calls[0], { id: student.id, docId: 'MY-DOC' });
   assert.match(t.sb.logs.join('\n'), /PASS Doc: create or update yours in the shared folder: used your student row's Doc/);
+  assert.match(t.sb.logs.join('\n'), /PASS Not authorized page: the CLC-staff message, and no data or actions/);
+});
+
+test("selfTest's gray check: passes when a past week's Priority cells are gray, fails when one isn't", () => {
+  const t = setup();
+  const cell = (text, bg) => ({
+    content: [{ paragraph: { elements: [{ textRun: { content: text + '\n' } }] } }],
+    tableCellStyle: bg ? { backgroundColor: { color: { rgbColor: bg } } } : {},
+  });
+  const gray = { red: 224 / 255, green: 224 / 255, blue: 224 / 255 };
+  const orange = { red: 1, green: 0.702, blue: 0.278 };
+  const tab = (bg) => ({
+    tabProperties: { tabId: 't.x', title: 'Week of Oct 5 – Oct 11, 2026' },
+    documentTab: { body: { content: [{ startIndex: 5, table: { tableRows: [
+      { tableCells: ['Assignment', 'Day', 'Due Time', 'Priority', 'Status', 'Notes'].map((x) => cell(x)) },
+      { tableCells: [cell('Essay'), cell('Monday'), cell('8:30 AM'), cell('Today', bg), cell('Complete'), cell('')] },
+    ] } }] } },
+  });
+  assert.strictEqual(t.ctx.assertPriorityGray_(tab(gray)), 1);
+  assert.throws(() => t.ctx.assertPriorityGray_(tab(orange)), /a Priority cell in "Week of Oct 5 – Oct 11, 2026" is not gray/);
 });

@@ -68,7 +68,7 @@ function fakeServices(options) {
   };
 
   function output(kind, value) {
-    const o = { kind, value, title: '', setTitle: (t) => { o.title = t; return o; }, addMetaTag: () => o };
+    const o = { kind, value, title: '', setTitle: (t) => { o.title = t; return o; }, addMetaTag: () => o, getContent: () => value };
     return o;
   }
   const HtmlService = {
@@ -78,9 +78,11 @@ function fakeServices(options) {
 
   // Drive: one shared folder (id FOLDER123) holding `files`; other files live elsewhere.
   const files = {};
+  const folderState = { trashed: false };
   const folder = {
     getId: () => 'FOLDER123',
     getName: () => 'AutoPlanner – CLC Student Planners',
+    isTrashed: () => !!folderState.trashed,
     searchFiles: (query) => {
       const m = /title = '((?:[^'\\]|\\.)*)'/.exec(query);
       const title = m ? m[1].replace(/\\(.)/g, '$1') : null;
@@ -130,6 +132,7 @@ function fakeServices(options) {
     sleepCalls,
     setActive: (email) => { active = email; },
     addFile: (id, name, parent, extra) => { files[id] = Object.assign({ id, name, parent }, extra || {}); },
+    folderState,
   };
 }
 

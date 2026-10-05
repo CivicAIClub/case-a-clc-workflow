@@ -33,6 +33,10 @@ var APP_CONTINUE_AFTER_MS = 60 * 1000; // next batch of a long run
 var APP_SAFETY_CONTINUE_AFTER_MS = 8 * 60 * 1000; // resumes a run if a batch is cut off
 var APP_RUN_STALE_MS = 15 * 60 * 1000; // a run with no progress this long is treated as stopped
 var APP_STUDENT_BUSY_MS = 7 * 60 * 1000;
+var APP_NOTICE_DAYS = 7; // how long a one-off message (e.g. "made a new Doc") stays on a row
+// A run summary is one Script Property (9 KB at most), so it keeps this many problems in full.
+var APP_MAX_FAILURES_KEPT = 20;
+var APP_STALE_AFTER_MS = 26 * 3600 * 1000; // no finished update for this long means something is wrong
 
 // =====================================================================================
 // The web page
@@ -46,19 +50,68 @@ function doGet() {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
+/**
+ * The page for anyone not on ALLOWED_USERS, in the same design as Index.html (its tokens, fonts and
+ * header). It shows no data and offers no actions; doGet's access check above is the only gate.
+ */
 function notAuthorizedPage_(email) {
   var who = email
-    ? 'You are signed in as <b>' + escapeHtml_(email) + '</b>.'
-    : 'Google did not tell AutoPlanner which Pomfret account you are using.';
+    ? '<p class="t-mono who">Signed in as <span class="who-v">' + escapeHtml_(email) + '</span></p>'
+    : '';
+  var unknown = email
+    ? ''
+    : '<p class="hint">Google did not tell AutoPlanner which Pomfret account you are using.</p>';
   var html =
-    '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;' +
-    'max-width:560px;margin:4rem auto;padding:0 1.25rem;color:#0f172a;line-height:1.6">' +
-    '<h1 style="font-size:1.6rem;margin-bottom:.75rem">Not authorized</h1>' +
-    '<p>' + who + ' AutoPlanner is only open to CLC staff.</p>' +
-    '<p style="margin-top:.75rem">If you need access, contact ' + escapeHtml_(APP_CONTACT) + '.</p>' +
-    '<p style="margin-top:.75rem;color:#64748b;font-size:.9rem">Signed in to more than one Google ' +
-    'account? Open AutoPlanner in a browser window signed in only to your Pomfret account.</p></div>';
-  return HtmlService.createHtmlOutput(html).setTitle('AutoPlanner: not authorized');
+    '<!DOCTYPE html><html lang="en"><head><base target="_top" /><meta charset="UTF-8" />' +
+    '<link rel="preconnect" href="https://fonts.googleapis.com" />' +
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />' +
+    '<link href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@300;400;600' +
+    '&family=Martian+Mono:wght@400&display=swap" rel="stylesheet" />' +
+    '<style>' +
+    // The same tokens and header as Index.html.
+    ':root{--ink:#0d0d0c;--paper:#f4f3ef;--ink-2:#5f5d58;--crimson:#a8172b;--mark-text:#fbfaf7;' +
+    '--rule:rgb(13 13 12 / 0.25);--font-sans:"Host Grotesk","Helvetica Neue",Arial,sans-serif;' +
+    '--font-mono:"Martian Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;--fs-mono:11px;' +
+    '--ls-mono:0.04em;--fs-ui:14px;--fs-body:clamp(16px,0.9rem + 0.2vw,18px);--fs-label:20px;' +
+    '--fw-light:300;--fw-regular:400;--margin:40px;--gutter:20px;--header-height:62px}' +
+    '@media (max-width:1023px){:root{--margin:24px;--gutter:16px;--fs-label:18px}}' +
+    '@media (max-width:767px){:root{--margin:16px;--gutter:12px;--fs-label:17px;--header-height:56px}}' +
+    '*,*::before,*::after{box-sizing:border-box}html,body,p{margin:0}' +
+    'html{background:var(--paper);color:var(--ink);font-family:var(--font-sans);' +
+    'font-weight:var(--fw-light);-webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased}' +
+    'body{min-height:100vh;font-size:var(--fs-body);line-height:1.35;overflow-x:clip}' +
+    '::selection{background:var(--crimson);color:var(--mark-text)}' +
+    '.t-mono{font-family:var(--font-mono);font-size:var(--fs-mono);font-weight:var(--fw-regular);' +
+    'letter-spacing:var(--ls-mono);line-height:1.3;text-transform:uppercase}' +
+    '.page{width:100%;max-width:calc(900px + 2 * var(--margin));margin:0 auto;padding-inline:var(--margin)}' +
+    '.site-header{border-bottom:1px solid var(--rule)}' +
+    '.header-inner{min-height:var(--header-height);display:flex;align-items:center;' +
+    'justify-content:space-between;gap:8px var(--gutter);flex-wrap:wrap;padding-block:12px}' +
+    '.brand{display:flex;align-items:baseline;gap:4px 18px;flex-wrap:wrap}' +
+    '.brand-name{font-size:var(--fs-label);font-weight:var(--fw-regular);letter-spacing:-0.01em;line-height:1.2}' +
+    '.brand-sub,.who{color:var(--ink-2)}.who-v{color:var(--ink);text-transform:none;letter-spacing:0;overflow-wrap:anywhere}' +
+    '.block{margin-top:48px;border-top:1px solid var(--ink);padding-top:16px}' +
+    '.flag{display:inline-block;padding:3px 6px;background:var(--ink);color:var(--paper)}' +
+    '.lede{margin-top:20px;max-width:34em;font-size:var(--fs-label);line-height:1.3;letter-spacing:-0.01em}' +
+    '.hint{margin-top:16px;max-width:46em;color:var(--ink-2);font-size:var(--fs-ui);line-height:1.45}' +
+    '.site-footer{margin-top:72px;padding-bottom:40px;color:var(--ink-2)}' +
+    '.site-footer p{border-top:1px solid var(--rule);padding-top:16px;font-size:var(--fs-ui);line-height:1.45}' +
+    '@media (max-width:767px){.block{margin-top:32px}}' +
+    '</style></head><body>' +
+    '<header class="site-header"><div class="page header-inner"><div class="brand">' +
+    '<span class="brand-name">AutoPlanner</span>' +
+    '<span class="t-mono brand-sub">CLC Supported Study Hall · Pomfret School</span></div>' + who +
+    '</div></header>' +
+    '<main class="page"><div class="block"><p class="t-mono"><span class="flag">Not authorized</span></p>' +
+    '<p class="lede">This page is only for CLC staff. If you need access, contact Cayden Auyang or Luke Ryan.</p>' +
+    unknown +
+    '<p class="hint">Signed in to more than one Google account? Open AutoPlanner in a browser window ' +
+    'signed in only to your Pomfret account.</p></div></main>' +
+    '<footer class="page site-footer"><p>Built by the Pomfret Civic AI Club</p></footer>' +
+    '</body></html>';
+  return HtmlService.createHtmlOutput(html)
+    .setTitle('AutoPlanner: not authorized')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 /** Everything the page needs to draw itself. */
@@ -70,8 +123,20 @@ function getAppState() {
     run: publicRun_(readJson_('run.current')),
     lastRun: readJson_('run.last'),
     automaticUpdatesOn: dailyTriggerCount_() === APP_DAILY_HOURS.length,
+    updatesStaleSince: updatesStaleSince_(),
     contact: APP_CONTACT,
   };
+}
+
+/**
+ * When the last finished update is over a day old (and none is running), its time; otherwise null.
+ * The automatic updates would have finished one by now, so a trigger is failing (for example the
+ * owner's account was closed or lost its permissions) and staff should tell the club.
+ */
+function updatesStaleSince_() {
+  var last = readJson_('run.last');
+  if (!last || !last.finishedAt || activeRun_()) return null;
+  return Date.now() - new Date(last.finishedAt).getTime() > APP_STALE_AFTER_MS ? last.finishedAt : null;
 }
 
 /** Add a student from their Canvas token. Checks the token with Canvas before saving it. */
@@ -310,7 +375,15 @@ function publicStudent_(s) {
     tokenEnd: token ? token.slice(-4) : '',
     docUrl: s.docId ? 'https://docs.google.com/document/d/' + s.docId + '/edit' : '',
     last: s.last || null,
+    notice: recentNotice_(s.notice),
   };
+}
+
+/** A one-off row message, while it's less than APP_NOTICE_DAYS old; otherwise null. */
+function recentNotice_(notice) {
+  if (!notice || !notice.at || !notice.message) return null;
+  var age = Date.now() - new Date(notice.at).getTime();
+  return age >= 0 && age < APP_NOTICE_DAYS * 24 * 3600 * 1000 ? { at: notice.at, message: notice.message } : null;
 }
 
 function cleanToken_(token) {
@@ -345,11 +418,24 @@ function canvasProfileOrFriendlyError_(token) {
 function friendlyError_(err, token) {
   var msg = String((err && err.message) || err || 'Unknown error').replace(/^Error:\s*/, '');
   if (token) msg = msg.split(token).join('[token]');
-  if (docsApiIsQuotaError_(msg)) {
+  if (err && err.canvasKind) {
+    // Canvas messages are already plain English (and a Canvas 429 isn't a Docs problem).
+  } else if (docsApiIsQuotaError_(msg)) {
     msg = 'Google is limiting how fast Docs can be edited right now. This student will be tried again at the next update.';
+  } else if (APP_RAW_GOOGLE_ERROR.test(msg)) {
+    console.warn('Raw error shown to staff in plain words: ' + msg);
+    msg = 'Google Docs or Drive had a temporary problem. This student will be tried again at the next ' +
+      'update. If it keeps happening, contact ' + APP_CONTACT + '.';
   }
   return msg.length > 300 ? msg.substring(0, 297) + '…' : msg;
 }
+
+// Google's own error texts (and a few internal ones) that mean nothing to staff.
+var APP_RAW_GOOGLE_ERROR = new RegExp([
+  'Exception:', 'Service error', 'server error', 'Internal error', 'unavailable', 'Backend Error',
+  'GoogleJsonResponseException', 'Invalid requests\\[', 'addDocumentTab failed', 'Timed out clearing',
+  'Table cell has no paragraph', 'Service invoked too many times',
+].join('|'), 'i');
 
 function escapeHtml_(s) {
   return String(s).replace(/[&<>"']/g, function (c) {
@@ -414,10 +500,12 @@ function updateOneStudent_(id) {
           '). Click Edit and paste ' + student.name + "'s own token."
       );
     }
-    var docId = writeDocWithRecovery_(student, schedule);
+    var docInfo = {};
+    var docId = writeDocWithRecovery_(student, schedule, docInfo);
     student = getStudent_(id) || student;
     student.name = schedule.student_full_name || student.name;
     student.docId = docId;
+    if (docInfo.replaced) student.notice = { at: new Date().toISOString(), message: docInfo.replaced };
     var count = schedule.total_assignments || 0;
     student.last = {
       at: new Date().toISOString(),
@@ -436,8 +524,11 @@ function updateOneStudent_(id) {
   return result;
 }
 
-/** Writes the Doc; if the saved Doc was deleted, reuses or creates one instead. Returns its ID. */
-function writeDocWithRecovery_(student, schedule) {
+/**
+ * Writes the Doc; if the saved Doc is in the trash or deleted, reuses or creates one instead, and
+ * puts a message for the student's row in `info.replaced`. Returns the Doc's ID.
+ */
+function writeDocWithRecovery_(student, schedule, info) {
   var payload = {};
   Object.keys(schedule).forEach(function (k) { payload[k] = schedule[k]; });
   payload.studentFullName = schedule.student_full_name;
@@ -446,12 +537,22 @@ function writeDocWithRecovery_(student, schedule) {
   try {
     return upsertPlannerDocument_(payload).documentId;
   } catch (err) {
-    if (!docId || String(err.message || err).indexOf('Could not open the saved Google Doc') === -1) throw err;
+    if (!docId || String(err.message || err).indexOf(DOC_GONE_PREFIX) === -1) throw err;
     // The saved Doc is gone (deleted or in the trash): start again with a reused or new Doc.
     delete payload.documentId;
     var other = findReusableDoc_(schedule.student_full_name, student.id);
-    if (other && other !== docId) payload.documentId = other;
-    return upsertPlannerDocument_(payload).documentId;
+    // Drive can still find the same Doc, not in the trash: it was a hiccup, not a deleted Doc.
+    if (other === docId) {
+      throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
+    }
+    if (other) payload.documentId = other;
+    var newId = upsertPlannerDocument_(payload).documentId;
+    if (info) {
+      info.replaced = payload.documentId
+        ? 'Their Doc was deleted, so AutoPlanner switched to their other Doc in the shared folder.'
+        : 'Their Doc was deleted, so AutoPlanner made a new one.';
+    }
+    return newId;
   }
 }
 
@@ -549,8 +650,11 @@ function recordResult_(runId, result) {
     run.inProgress = null;
     run.heartbeatAt = Date.now();
     if (result.ok) run.updated++;
-    else if (!result.skipped || result.message !== 'That student was removed.') {
-      run.failed.push({ name: result.name || 'A student', message: result.message });
+    else if (result.skipped && result.message === 'That student was removed.') run.total--;
+    else if (run.failed.length < APP_MAX_FAILURES_KEPT) {
+      run.failed.push({ name: result.name || 'A student', message: String(result.message || '').substring(0, 200) });
+    } else {
+      run.moreFailed = (run.moreFailed || 0) + 1;
     }
     writeJson_('run.current', run);
   });
@@ -568,9 +672,10 @@ function finishRun_(runId) {
       finishedAt: new Date().toISOString(),
       total: run.total,
       updated: run.updated,
-      failed: run.failed.slice(0, 40).map(function (f) {
+      failed: run.failed.slice(0, APP_MAX_FAILURES_KEPT).map(function (f) {
         return { name: f.name, message: String(f.message || '').substring(0, 200) };
       }),
+      moreFailed: run.moreFailed || 0,
     };
     writeJson_('run.last', summary);
     writeJson_('run.current', null);
@@ -585,7 +690,7 @@ function publicRun_(run) {
     startedAt: new Date(run.startedAt).toISOString(),
     total: run.total,
     done: run.total - run.queue.length - (run.inProgress ? 1 : 0),
-    failed: run.failed.length,
+    failed: run.failed.length + (run.moreFailed || 0),
     current: current ? current.label || current.name : '',
   };
 }
@@ -778,6 +883,15 @@ function runSelfTest_(keepToken) {
     check('You are in ALLOWED_USERS', function () {
       if (!isAllowedUser_(requireOwner_())) throw new Error('Add your email to ALLOWED_USERS.');
     }) &&
+    check('Not authorized page: the CLC-staff message, and no data or actions', function () {
+      var stranger = 'not-on-the-list@pomfret.org';
+      if (isAllowedUser_(stranger)) throw new Error(stranger + ' is allowed in');
+      var html = notAuthorizedPage_(stranger).getContent();
+      var want = 'This page is only for CLC staff. If you need access, contact Cayden Auyang or Luke Ryan.';
+      if (html.indexOf(want) === -1) throw new Error('the message is missing');
+      if (/<script|google\.script\.run/.test(html)) throw new Error('the page has a script');
+      return 'shows "' + want + '"';
+    }) &&
     check('Canvas: fetch your assignments and classes', function () {
       try {
         schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD, undefined, courseExcludeKeywords_());
@@ -801,7 +915,7 @@ function runSelfTest_(keepToken) {
       docId = writeDocWithRecovery_(selfStudent, schedule);
       firstSeconds = Math.round((Date.now() - t0) / 1000);
       assertDocIsInFolder_(docId, getDocsFolder_());
-      doc = docsGet_(docId);
+      doc = docsGet_(docId, { includeTabsContent: true }); // full read: the Past weeks check looks inside
       return how + ' in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
     }) &&
     check('Every class has its own By Class table in every week', function () {
@@ -917,7 +1031,10 @@ function runSelfTest_(keepToken) {
         if (!k || k >= thisMonday) throw new Error('"' + past.childTabs[i].tabProperties.title + '" does not belong in Past weeks');
         if (i && k > keys[i - 1]) throw new Error('Past weeks are not newest first');
       });
-      return keys.length + ' past week' + (keys.length === 1 ? '' : 's') + ', newest first';
+      var grayCells = 0;
+      (past.childTabs || []).forEach(function (t) { grayCells += assertPriorityGray_(t); });
+      return keys.length + ' past week' + (keys.length === 1 ? '' : 's') + ', newest first; ' +
+        grayCells + ' Priority cells gray';
     }) &&
     check('Doc: type a test Status and Note into a By Class table', function () {
       target = findFirstAssignmentRow_(docId);
@@ -962,6 +1079,41 @@ function runSelfTest_(keepToken) {
         if (r.status !== testStatus || r.note !== testNote) throw new Error(r.table + ' lost them');
       });
       return 'week of ' + rows[0].weekKey;
+    }) &&
+    check('A Doc in the trash, or gone, is never written to (so the student gets a fresh Doc)', function () {
+      // A throwaway Doc in your My Drive, trashed at once; Google empties the trash after 30 days.
+      var temp = DocumentApp.create('AutoPlanner selfTest: trashed-Doc check (safe to delete)');
+      var file = DriveApp.getFileById(temp.getId());
+      file.setTrashed(true);
+      var refused = function (id) {
+        try {
+          upsertPlannerDocument_({ documentId: id, studentFullName: 'selfTest', weeks: {} });
+        } catch (err) {
+          if (String(err.message || err).indexOf(DOC_GONE_PREFIX) === 0) return true;
+          throw err;
+        }
+        return false;
+      };
+      if (!refused(temp.getId())) throw new Error('a trashed Doc was opened for writing');
+      // A made-up ID shaped like a real one (44 characters), for a Doc that doesn't exist.
+      var missing = ('1' + Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '').substring(0, 44);
+      if (!refused(missing)) throw new Error('a missing Doc was not reported as gone');
+      return 'both refused before any edit; updateOneStudent_ then makes a new Doc and tells staff on the row';
+    }) &&
+    check("Doc reads skip Past weeks' content, so updates stay fast all year", function () {
+      var short = docsGet_(docId);
+      if (docsGetFieldsRejected_) {
+        throw new Error('Google refused the shorter read, so AutoPlanner reads everything. Updates still work but get slower as Past weeks grows.');
+      }
+      var parent = findTabJsonById_(short, findRootTabIdByTitle_(short, PARENT_TAB_TITLE));
+      var weeks = (parent.childTabs || []).filter(function (t) { return t.tabProperties.title !== PAST_WEEKS_TITLE; });
+      if (weeks.some(function (t) { return !t.documentTab; })) throw new Error('a current week came back without its content');
+      var past = (parent.childTabs || []).filter(function (t) { return t.tabProperties.title === PAST_WEEKS_TITLE; })[0];
+      var kids = (past && past.childTabs) || [];
+      if (kids.some(function (t) { return t.documentTab; })) throw new Error('past weeks came back with their content');
+      var kb = function (o) { return Math.round(JSON.stringify(o).length / 1024); };
+      return kb(short) + ' KB per read instead of ' + kb(doc) + ' KB; ' + kids.length + ' past week' +
+        (kids.length === 1 ? '' : 's') + ' left out, current weeks complete';
     });
 
   if (!keepToken) {
@@ -974,6 +1126,29 @@ function runSelfTest_(keepToken) {
       ? 'selfTest: ALL ' + results.length + ' CHECKS PASSED'
       : 'selfTest: FAILED (' + failed + ' failed, ' + (results.length - failed) + ' passed; later checks skipped)'
   );
+}
+
+/** Throws unless every Priority cell holding a priority in this past week is gray; returns how many. */
+function assertPriorityGray_(tab) {
+  var want = hexToRgbColor_(PAST_PRIORITY_BG);
+  var n = 0;
+  var tables = (tab.documentTab.body.content || []).filter(function (el) { return el.table; });
+  pastPriorityGrayRequests_(tab).forEach(function (req) {
+    var range = req.updateTableCellStyle.tableRange;
+    var loc = range.tableCellLocation;
+    var table = tables.filter(function (el) { return el.startIndex === loc.tableStartLocation.index; })[0].table;
+    for (var r = loc.rowIndex; r < loc.rowIndex + range.rowSpan; r++) {
+      var style = table.tableRows[r].tableCells[loc.columnIndex].tableCellStyle || {};
+      var rgb = (style.backgroundColor && style.backgroundColor.color && style.backgroundColor.color.rgbColor) || {};
+      ['red', 'green', 'blue'].forEach(function (k) {
+        if (Math.abs((rgb[k] || 0) - want[k]) > 0.01) {
+          throw new Error('a Priority cell in "' + tab.tabProperties.title + '" is not gray');
+        }
+      });
+      n++;
+    }
+  });
+  return n;
 }
 
 /** The week tabs (children of the CLC Planner tab): [{ title, tab }]. */

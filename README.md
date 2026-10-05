@@ -21,7 +21,8 @@ CLC staff open one web page, signed in with their Pomfret Google account. They a
 - Each Doc has one tab per week: a **By Class** table for every class the student takes (including classes with nothing due), then a **By Day** table. Every table uses the same full-width layout, written down at the top of `apps_script/Code.gs`.
 - The **CLC Planner** tab is a one-page summary of this week by class. On Saturday and Sunday (New York time) it summarizes the coming week.
 - Staff type **Status** (Not started, In progress or Complete, as plain text) and **Notes**. Both are kept across updates, keyed by the assignment's Canvas link, and follow an assignment whose due date moves to another week.
-- When a week ends, its tab moves into a **Past weeks** tab, newest first. AutoPlanner never edits, rebuilds or deletes past weeks.
+- Work due earlier in the week stays in its week as **Past due** (gray) until the week ends. Then the tab moves into a **Past weeks** tab, newest first, and its Priority cells turn gray in the same step. After that AutoPlanner never edits, rebuilds or deletes past weeks, and its Doc reads leave their content out so updates stay fast all year.
+- If a student's Doc is deleted or in the trash, AutoPlanner never writes to it: it makes a fresh Doc in the shared folder and says so on the student's row.
 - Updates run automatically every day at about 7 pm and just after midnight (New York time), or on demand from the page.
 
 ## How it works
@@ -118,7 +119,7 @@ node --test tests/*.test.js
   - batching and triggers
   - the shared-folder rules and Status preservation in `Code.gs`
   - the Canvas client
-  - a week-grouping golden file that matches the original Python version exactly
+  - a week-grouping golden file: the original Python version's output, plus this week's past-due work
 - CI runs them, plus a syntax check of every `.gs` file and of the script in `Index.html`, on every PR.
 
 **Security rule for developers:** `google.script.run` can call **any** function whose name does not end in `_`. Every internal function must end in `_`. Every public function must start with:
@@ -138,7 +139,7 @@ Google Workspace limits that matter here:
 - Script Properties: 9 KB per value and 500 KB in total, so one property per student means hundreds fit
 - the Docs API's per-minute write limit (writes are batched, paced and retried)
 
-Everything belongs to the owner's account: the script, its triggers, the stored tokens and the Docs. Anyone with edit access to the script project can read the tokens, so don't share the project. Before the owner graduates, move the project and the folder to a CLC staff account (see "Setting it up from scratch").
+Everything belongs to the owner's account: the script, its triggers, the stored tokens and the Docs. Anyone with edit access to the script project can read the tokens, so don't share the project. Before the owner graduates, move the project, the folder and the Docs to a CLC staff account: step by step in the [quick start's "Long-term care"](docs/handoff/CLC-quick-start.md#7-long-term-care), including running `setupTriggers` again as the new owner.
 
 ## Getting a Canvas API token (for each student)
 

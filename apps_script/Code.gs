@@ -103,6 +103,7 @@ var PRIORITY_COLORS = {
   'Due Soon': '#FFD966',
   'This Week': '#93C47D',
   Upcoming: '#A4C2F4',
+  'Past due': '#E0E0E0', // earlier this week; the same gray as Priority in Past weeks
 };
 
 var HEADER_BG = '#434343';
@@ -152,15 +153,34 @@ function docsApiIsQuotaError_(err) {
   );
 }
 
+/**
+ * Reads leave out the content of the week tabs inside "Past weeks" (the third tab level): nothing
+ * reads them, and they grow all year, so a full read would get slower and bigger every week. Their
+ * titles and IDs are still there. Pass opts (e.g. { includeTabsContent: true }) for a full read.
+ */
+var DOCS_GET_FIELDS = 'tabs(tabProperties,documentTab,childTabs(tabProperties,documentTab,childTabs(tabProperties)))';
+var docsGetFieldsRejected_ = false; // set if Google ever refuses DOCS_GET_FIELDS; then reads are full
+
 /** Docs.Documents.get with retries when Google returns quota / rate limit errors. */
 function docsGet_(docId, opts) {
-  var options = opts || { includeTabsContent: true };
+  var options = opts ||
+    (docsGetFieldsRejected_ ? { includeTabsContent: true } : { includeTabsContent: true, fields: DOCS_GET_FIELDS });
   var lastErr;
+  var fellBack = false;
   for (var attempt = 0; attempt < 7; attempt++) {
     try {
-      return Docs.Documents.get(docId, options);
+      var doc = Docs.Documents.get(docId, options);
+      // The full read worked where the shorter one didn't: use full reads for the rest of this run.
+      if (fellBack) docsGetFieldsRejected_ = true;
+      return doc;
     } catch (e) {
       lastErr = e;
+      if (options.fields && !docsApiIsQuotaError_(e)) {
+        // Never let the shorter read break an update: try a full read.
+        fellBack = true;
+        options = { includeTabsContent: true };
+        continue;
+      }
       if (docsApiIsQuotaError_(e) && attempt < 6) {
         Utilities.sleep(2000 * (attempt + 1));
         continue;
@@ -206,23 +226,58 @@ function getDocsFolder_() {
   var raw = getScriptProperty_('DOCS_FOLDER_ID');
   if (!raw) return null;
   var id = raw.replace(/^.*\/folders\//, '').replace(/[?#\/].*$/, '');
+  var folder;
   try {
-    return DriveApp.getFolderById(id);
+    folder = DriveApp.getFolderById(id);
   } catch (err) {
+    if (!DRIVE_NOT_FOUND.test(String(err))) throw err; // a Drive hiccup: shown as a temporary problem
     throw new Error(
-      'DOCS_FOLDER_ID is set, but this account cannot open that Drive folder: ' + err
+      "DOCS_FOLDER_ID is set, but this account cannot open that Drive folder. It may have been " +
+        'deleted, or AutoPlanner\'s owner lost access to it. Contact Cayden Auyang or Luke Ryan.'
     );
   }
+  if (folder.isTrashed()) {
+    throw new Error(
+      'AutoPlanner\'s shared folder "' + folder.getName() + '" is in the Drive trash. Its owner can ' +
+        'restore it from the trash; until then no Doc is updated.'
+    );
+  }
+  return folder;
+}
+
+// App.gs looks for this text to make a fresh Doc when the saved one is gone.
+var DOC_GONE_PREFIX = 'Could not open the saved Google Doc';
+// What Drive says when a file or folder doesn't exist (or this account can't see it). Any other
+// error is a hiccup, and must never make AutoPlanner start a new Doc.
+var DRIVE_NOT_FOUND = /No item with the given ID|Unexpected error while getting the method or property get(File|Folder)ById|do not have permission|Access denied/i;
+
+/**
+ * The saved Doc's Drive file. Throws an error starting with DOC_GONE_PREFIX when the Doc is in the
+ * trash or can't be found (tried twice, in case Drive had a hiccup), so nothing is ever written to
+ * a trashed Doc. Checked before any edit.
+ */
+function savedDocFile_(docId) {
+  var file = null;
+  var lastErr = null;
+  for (var attempt = 0; attempt < 2 && !file; attempt++) {
+    try {
+      file = DriveApp.getFileById(docId);
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) Utilities.sleep(2000);
+    }
+  }
+  if (!file && !DRIVE_NOT_FOUND.test(String(lastErr))) {
+    throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
+  }
+  if (!file) throw new Error(DOC_GONE_PREFIX + ' (' + docId + '): ' + lastErr);
+  if (file.isTrashed()) throw new Error(DOC_GONE_PREFIX + ' (' + docId + '): it is in the trash.');
+  return file;
 }
 
 /** Throws unless the Doc's Drive file sits directly in `folder`. Checked before any edit. */
 function assertDocIsInFolder_(docId, folder) {
-  var file;
-  try {
-    file = DriveApp.getFileById(docId);
-  } catch (err) {
-    throw new Error('Could not open the saved Google Doc (' + docId + '): ' + err);
-  }
+  var file = savedDocFile_(docId);
   var parents = file.getParents();
   while (parents.hasNext()) {
     if (parents.next().getId() === folder.getId()) return;
@@ -249,6 +304,8 @@ function upsertPlannerDocument_(data) {
   if (docId) {
     if (folder) {
       assertDocIsInFolder_(docId, folder);
+    } else {
+      savedDocFile_(docId);
     }
     doc = DocumentApp.openById(docId);
     try {
@@ -266,10 +323,13 @@ function upsertPlannerDocument_(data) {
 
   var parentTabId = prepareParentTab_(docId, isNew);
   // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
-  archivePastWeeks_(docId, parentTabId, Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd'));
+  var today = Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
+  archivePastWeeks_(docId, parentTabId, today);
 
   var weeks = data.weeks || {};
-  var weekKeys = Object.keys(weeks).sort();
+  // Never write a week that has ended (an update running across Sunday midnight would otherwise
+  // make a blank copy of the week it just filed).
+  var weekKeys = Object.keys(weeks).sort().filter(function (k) { return k >= scheduleWeekStart_(today); });
   // Every class gets a table each week, in the same color every week.
   var courses = plannerCourseList_(data);
   var colorMap = buildCourseColorMap_(courses);
@@ -424,6 +484,8 @@ function nextChildTabInsertIndex_(parentTabJson) {
 // ---- Past weeks: ended week tabs move into one "Past weeks" tab, untouched -----------------
 var PAST_WEEKS_TITLE = 'Past weeks';
 var PAST_WEEKS_LINE = 'Every past week, with the Status and Notes typed during it. AutoPlanner never changes these.';
+// A past week's Priority colors no longer mean anything, so its Priority cells turn this gray.
+var PAST_PRIORITY_BG = '#E0E0E0';
 
 /** "Week of Oct 5 – Oct 11, 2026" gives '2026-10-05' (its Monday); any other tab title gives null. */
 function weekKeyFromTabTitle_(title) {
@@ -449,8 +511,60 @@ function archivePastWeeks_(docId, parentTabId, today) {
     pastId = addWeekChildTab_(docId, parentTabId, PAST_WEEKS_TITLE, parent.childTabs.length);
     docsBatchUpdate_(docId, [{ insertText: { text: PAST_WEEKS_LINE, location: { tabId: pastId, index: 1 } } }]);
   }
+  // Gray each week's Priority cells, then move it. Nothing in it changes after this. The gray is
+  // only a look, so if Google refuses it the week still moves.
+  var gray = [];
+  ended.forEach(function (w) {
+    var tab = parent.childTabs.filter(function (t) { return t.tabProperties.tabId === w.id; })[0];
+    gray = gray.concat(pastPriorityGrayRequests_(tab));
+  });
+  try {
+    docsBatchUpdate_(docId, gray);
+  } catch (err) {
+    console.warn('Past weeks: Priority not grayed: ' + err);
+  }
   docsBatchUpdate_(docId, archiveMoveRequests_(ended, pastId));
   return ended.length;
+}
+
+/**
+ * Requests that turn one ended week's Priority cells gray (PAST_PRIORITY_BG), keeping their text.
+ * Only cells under a "Priority" heading that hold a priority are changed: class names, day rows,
+ * "No assignments" rows, Status and Notes are never touched.
+ */
+function pastPriorityGrayRequests_(tabJson) {
+  var reqs = [];
+  if (!tabJson || !tabJson.documentTab || !tabJson.tabProperties) return reqs;
+  var tabId = tabJson.tabProperties.tabId;
+  (tabJson.documentTab.body.content || []).forEach(function (el) {
+    if (!el.table) return;
+    var rows = el.table.tableRows || [];
+    var header = -1;
+    var col = -1;
+    for (var r = 0; r < rows.length && col < 0; r++) {
+      var cells = rows[r].tableCells || [];
+      for (var c = 0; c < cells.length; c++) {
+        if (getCellText_(cells[c]) === 'Priority') { header = r; col = c; break; }
+      }
+    }
+    if (col < 0) return;
+    // Neighbouring priority rows share one request.
+    var start = -1;
+    var flush = function (end) {
+      if (start < 0) return;
+      reqs.push(cellStyleRequest_(tabId, toDocIndex_(el.startIndex), start, col, end - start + 1, 1,
+        { backgroundColor: optionalColorFromHex_(PAST_PRIORITY_BG) }, 'backgroundColor'));
+      start = -1;
+    };
+    for (var i = header + 1; i < rows.length; i++) {
+      var rowCells = rows[i].tableCells || [];
+      var hasPriority = rowCells.length > col && getCellText_(rowCells[col]) !== '';
+      if (hasPriority && start < 0) start = i;
+      if (!hasPriority) flush(i - 1);
+    }
+    flush(rows.length - 1);
+  });
+  return reqs;
 }
 
 /** The week tabs directly under CLC Planner whose week ended before `today`, oldest first. */
@@ -486,12 +600,14 @@ function archiveMoveRequests_(ended, pastId) {
  */
 function collectSavedData_(parentTabJson) {
   var result = { notes: {}, status: {} };
-  ((parentTabJson && parentTabJson.childTabs) || []).map(function (t) {
-    return { key: weekKeyFromTabTitle_((t.tabProperties || {}).title), tab: t };
+  ((parentTabJson && parentTabJson.childTabs) || []).map(function (t, i) {
+    return { key: weekKeyFromTabTitle_((t.tabProperties || {}).title), tab: t, i: i };
   }).filter(function (w) {
     return w.key;
   }).sort(function (a, b) {
-    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+    // Two copies of one week (an update stopped mid-rebuild): the top one, which staff see and
+    // edit, is read last, so its values win.
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : b.i - a.i;
   }).forEach(function (w) {
     var d = readExistingDataFromTab_(w.tab);
     Object.keys(d.status).forEach(function (url) {
@@ -817,7 +933,8 @@ function homeSummary_(data, courses, now) {
   var unique = shortNames.every(function (n, i) { return shortNames.indexOf(n) === i; });
   var rows = courses.map(function (course, i) {
     var mine = all.filter(function (a) { return (cellText_(a.course) || '(No Course)') === course; });
-    var next = mine.map(function (a) { return a.due_date; }).sort()[0];
+    var next = mine.filter(function (a) { return a.due_date >= today; })
+      .map(function (a) { return a.due_date; }).sort()[0];
     return {
       course: course,
       name: unique ? shortNames[i] : course,
@@ -838,7 +955,9 @@ function homeSummary_(data, courses, now) {
     weekCount: thisWeek.length,
     // Weekdays: due today or tomorrow. Weekends: due this Saturday or Sunday.
     soonCount: all.filter(function (a) {
-      return weekend ? a.due_date === saturday || a.due_date === sunday : a.days_until_due === 0 || a.days_until_due === 1;
+      return weekend
+        ? (a.due_date === saturday || a.due_date === sunday) && a.due_date >= today
+        : a.days_until_due === 0 || a.days_until_due === 1;
     }).length,
     rows: rows,
   };
@@ -1084,10 +1203,14 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   // Status and Notes from all current and upcoming weeks (see collectSavedData_), or this tab's own.
   var savedData = saved || readExistingDataFromTab_(tabProbe);
 
+  var parentJson = findTabJsonById_(docProbe, parentTabId);
   if (tabBodyHasHeavyContent_(tabProbe) || !clearTabBodyDocsApi_(docId, tabId)) {
-    docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
-    var parentJson = findTabJsonById_(docsGet_(docId), parentTabId);
-    tabId = addWeekChildTab_(docId, parentTabId, tabTitle, nextChildTabInsertIndex_(parentJson));
+    // Write a new tab just below the old one, and delete the old one only once the new one is
+    // complete: if an update stops halfway, the old tab, with its Status and Notes, is still there
+    // and still the first one staff see (and the one the home tab links to).
+    var kids = parentJson.childTabs || [];
+    var at = kids.map(function (t) { return t.tabProperties.tabId; }).indexOf(tabId);
+    tabId = addWeekChildTab_(docId, parentTabId, tabTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
     sleepDocsChunkGap_();
   }
 
@@ -1095,6 +1218,14 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
     tabId, weekKey, weekData, courses, colorMap, savedData, tabContentWidth_(tabProbe)
   );
   batchUpdateChunked_(docId, requests);
+
+  // The new tab is complete: remove the old one, and any copy an earlier stopped update left.
+  var leftovers = (parentJson.childTabs || []).filter(function (t) {
+    return t.tabProperties.title === tabTitle && t.tabProperties.tabId !== tabId;
+  });
+  if (leftovers.length) {
+    docsBatchUpdate_(docId, leftovers.map(function (t) { return { deleteTab: { tabId: t.tabProperties.tabId } }; }));
+  }
 }
 
 /** Usable page width in points (page width minus margins); 468 on US Letter with 1" margins. */
