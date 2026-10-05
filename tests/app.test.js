@@ -291,7 +291,7 @@ test('setupTriggers installs 7 pm and midnight New York triggers, idempotently, 
   const daily = t.svc.triggers.filter((x) => x.handler === 'scheduledRun');
   assert.deepStrictEqual(daily.map((x) => toPlain(x.config)), [
     { atHour: 19, nearMinute: 0, everyDays: 1, timeZone: 'America/New_York' },
-    { atHour: 0, nearMinute: 0, everyDays: 1, timeZone: 'America/New_York' },
+    { atHour: 0, nearMinute: 15, everyDays: 1, timeZone: 'America/New_York' }, // 12:00–12:30 AM, never before midnight
   ]);
   assert.strictEqual(t.svc.props.APPS_SCRIPT_SECRET, undefined);
   assert.ok(t.sb.logs.some((l) => /OK {3}Daily updates/.test(l)));

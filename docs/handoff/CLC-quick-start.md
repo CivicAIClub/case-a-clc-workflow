@@ -31,7 +31,9 @@ After that you only ever see the token's **last 4 characters**. If a student was
 Every Doc is in the Google Drive folder **AutoPlanner – CLC Student Planners**, under **Shared with me** in Drive. Click **Open their Doc ↗** on a student's row to jump straight to it.
 
 - Each Doc is called "*Student Name* - CLC Assignments".
+- The **CLC Planner** tab at the top is a one-page summary: how many assignments each class has this week, when each is next due, and a link to this week's tab. On **Saturday and Sunday** it shows the **coming week** instead, and how many assignments are due that weekend.
 - Open the **Document tabs** sidebar on the left to see one tab per week under **CLC Planner**.
+- When a week ends, its tab moves into **Past weeks** (newest first), with the Status and Notes typed during it. AutoPlanner never changes those again.
 - Each week tab has a **By Class** section with a table for **every class** the student takes. A class with nothing due that week says "No assignments due this week."
 - Under that, **By Day** lists the same assignments by day.
 - **Keep the Docs in this folder.** AutoPlanner only updates Docs that are inside it. If one gets moved out, move it back.
@@ -43,9 +45,9 @@ Type in the white **Status** and **Notes** cells, in either table:
 - **Status:** type **Not started**, **In progress**, or **Complete**, as plain words. New assignments start as Not started.
 - **Notes:** type anything you like.
 
-AutoPlanner never changes these two columns, so what you type survives every update. The same reminder is at the top of every week tab.
+AutoPlanner never changes these two columns, so what you type survives every update. The same reminder is at the top of every week tab. If a teacher moves an assignment's due date to another week, its Status and Notes move with it.
 
-**Everything else in a week tab is rewritten on each update.** For notes about the student in general, write on the **CLC Planner** tab at the top, which AutoPlanner never changes.
+**Everything else is rewritten on each update, including the CLC Planner tab.** For notes about the student in general, add your own tab with **+** at the top of the **Document tabs** sidebar. AutoPlanner leaves tabs it didn't make alone.
 
 ## 6. Change or remove a student
 

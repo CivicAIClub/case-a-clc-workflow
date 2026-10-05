@@ -19,8 +19,10 @@ CLC staff spend hours each week logging into individual student Canvas accounts 
 CLC staff open one web page, signed in with their Pomfret Google account. They add each student once by pasting the student's Canvas access token. AutoPlanner then keeps **one Google Doc per student** in a shared Drive folder.
 
 - Each Doc has one tab per week: a **By Class** table for every class the student takes (including classes with nothing due), then a **By Day** table. Every table uses the same full-width layout, written down at the top of `apps_script/Code.gs`.
-- Staff type **Status** (Not started, In progress or Complete, as plain text) and **Notes**. Both are kept across updates, keyed by the assignment's Canvas link.
-- Updates run automatically every day at about 7 pm and about midnight (New York time), or on demand from the page.
+- The **CLC Planner** tab is a one-page summary of this week by class. On Saturday and Sunday (New York time) it summarizes the coming week.
+- Staff type **Status** (Not started, In progress or Complete, as plain text) and **Notes**. Both are kept across updates, keyed by the assignment's Canvas link, and follow an assignment whose due date moves to another week.
+- When a week ends, its tab moves into a **Past weeks** tab, newest first. AutoPlanner never edits, rebuilds or deletes past weeks.
+- Updates run automatically every day at about 7 pm and just after midnight (New York time), or on demand from the page.
 
 ## How it works
 
