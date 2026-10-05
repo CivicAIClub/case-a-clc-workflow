@@ -643,6 +643,39 @@ test('an empty insertText is never sent (clearing a cell only deletes), and Driv
   assert.throws(() => t.ctx.savedDocFile_('1abc'), /^Error: Could not open the saved Google Doc \(1abc\)/);
 });
 
+test('an update short on time stops cleanly between weeks: no week half-done, and the weeks it skipped keep their record', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  const X = url(1);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'class', 'In progress', 'typed before');
+  const recordBefore = toPlain(t.ctx.readWritten_('DOC1'));
+  let calls = 0;
+  t.ctx.msLeftInExecution_ = () => (++calls === 1 ? 300 * 1000 : 80 * 1000); // time for the first week only
+  const res = toPlain(t.ctx.upsertPlannerDocument_(scheduleAB(false)));
+  assert.deepStrictEqual([res.weeksDone, res.weeksTotal], [1, 2]);
+  // Week A (the second week) wasn't touched: still the typed values, and its record is kept.
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['In progress', 'typed before'], ['Not started', '']]);
+  const after = toPlain(t.ctx.readWritten_('DOC1'));
+  assert.deepStrictEqual(after['1'], recordBefore['1'], "the skipped week's record is kept");
+  assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+  // The next update (with time) finishes it and keeps the edit.
+  t.ctx.msLeftInExecution_ = () => 300 * 1000;
+  const res2 = toPlain(t.ctx.upsertPlannerDocument_(scheduleAB(false)));
+  assert.deepStrictEqual([res2.weeksDone, res2.weeksTotal], [2, 2]);
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['In progress', 'typed before'], ['In progress', 'typed before']]);
+});
+
+test('update timing (selfTest): reads, writes, pauses and each week are counted', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  t.ctx.startUpdateStats_();
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  const text = t.ctx.updateStatsText_();
+  assert.match(text, /^took \d+ s: \d+ Doc reads \d+ s \(about \d+ KB each\), \d+ Doc writes \(\d+ requests\) \d+ s, pauses \d+ s, other \d+ s; by week: Jan 5 \d+ s, Jan 12 \d+ s$/);
+  t.ctx.updateStats_ = null;
+});
+
 test('an edit in either table wins: By Day only, or changing back to "Not started" or an empty note', () => {
   const { t, docs } = rebuildSetup([]);
   withRendering(t, docs);

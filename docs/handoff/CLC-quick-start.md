@@ -86,7 +86,8 @@ The message next to it says what happened. Most fix themselves:
 | "Canvas is busy", "Canvas is getting too many requests", "Google is limiting how fast Docs can be edited", "Google Docs or Drive had a temporary problem", or "Google Drive didn't answer" | Nothing. AutoPlanner tries again at the next update (7 pm or midnight). If the same message is still there after two days, contact us. |
 | "Google Drive couldn't find this student's Doc just now" | Nothing. If the Doc is really gone, the next scheduled update makes a new one and says so on the row. |
 | "AutoPlanner only updates Docs in the … folder" | Someone moved the Doc. Move it back into **AutoPlanner – CLC Student Planners**, then click **Update**. |
-| "Took longer than Apps Script allows" | Nothing; it's tried again at the next update. Contact us if it keeps happening. |
+| "Updated 2 of 4 weeks: Google Docs was slow…" | Nothing. The other weeks (with their Status and Notes) are updated at the next update. |
+| "Was stopped partway by Apps Script's time limit" | Nothing; it's tried again at the next update. Contact us if it keeps happening. |
 | "…shared folder … is in the Drive trash" or "cannot open that Drive folder" | The shared folder was deleted or unshared. Its owner can restore it from the Drive trash; otherwise contact us. |
 
 Two more messages can appear on the page:

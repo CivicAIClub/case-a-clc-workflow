@@ -29,6 +29,9 @@ var APP_DAILY_HOURS = [19, 0]; // 7 pm and midnight, America/New_York
 // One student's Doc takes about 2 minutes (measured: 16 assignments, 97 s to create, 126 s to
 // update). Starting nobody new after 2 minutes leaves each student about 4 minutes of the 6.
 var APP_BATCH_BUDGET_MS = 2 * 60 * 1000; // don't start another student after this
+var APP_DEFAULT_STUDENT_SECONDS = 150; // a student's update time until their first update is timed
+var APP_RUN_RESERVE_MS = 30 * 1000; // kept free at the end of a batch for saving and scheduling
+var APP_SAFETY_GRACE_MS = 2 * 60 * 1000; // the safety trigger fires this long after the time limit
 var APP_CONTINUE_AFTER_MS = 60 * 1000; // next batch of a long run
 var APP_SAFETY_CONTINUE_AFTER_MS = 8 * 60 * 1000; // resumes a run if a batch is cut off
 var APP_RUN_STALE_MS = 15 * 60 * 1000; // a run with no progress this long is treated as stopped
@@ -524,6 +527,7 @@ function updateOneStudent_(id) {
   var token = getToken_(id);
   var result;
   var docInfo = {};
+  var startedAt = Date.now();
   // Students added before AutoPlanner knew about expiry dates: ask Canvas once.
   var tokenInfo = student.tokenChecked ? null : fetchCanvasTokenExpiry_(token, canvasBaseUrl_());
   var applyTokenInfo = function (s) {
@@ -552,10 +556,14 @@ function updateOneStudent_(id) {
     student.docId = docId;
     if (docInfo.replaced) student.notice = { at: new Date().toISOString(), message: docInfo.replaced };
     var count = schedule.total_assignments || 0;
+    student.lastSeconds = Math.round((Date.now() - startedAt) / 1000);
     student.last = {
       at: new Date().toISOString(),
       ok: true,
-      message: 'Updated: ' + count + ' assignment' + (count === 1 ? '' : 's') + ' in the next ' + APP_WEEKS_AHEAD + ' weeks.',
+      message: docInfo.weeksDone < docInfo.weeksTotal
+        ? 'Updated ' + docInfo.weeksDone + ' of ' + docInfo.weeksTotal + ' weeks: Google Docs was slow, so the other ' +
+          'weeks will be updated at the next update (their Status and Notes are kept).'
+        : 'Updated: ' + count + ' assignment' + (count === 1 ? '' : 's') + ' in the next ' + APP_WEEKS_AHEAD + ' weeks.',
     };
     result = { ok: true, name: student.name, message: student.last.message };
   } catch (err) {
@@ -586,8 +594,16 @@ function writeDocWithRecovery_(student, schedule, info) {
   payload.studentFullName = schedule.student_full_name;
   var docId = student.docId || findReusableDoc_(schedule.student_full_name, student.id);
   if (docId) payload.documentId = docId;
+  if (info && info.noDeadline) payload.noDeadline = true;
+  var done = function (res) {
+    if (info) {
+      info.weeksDone = res.weeksDone;
+      info.weeksTotal = res.weeksTotal;
+    }
+    return res.documentId;
+  };
   try {
-    return upsertPlannerDocument_(payload).documentId;
+    return done(upsertPlannerDocument_(payload));
   } catch (err) {
     var msg = String(err.message || err);
     if (docId && msg.indexOf(DOC_UNSURE_PREFIX) === 0) {
@@ -609,7 +625,7 @@ function writeDocWithRecovery_(student, schedule, info) {
       throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
     }
     if (other) payload.documentId = other;
-    var newId = upsertPlannerDocument_(payload).documentId;
+    var newId = done(upsertPlannerDocument_(payload));
     if (info) {
       info.replaced = payload.documentId
         ? 'Their Doc was deleted, so AutoPlanner switched to their other Doc in the shared folder.'
@@ -673,8 +689,21 @@ function startRun_(reason, startedBy) {
  */
 function processRunBatch_(runId) {
   var batchStart = Date.now();
-  replaceContinueTrigger_(APP_SAFETY_CONTINUE_AFTER_MS);
+  // The safety trigger fires only after this execution must have ended (the time limit has
+  // passed), so it never runs alongside a batch that's still going.
+  replaceContinueTrigger_(runtimeLimitMs_() + APP_SAFETY_GRACE_MS);
+  var first = true;
   while (true) {
+    // After the first student, start the next one only if their usual time fits in what's left of
+    // this execution; otherwise they start fresh in the next batch.
+    if (!first && !nextStudentFits_(runId)) {
+      var waiting = readJson_('run.current');
+      if (waiting && waiting.id === runId && waiting.queue.length) {
+        replaceContinueTrigger_(APP_CONTINUE_AFTER_MS);
+        return;
+      }
+    }
+    first = false;
     var id = takeNextStudent_(runId);
     if (id === null) {
       finishRun_(runId);
@@ -691,6 +720,15 @@ function processRunBatch_(runId) {
       }
     }
   }
+}
+
+/** True if the next student's update (their last time, plus a quarter) fits in this execution. */
+function nextStudentFits_(runId) {
+  var run = readJson_('run.current');
+  if (!run || run.id !== runId || !run.queue.length) return true;
+  var next = getStudent_(run.queue[0]);
+  var expected = (next && next.lastSeconds ? next.lastSeconds : APP_DEFAULT_STUDENT_SECONDS) * 1250;
+  return msLeftInExecution_() - APP_RUN_RESERVE_MS > expected;
 }
 
 /** Pops the next student ID off the queue (null when done), and marks it in progress. */
@@ -782,7 +820,7 @@ function continueRun(e) {
     recordResult_(run.id, {
       ok: false,
       name: stuck ? stuck.name : 'A student',
-      message: 'Took longer than Apps Script allows (6 minutes). It will be tried again at the next update.',
+      message: "Was stopped partway by Apps Script's time limit. It will be tried again at the next update.",
     });
     PropertiesService.getScriptProperties().deleteProperty('busy.' + run.inProgress);
   }
@@ -873,6 +911,13 @@ function checkSetup() {
       ? 'OK   ALLOWED_USERS: ' + users.length + ' people: ' + users.join(', ')
       : 'FIX  ALLOWED_USERS is empty: nobody can open the page.'
   );
+  var measured = finishTimeLimitProbe_();
+  if (measured) Logger.log('OK   measureTimeLimit: Apps Script stopped it after about ' + measured + ' s; saved.');
+  if (readJson_('probe.timeLimit')) Logger.log('NOTE measureTimeLimit is still running (or stopped less than a minute ago). Run checkSetup again later.');
+  var limitSet = Number(getScriptProperty_('RUNTIME_LIMIT_SECONDS'));
+  Logger.log(limitSet >= 60
+    ? 'OK   Apps Script time limit: ' + limitSet + ' s per run (measured).'
+    : 'NOTE Apps Script time limit: not measured; assuming ' + DEFAULT_RUNTIME_LIMIT_SECONDS + ' s. Run measureTimeLimit once to measure it.');
   Logger.log('OK   Canvas: ' + canvasBaseUrl_());
   var excluded = courseExcludeKeywords_();
   Logger.log('     COURSE_EXCLUDE: ' + (excluded.length ? excluded.join(', ') : '(none: every class is shown)'));
@@ -894,6 +939,42 @@ function checkSetup() {
 // =====================================================================================
 // Editor-only: selfTest (runs entirely as you, with your own Canvas token)
 // =====================================================================================
+
+/**
+ * Finds this account's real Apps Script time limit (6 minutes is the documented default; Workspace
+ * accounts can get longer). Run it from the editor and leave it: it keeps going until Apps Script
+ * stops it (up to 31 minutes). Then run checkSetup, which saves the result in RUNTIME_LIMIT_SECONDS.
+ */
+function measureTimeLimit() {
+  requireOwner_();
+  var props = PropertiesService.getScriptProperties();
+  var t0 = Date.now();
+  props.setProperty('probe.timeLimit', JSON.stringify({ startedAt: t0, lastAt: t0, seconds: 0 }));
+  Logger.log('Measuring the time limit: leave this running. It stops on its own (up to 31 minutes); then run checkSetup.');
+  while (Date.now() - t0 < 31 * 60 * 1000) {
+    Utilities.sleep(15 * 1000);
+    var sec = Math.round((Date.now() - t0) / 1000);
+    props.setProperty('probe.timeLimit', JSON.stringify({ startedAt: t0, lastAt: Date.now(), seconds: sec }));
+    if (sec % 60 < 15) Logger.log('Still running after ' + sec + ' s');
+  }
+  props.deleteProperty('probe.timeLimit');
+  props.setProperty('RUNTIME_LIMIT_SECONDS', '1800');
+  Logger.log('Not stopped in 31 minutes: RUNTIME_LIMIT_SECONDS set to 1800 (30 minutes).');
+}
+
+/**
+ * After measureTimeLimit was stopped by Apps Script: its last heartbeat (every 15 s) is just under
+ * the limit, so the limit is saved rounded down to a whole minute (on the safe side).
+ */
+function finishTimeLimitProbe_() {
+  var probe = readJson_('probe.timeLimit');
+  if (!probe || Date.now() - probe.lastAt < 60 * 1000) return null;
+  var limit = probe.seconds >= 1700 ? 1800 : Math.max(60, Math.floor(probe.seconds / 60) * 60);
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('RUNTIME_LIMIT_SECONDS', String(limit));
+  props.deleteProperty('probe.timeLimit');
+  return limit;
+}
 
 /**
  * The everyday case on its own (about 2 minutes): a Status and Note changed in By Class survive a
@@ -928,7 +1009,10 @@ function selfTestEveryday() {
     var newNote = 'selfTestEveryday note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
     writeStatusAndNote_(docId, target, newStatus, newNote);
     PropertiesService.getScriptProperties().setProperty('busy.' + row.id, String(Date.now()));
-    writeDocWithRecovery_({ id: row.id, docId: docId }, schedule);
+    startUpdateStats_();
+    writeDocWithRecovery_({ id: row.id, docId: docId }, schedule, { noDeadline: true });
+    var timing = updateStatsText_();
+    updateStats_ = null;
     var rows = findRowsByUrl_(docId, target.url);
     if (rows.length !== 2) throw new Error('Expected the assignment once in By Class and once in By Day, found ' + rows.length + ' rows.');
     rows.forEach(function (r) {
@@ -936,7 +1020,7 @@ function selfTestEveryday() {
       if (r.note !== newNote) throw new Error(r.table + ' Notes lost the edit');
     });
     Logger.log('PASS A staff edit in By Class survives a plain update: "' + newStatus + '" and a note on "' +
-      target.title + '", kept in By Class and By Day');
+      target.title + '", kept in By Class and By Day. The update ' + timing);
   } catch (err) {
     Logger.log('FAIL A staff edit in By Class survives a plain update: ' + friendlyError_(err, token));
   } finally {
@@ -1096,7 +1180,7 @@ function runSelfTest_(keepToken) {
       }
       keepHold();
       var t0 = Date.now();
-      docId = writeDocWithRecovery_(selfStudent, schedule);
+      docId = writeDocWithRecovery_(selfStudent, schedule, { noDeadline: true });
       firstSeconds = Math.round((Date.now() - t0) / 1000);
       assertDocIsInFolder_(docId, getDocsFolder_());
       doc = docsGet_(docId, { includeTabsContent: true }); // full read: the Past weeks check looks inside
@@ -1117,15 +1201,11 @@ function runSelfTest_(keepToken) {
       keepHold();
       var from = weekKeyOfTab_(docsGet_(docId), target.tabId);
       movedTo = Object.keys(schedule.weeks || {}).sort().filter(function (k) { return k !== from; })[0] || null;
-      var t0 = Date.now();
-      writeDocWithRecovery_(selfStudent, movedTo ? scheduleWithMovedAssignment_(schedule, target.url, movedTo) : schedule);
-      var s = Math.round((Date.now() - t0) / 1000);
-      if (s * 1000 > 6 * 60 * 1000 - APP_BATCH_BUDGET_MS) {
-        throw new Error('took ' + s + ' s: too close to the 6-minute limit for the 2-minute batch budget');
-      }
-      return (movedTo ? 'moved from the week of ' + from + ' to ' + movedTo + '; ' : 'only one week, so not moved; ') +
-        'took ' + s + ' s (' + (firstSeconds ? 'first write ' + firstSeconds + ' s; ' : '') + 'each student must fit in the ' +
-        (6 * 60 - APP_BATCH_BUDGET_MS / 1000) + ' s left after the batch budget)';
+      startUpdateStats_();
+      writeDocWithRecovery_(selfStudent, movedTo ? scheduleWithMovedAssignment_(schedule, target.url, movedTo) : schedule, { noDeadline: true });
+      var timing = updateStatsText_();
+      updateStats_ = null;
+      return (movedTo ? 'moved from the week of ' + from + ' to ' + movedTo + '; ' : 'only one week, so not moved; ') + timing;
     });
     step('followed', ['moved'], 'Status and Note followed the assignment to its new week', function () {
       var rows = findRowsByUrl_(docId, target.url);
@@ -1140,10 +1220,13 @@ function runSelfTest_(keepToken) {
     step('normal', ['doc'], 'Doc: run a normal update (the real due date again)', function () {
       keepHold();
       tabsBefore = weekTabsOf_(docsGet_(docId)).map(function (w) { return { title: w.title, id: w.tab.tabProperties.tabId }; });
-      var t0 = Date.now();
-      writeDocWithRecovery_(selfStudent, schedule);
+      startUpdateStats_();
+      writeDocWithRecovery_(selfStudent, schedule, { noDeadline: true });
+      var timing = updateStatsText_();
+      updateStats_ = null;
       doc = docsGet_(docId, { includeTabsContent: true }); // full read for the layout checks below
-      return 'took ' + Math.round((Date.now() - t0) / 1000) + ' s';
+      var limit = Number(getScriptProperty_('RUNTIME_LIMIT_SECONDS'));
+      return timing + '. Time limit: ' + (limit >= 60 ? limit + ' s (measured)' : DEFAULT_RUNTIME_LIMIT_SECONDS + ' s (assumed; run measureTimeLimit)');
     });
     step('classes', ['normal'], 'Every class has its own By Class table in every week', function () {
       var weeks = currentWeeks();

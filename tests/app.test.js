@@ -76,7 +76,7 @@ test('only the intended functions are callable from the page (no trailing unders
     for (const m of src.matchAll(/^function (\w+)\(/gm)) if (!m[1].endsWith('_')) publicNames.push(m[1]);
   }
   assert.deepStrictEqual(publicNames.sort(), [
-    'addStudent', 'checkSetup', 'continueRun', 'doGet', 'editStudent', 'getAppState', 'getRunStatus',
+    'addStudent', 'checkSetup', 'continueRun', 'doGet', 'editStudent', 'getAppState', 'getRunStatus', 'measureTimeLimit',
     'removeStudent', 'scheduleTestRun', 'scheduledRun', 'selfTest', 'selfTestEveryday', 'selfTestKeepToken', 'setupTriggers',
     'startUpdateAll', 'updateStudentNow',
   ].sort());
@@ -437,7 +437,63 @@ test('if a batch is cut off mid-student, the safety trigger records it and carri
   const last = JSON.parse(t.svc.props['run.last']);
   assert.strictEqual(last.total, 2);
   assert.strictEqual(last.updated, 1);
-  assert.match(last.failed[0].message, /longer than Apps Script allows/);
+  assert.match(last.failed[0].message, /^Was stopped partway by Apps Script's time limit\. It will be tried again at the next update\.$/);
+});
+
+test('batches use the real time limit: the safety trigger fires after it, and a student who would not fit waits for the next batch', () => {
+  const t = setup({ RUNTIME_LIMIT_SECONDS: '1800' });
+  addAs(t, STAFF, TOKEN_A, '');
+  addAs(t, STAFF, TOKEN_B, '');
+  // Pretend 23 minutes of a 30-minute limit are gone after the first student, and the next one
+  // usually takes 6 minutes: they shouldn't start in this batch even inside the 2-minute budget.
+  t.ctx.APP_BATCH_BUDGET_MS = 60 * 60 * 1000;
+  const second = JSON.parse(t.svc.props[Object.keys(t.svc.props).filter((k) => k.indexOf('student.') === 0).sort()[1]]);
+  second.lastSeconds = 360;
+  t.svc.props['student.' + second.id] = JSON.stringify(second);
+  let calls = 0;
+  const realLeft = t.ctx.msLeftInExecution_;
+  t.ctx.msLeftInExecution_ = () => (++calls > 0 ? 7 * 60 * 1000 : realLeft());
+  const res = toPlain(t.ctx.startUpdateAll());
+  assert.strictEqual(res.run.done, 1, 'stopped after the first student');
+  const triggers = t.svc.triggers.filter((x) => x.handler === 'continueRun');
+  assert.deepStrictEqual(triggers.map((x) => x.config.after), [60 * 1000], 'the next batch, a minute later');
+  // With 30 minutes left they'd fit; the safety trigger is set to the limit plus 2 minutes.
+  t.ctx.msLeftInExecution_ = () => 30 * 60 * 1000;
+  t.ctx.continueRun({ triggerUid: triggers[0].uid });
+  assert.strictEqual(JSON.parse(t.svc.props['run.last']).updated, 2);
+  const u = setup({ RUNTIME_LIMIT_SECONDS: '1800' });
+  addAs(u, STAFF, TOKEN_A, '');
+  u.ctx.updateOneStudent_ = () => { throw new Error('Exceeded maximum execution time'); };
+  assert.throws(() => u.ctx.startUpdateAll());
+  assert.strictEqual(u.svc.triggers.find((x) => x.handler === 'continueRun').config.after, 32 * 60 * 1000);
+});
+
+test('measureTimeLimit: once Apps Script has stopped it, checkSetup saves the limit (rounded down to a minute)', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  t.svc.props['probe.timeLimit'] = JSON.stringify({ startedAt: Date.now() - 400000, lastAt: Date.now() - 90000, seconds: 345 });
+  t.ctx.checkSetup();
+  assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '300');
+  assert.ok(!t.svc.props['probe.timeLimit']);
+  assert.match(t.sb.logs.join('\n'), /Apps Script time limit: 300 s per run \(measured\)/);
+  t.svc.props['probe.timeLimit'] = JSON.stringify({ startedAt: Date.now() - 1900000, lastAt: Date.now() - 90000, seconds: 1785 });
+  t.ctx.checkSetup();
+  assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '1800');
+  // Still running: nothing saved yet.
+  t.svc.props['probe.timeLimit'] = JSON.stringify({ startedAt: Date.now() - 100000, lastAt: Date.now() - 5000, seconds: 95 });
+  t.ctx.checkSetup();
+  assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '1800');
+  assert.match(t.sb.logs.join('\n'), /measureTimeLimit is still running/);
+});
+
+test('a student whose update stopped between weeks (time running out) is told so on their row, and their time is kept', () => {
+  const t = setup();
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.upsertPlannerDocument_ = (payload) => ({ docUrl: 'u', documentId: payload.documentId || 'DOC-A', weeksDone: 2, weeksTotal: 4 });
+  const r = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.strictEqual(r.last.ok, true);
+  assert.strictEqual(r.last.message, 'Updated 2 of 4 weeks: Google Docs was slow, so the other weeks will be updated at the next update (their Status and Notes are kept).');
+  assert.ok(Number.isInteger(JSON.parse(t.svc.props['student.' + student.id]).lastSeconds));
 });
 
 test('setupTriggers installs 7 pm and midnight New York triggers, idempotently, and removes the old secret', () => {

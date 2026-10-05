@@ -140,6 +140,47 @@ var DOCS_CHUNK_GAP_MS = 450;
 
 function sleepDocsChunkGap_() {
   Utilities.sleep(DOCS_CHUNK_GAP_MS);
+  if (updateStats_) updateStats_.pauseMs += DOCS_CHUNK_GAP_MS;
+}
+
+// ---- Time: every execution's start, Apps Script's limit, and timing for selfTest -------------------
+// Global code runs at the start of every execution, so this is when the current one began.
+var EXECUTION_STARTED_AT_ = Date.now();
+// Apps Script stops a run at this account's limit. 6 minutes is the documented default; the real
+// value (measureTimeLimit in App.gs) is kept in the RUNTIME_LIMIT_SECONDS Script Property.
+var DEFAULT_RUNTIME_LIMIT_SECONDS = 360;
+// An update stops between weeks when the next week might not fit; this much time is kept for the
+// home tab and saving the result.
+var UPDATE_RESERVE_MS = 30 * 1000;
+
+function runtimeLimitMs_() {
+  var s = Number(getScriptProperty_('RUNTIME_LIMIT_SECONDS'));
+  return (s >= 60 ? s : DEFAULT_RUNTIME_LIMIT_SECONDS) * 1000;
+}
+
+function msLeftInExecution_() {
+  return runtimeLimitMs_() - (Date.now() - EXECUTION_STARTED_AT_);
+}
+
+// When set (selfTest does), every Docs read and write is counted and timed, and each week's time.
+var updateStats_ = null;
+
+function startUpdateStats_() {
+  updateStats_ = { start: Date.now(), reads: 0, readMs: 0, readChars: 0, writes: 0, writeMs: 0, requests: 0, pauseMs: 0, weeks: [] };
+}
+
+/** "took 205 s: 9 Doc reads 21 s (about 1013 KB each), 20 Doc writes (1410 requests) 162 s, ..." */
+function updateStatsText_() {
+  var st = updateStats_;
+  if (!st) return '';
+  var sec = function (ms) { return Math.round(ms / 1000) + ' s'; };
+  var total = Date.now() - st.start;
+  var other = total - st.readMs - st.writeMs - st.pauseMs;
+  return 'took ' + sec(total) + ': ' + st.reads + ' Doc reads ' + sec(st.readMs) +
+    (st.reads ? ' (about ' + Math.round(st.readChars / st.reads / 1024) + ' KB each)' : '') + ', ' +
+    st.writes + ' Doc writes (' + st.requests + ' requests) ' + sec(st.writeMs) + ', pauses ' + sec(st.pauseMs) +
+    ', other ' + sec(Math.max(0, other)) +
+    (st.weeks.length ? '; by week: ' + st.weeks.map(function (w) { return w.week + ' ' + sec(w.ms); }).join(', ') : '');
 }
 
 function docsApiIsQuotaError_(err) {
@@ -169,7 +210,13 @@ function docsGet_(docId, opts) {
   var fellBack = false;
   for (var attempt = 0; attempt < 7; attempt++) {
     try {
+      var t0 = Date.now();
       var doc = Docs.Documents.get(docId, options);
+      if (updateStats_) {
+        updateStats_.reads++;
+        updateStats_.readMs += Date.now() - t0;
+        updateStats_.readChars += JSON.stringify(doc).length;
+      }
       // The full read worked where the shorter one didn't: use full reads for the rest of this run.
       if (fellBack) docsGetFieldsRejected_ = true;
       return doc;
@@ -206,7 +253,14 @@ function docsBatchUpdate_(docId, requests) {
   var lastErr;
   for (var attempt = 0; attempt < 7; attempt++) {
     try {
-      return Docs.Documents.batchUpdate({ requests: requests }, docId);
+      var t0 = Date.now();
+      var reply = Docs.Documents.batchUpdate({ requests: requests }, docId);
+      if (updateStats_) {
+        updateStats_.writes++;
+        updateStats_.writeMs += Date.now() - t0;
+        updateStats_.requests += requests.length;
+      }
+      return reply;
     } catch (e) {
       lastErr = e;
       if (docsApiIsQuotaError_(e) && attempt < 6) {
@@ -335,11 +389,13 @@ function upsertPlannerDocument_(data) {
   }
 
   var parentTabId = prepareParentTab_(docId, isNew);
-  removeUpdatingLeftovers_(docId, findTabJsonById_(docsGet_(docId), parentTabId));
+  // One read serves the steps below; it's read again only after a step changes the Doc.
+  var current = docsGet_(docId);
+  if (removeUpdatingLeftovers_(docId, findTabJsonById_(current, parentTabId))) current = docsGet_(docId);
 
   // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
   var today = Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
-  archivePastWeeks_(docId, parentTabId, today);
+  if (archivePastWeeks_(docId, parentTabId, today, current)) current = docsGet_(docId);
 
   var weeks = {};
   Object.keys(data.weeks || {}).forEach(function (k) { weeks[k] = data.weeks[k]; });
@@ -353,12 +409,15 @@ function upsertPlannerDocument_(data) {
   // A week's tab somewhere else in the Doc (someone dragged it out of CLC Planner): every title must
   // be different, so a second one can't be made. Move it back first, so its Status and Notes are
   // read below and it's rebuilt in place.
-  moveWeekTabsBack_(docId, parentTabId, weekKeys.map(function (k) { return buildWeekTabTitle_(k, weeks[k].week_label); }));
+  if (moveWeekTabsBack_(docId, parentTabId, weekKeys.map(function (k) { return buildWeekTabTitle_(k, weeks[k].week_label); }), current)) {
+    current = docsGet_(docId);
+  }
 
   // Read every current and upcoming week's Status and Notes before any tab is rebuilt, so they
   // follow an assignment that moved to another week.
-  var beforeParent = findTabJsonById_(docsGet_(docId), parentTabId);
-  var saved = collectSavedData_(beforeParent, readWritten_(docId));
+  var beforeParent = findTabJsonById_(current, parentTabId);
+  var lastWritten = readWritten_(docId);
+  var saved = collectSavedData_(beforeParent, lastWritten);
 
   // Every current and upcoming week tab is rebuilt from fresh data, including a week where nothing
   // is due any more, so an assignment is only ever in one week tab.
@@ -379,16 +438,29 @@ function upsertPlannerDocument_(data) {
     return { docUrl: doc.getUrl(), documentId: docId };
   }
 
-  weekKeys.forEach(function (weekKey) {
+  var weeksDone = [];
+  var slowestWeekMs = 60 * 1000;
+  var stoppedEarly = false;
+  weekKeys.forEach(function (weekKey, i) {
+    if (stoppedEarly) return;
+    // Stop cleanly between weeks rather than be stopped by Apps Script's time limit partway: the
+    // weeks not done keep their content (and their Status and Notes) until the next update.
+    if (!data.noDeadline && msLeftInExecution_() < slowestWeekMs + UPDATE_RESERVE_MS) {
+      stoppedEarly = true;
+      return;
+    }
+    var weekStartedAt = Date.now();
     var weekData = weeks[weekKey];
     var tabTitle = buildWeekTabTitle_(weekKey, weekData.week_label);
 
-    var resource = docsGet_(docId);
+    // The first week can use the read above (nothing has changed since); later weeks read again.
+    var resource = i === 0 ? current : docsGet_(docId);
     var parentJson = findTabJsonById_(resource, parentTabId);
     var existingWeekTabId =
       parentJson && findChildTabIdByTitle_(parentJson, tabTitle);
 
     var tabId;
+    var probe = resource; // fillWeekTabDocsApi_ can use this read unless a tab is added first
     if (existingWeekTabId) {
       tabId = existingWeekTabId;
     } else {
@@ -398,15 +470,27 @@ function upsertPlannerDocument_(data) {
         tabTitle,
         nextChildTabInsertIndex_(parentJson)
       );
+      probe = null;
     }
 
-    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, beforeParent);
+    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, beforeParent, probe);
     sleepDocsChunkGap_();
+    weeksDone.push(weekKey);
+    var took = Date.now() - weekStartedAt;
+    slowestWeekMs = Math.max(slowestWeekMs, took);
+    if (updateStats_) updateStats_.weeks.push({ week: scheduleShortDate_(weekKey), ms: took });
   });
 
-  // Remember what was written, so next time an edit in either table can be told apart.
+  // Remember what was written, so next time an edit in either table can be told apart. Weeks not
+  // done this time keep last time's record.
   var written = {};
-  weekKeys.forEach(function (weekKey) {
+  if (stoppedEarly) {
+    Object.keys(lastWritten).forEach(function (k) {
+      var w = lastWritten[k].w;
+      if (w >= scheduleWeekStart_(today) && weeksDone.indexOf(w) === -1) written[k] = lastWritten[k];
+    });
+  }
+  weeksDone.forEach(function (weekKey) {
     (weeks[weekKey].days || []).forEach(function (d) {
       (d.assignments || []).forEach(function (a) {
         if (!a.url) return;
@@ -423,7 +507,7 @@ function upsertPlannerDocument_(data) {
   // The home tab last, so its "Open this week" link can point at this week's (new) tab.
   rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
 
-  return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId };
+  return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId, weeksDone: weeksDone.length, weeksTotal: weekKeys.length };
 }
 
 function buildWeekTabTitle_(weekKey, weekLabel) {
@@ -529,8 +613,8 @@ function removeUpdatingLeftovers_(docId, parentTabJson) {
 }
 
 /** Moves tabs with these titles that aren't under CLC Planner back under it (above "Past weeks"). */
-function moveWeekTabsBack_(docId, parentTabId, titles) {
-  var doc = docsGet_(docId);
+function moveWeekTabsBack_(docId, parentTabId, titles, readDoc) {
+  var doc = readDoc || docsGet_(docId);
   var parent = findTabJsonById_(doc, parentTabId);
   var at = nextChildTabInsertIndex_(parent);
   var moves = [];
@@ -607,14 +691,15 @@ function weekKeyFromTabTitle_(title) {
  * the only change: a past week's content is never read, edited, rebuilt or deleted.
  * Returns how many tabs moved.
  */
-function archivePastWeeks_(docId, parentTabId, today) {
-  var parent = findTabJsonById_(docsGet_(docId), parentTabId);
+function archivePastWeeks_(docId, parentTabId, today, readDoc) {
+  var docJson = readDoc || docsGet_(docId);
+  var parent = findTabJsonById_(docJson, parentTabId);
   var ended = endedWeekTabs_(parent, today);
   if (!ended.length) return 0;
   var pastId = findChildTabIdByTitle_(parent, PAST_WEEKS_TITLE);
   // A "Past weeks" tab somewhere else in the Doc: titles must be unique, so use that one.
   if (!pastId) {
-    var other = findTabByTitleAnywhere_(docsGet_(docId), PAST_WEEKS_TITLE);
+    var other = findTabByTitleAnywhere_(docJson, PAST_WEEKS_TITLE);
     if (other) pastId = other.tabProperties.tabId;
   }
   if (!pastId) {
@@ -1479,8 +1564,8 @@ function tabBodyHasHeavyContent_(tabJson) {
  * Writes one week tab from scratch: a heading, the help line, one table per class, and the By Day
  * table. The tab has just been created or cleared, so it holds one empty paragraph at index 1.
  */
-function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, snapshot) {
-  var docProbe = docsGet_(docId);
+function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, snapshot, readDoc) {
+  var docProbe = readDoc || docsGet_(docId);
   var tabProbe = findTabJsonById_(docProbe, tabId);
   // Status and Notes from all current and upcoming weeks (see collectSavedData_), or this tab's own.
   var savedData = saved || readExistingDataFromTab_(tabProbe);
