@@ -68,7 +68,7 @@ function fakeServices(options) {
   };
 
   function output(kind, value) {
-    const o = { kind, value, title: '', setTitle: (t) => { o.title = t; return o; }, addMetaTag: () => o };
+    const o = { kind, value, title: '', setTitle: (t) => { o.title = t; return o; }, addMetaTag: () => o, getContent: () => value };
     return o;
   }
   const HtmlService = {

@@ -330,6 +330,58 @@ test('week rollover: ended weeks move into "Past weeks" (created once, newest fi
   assert.strictEqual(t.ctx.nextChildTabInsertIndex_(parent), 3);
 });
 
+test('past weeks: Priority cells turn gray in the same batch as the move; nothing else is touched', () => {
+  const t = setup();
+  const blank = () => tcell('');
+  const head = (second) => ({ tableCells: ['Assignment', second, 'Due Time', 'Priority', 'Status', 'Notes'].map((x) => tcell(x)) });
+  const item = (n, second, prio, status, note) => ({ tableCells: [tcell('Essay ' + n, url(n)), tcell(second), tcell('8:30 AM'), tcell(prio), tcell(status), tcell(note)] });
+  const merged = (text) => ({ tableCells: [tcell(text), blank(), blank(), blank(), blank(), blank()] });
+  const ended = {
+    tabProperties: { tabId: 't.oct5', title: 'Week of Oct 5 – Oct 11, 2026' },
+    documentTab: { body: { content: [
+      { startIndex: 1, paragraph: { elements: [] } },
+      { startIndex: 100, table: { columns: 6, tableRows: [merged('Psychology'), head('Day'), item(1, 'Monday', 'Today', 'In progress', 'kept'), item(2, 'Tuesday', 'Tomorrow', 'Not started', '')] } },
+      { startIndex: 200, table: { columns: 6, tableRows: [merged('Calculus III'), head('Day'), merged('No assignments due this week.')] } },
+      { startIndex: 300, table: { columns: 6, tableRows: [head('Course'), merged('Monday'), item(1, 'Psychology', 'Today', 'In progress', 'kept'), merged('Tuesday'), item(2, 'Psychology', 'Tomorrow', '', ''), item(3, 'Psychology', 'Due Soon', 'Complete', 'done')] } },
+    ] } },
+  };
+  const gray = { backgroundColor: { color: { rgbColor: { red: 224 / 255, green: 224 / 255, blue: 224 / 255 } } } };
+  const cellReq = (start, row, rowSpan) => ({ updateTableCellStyle: {
+    tableRange: { tableCellLocation: { tableStartLocation: { tabId: 't.oct5', index: start }, rowIndex: row, columnIndex: 3 }, rowSpan, columnSpan: 1 },
+    tableCellStyle: gray, fields: 'backgroundColor',
+  } });
+  const expected = [cellReq(100, 2, 2), cellReq(300, 2, 1), cellReq(300, 4, 2)];
+  assert.deepStrictEqual(toPlain(t.ctx.pastPriorityGrayRequests_(ended)), expected,
+    'only Priority cells that hold a priority: no class names, day rows, "No assignments" rows, Status or Notes');
+
+  const parent = { tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [ended, weekTab('t.past', 'Past weeks')] };
+  const sent = [];
+  t.ctx.docsGet_ = () => ({ tabs: [parent] });
+  t.ctx.docsBatchUpdate_ = (id, reqs) => { sent.push(toPlain(reqs)); return { replies: [] }; };
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-12'), 1);
+  assert.deepStrictEqual(sent, [expected.concat([
+    { updateDocumentTabProperties: { tabProperties: { tabId: 't.oct5', parentTabId: 't.past', index: 0 }, fields: 'parentTabId,index' } },
+  ])], 'one batch: gray first, then the move');
+  // Once it's in Past weeks it is never looked at again.
+  parent.childTabs = [weekTab('t.past', 'Past weeks')];
+  parent.childTabs[0].childTabs = [ended];
+  sent.length = 0;
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-19'), 0);
+  assert.deepStrictEqual(sent, []);
+});
+
+test('a Doc in the trash, or gone, is never written: refused before it is opened (with or without a folder)', () => {
+  for (const props of [{ DOCS_FOLDER_ID: 'FOLDER123' }, {}]) {
+    const t = setup(props);
+    t.svc.addFile('BINNED', 'Test Student - CLC Assignments', 'FOLDER123', { trashed: true });
+    assert.throws(() => t.ctx.upsertPlannerDocument_(Object.assign({ documentId: 'BINNED' }, base)),
+      /^Error: Could not open the saved Google Doc \(BINNED\): it is in the trash\.$/);
+    assert.throws(() => t.ctx.upsertPlannerDocument_(Object.assign({ documentId: 'GONE' }, base)), /Could not open the saved Google Doc \(GONE\)/);
+    assert.deepStrictEqual(t.calls, [], 'never opened, renamed or written');
+    assert.deepStrictEqual(t.svc.sleepCalls, [2000], 'a missing Doc is looked up twice, 2 s apart, in case Drive had a hiccup');
+  }
+});
+
 test('notes follow an assignment to its new week; the typed value wins; past weeks are never read', () => {
   const t = setup();
   const X = url(7);

@@ -234,6 +234,8 @@
     .s-token { grid-area: token; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0; }
     .s-last { grid-area: last; font-size: var(--fs-ui); line-height: 1.45; color: var(--ink-2); }
     .s-last.bad { color: var(--ink); }
+    /* A one-off message from AutoPlanner, such as "made a new Doc", kept on the row for a week. */
+    .s-notice { display: block; margin-top: 4px; color: var(--ink); }
     .s-doc { grid-area: doc; font-size: var(--fs-ui); }
     .s-doc .none { color: var(--ink-2); }
     .row-actions { grid-area: actions; display: flex; gap: 16px; justify-content: flex-end; }
@@ -473,6 +475,7 @@
           ? (s.last.ok ? '' : '<span class="flag">Needs attention</span>') +
             esc(when(s.last.at)) + '. ' + esc(s.last.message)
           : 'Not updated yet.';
+        if (s.notice) last += '<span class="s-notice">' + esc(when(s.notice.at)) + '. ' + esc(s.notice.message) + '</span>';
         var card = document.createElement('div');
         card.className = 'student-card';
         card.innerHTML =

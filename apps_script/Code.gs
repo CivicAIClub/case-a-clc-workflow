@@ -215,14 +215,33 @@ function getDocsFolder_() {
   }
 }
 
+// App.gs looks for this text to make a fresh Doc when the saved one is gone.
+var DOC_GONE_PREFIX = 'Could not open the saved Google Doc';
+
+/**
+ * The saved Doc's Drive file. Throws an error starting with DOC_GONE_PREFIX when the Doc is in the
+ * trash or can't be found (tried twice, in case Drive had a hiccup), so nothing is ever written to
+ * a trashed Doc. Checked before any edit.
+ */
+function savedDocFile_(docId) {
+  var file = null;
+  var lastErr = null;
+  for (var attempt = 0; attempt < 2 && !file; attempt++) {
+    try {
+      file = DriveApp.getFileById(docId);
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) Utilities.sleep(2000);
+    }
+  }
+  if (!file) throw new Error(DOC_GONE_PREFIX + ' (' + docId + '): ' + lastErr);
+  if (file.isTrashed()) throw new Error(DOC_GONE_PREFIX + ' (' + docId + '): it is in the trash.');
+  return file;
+}
+
 /** Throws unless the Doc's Drive file sits directly in `folder`. Checked before any edit. */
 function assertDocIsInFolder_(docId, folder) {
-  var file;
-  try {
-    file = DriveApp.getFileById(docId);
-  } catch (err) {
-    throw new Error('Could not open the saved Google Doc (' + docId + '): ' + err);
-  }
+  var file = savedDocFile_(docId);
   var parents = file.getParents();
   while (parents.hasNext()) {
     if (parents.next().getId() === folder.getId()) return;
@@ -249,6 +268,8 @@ function upsertPlannerDocument_(data) {
   if (docId) {
     if (folder) {
       assertDocIsInFolder_(docId, folder);
+    } else {
+      savedDocFile_(docId);
     }
     doc = DocumentApp.openById(docId);
     try {
@@ -424,6 +445,8 @@ function nextChildTabInsertIndex_(parentTabJson) {
 // ---- Past weeks: ended week tabs move into one "Past weeks" tab, untouched -----------------
 var PAST_WEEKS_TITLE = 'Past weeks';
 var PAST_WEEKS_LINE = 'Every past week, with the Status and Notes typed during it. AutoPlanner never changes these.';
+// A past week's Priority colors no longer mean anything, so its Priority cells turn this gray.
+var PAST_PRIORITY_BG = '#E0E0E0';
 
 /** "Week of Oct 5 – Oct 11, 2026" gives '2026-10-05' (its Monday); any other tab title gives null. */
 function weekKeyFromTabTitle_(title) {
@@ -449,8 +472,54 @@ function archivePastWeeks_(docId, parentTabId, today) {
     pastId = addWeekChildTab_(docId, parentTabId, PAST_WEEKS_TITLE, parent.childTabs.length);
     docsBatchUpdate_(docId, [{ insertText: { text: PAST_WEEKS_LINE, location: { tabId: pastId, index: 1 } } }]);
   }
-  docsBatchUpdate_(docId, archiveMoveRequests_(ended, pastId));
+  // One batch: gray each week's Priority cells, then move it. Nothing in it changes after this.
+  var gray = [];
+  ended.forEach(function (w) {
+    var tab = parent.childTabs.filter(function (t) { return t.tabProperties.tabId === w.id; })[0];
+    gray = gray.concat(pastPriorityGrayRequests_(tab));
+  });
+  docsBatchUpdate_(docId, gray.concat(archiveMoveRequests_(ended, pastId)));
   return ended.length;
+}
+
+/**
+ * Requests that turn one ended week's Priority cells gray (PAST_PRIORITY_BG), keeping their text.
+ * Only cells under a "Priority" heading that hold a priority are changed: class names, day rows,
+ * "No assignments" rows, Status and Notes are never touched.
+ */
+function pastPriorityGrayRequests_(tabJson) {
+  var reqs = [];
+  if (!tabJson || !tabJson.documentTab || !tabJson.tabProperties) return reqs;
+  var tabId = tabJson.tabProperties.tabId;
+  (tabJson.documentTab.body.content || []).forEach(function (el) {
+    if (!el.table) return;
+    var rows = el.table.tableRows || [];
+    var header = -1;
+    var col = -1;
+    for (var r = 0; r < rows.length && col < 0; r++) {
+      var cells = rows[r].tableCells || [];
+      for (var c = 0; c < cells.length; c++) {
+        if (getCellText_(cells[c]) === 'Priority') { header = r; col = c; break; }
+      }
+    }
+    if (col < 0) return;
+    // Neighbouring priority rows share one request.
+    var start = -1;
+    var flush = function (end) {
+      if (start < 0) return;
+      reqs.push(cellStyleRequest_(tabId, el.startIndex, start, col, end - start + 1, 1,
+        { backgroundColor: optionalColorFromHex_(PAST_PRIORITY_BG) }, 'backgroundColor'));
+      start = -1;
+    };
+    for (var i = header + 1; i < rows.length; i++) {
+      var rowCells = rows[i].tableCells || [];
+      var hasPriority = rowCells.length > col && getCellText_(rowCells[col]) !== '';
+      if (hasPriority && start < 0) start = i;
+      if (!hasPriority) flush(i - 1);
+    }
+    flush(rows.length - 1);
+  });
+  return reqs;
 }
 
 /** The week tabs directly under CLC Planner whose week ended before `today`, oldest first. */
