@@ -218,6 +218,43 @@ test("403 or 404 on one class's assignments skips just that class", () => {
   assert.deepStrictEqual(sb.sleepCalls, []);
 });
 
+test('403 "Rate Limit Exceeded" is Canvas saying "slow down": retried, then the student waits (no class dropped)', () => {
+  const limited = { code: 403, body: '403 Forbidden (Rate Limit Exceeded)' };
+  // Once, then fine: retried after 2 seconds, nothing lost.
+  let sb = setup({
+    [COURSES_URL]: ok([course(1, 'English 10'), course(2, 'Biology')]),
+    [assignmentsUrl(1)]: ok([assignment(101, 1)]),
+    [assignmentsUrl(2)]: sequence(limited, ok([assignment(201, 2)])),
+  });
+  let pairs = toPlain(sb.context.fetchCanvasAssignmentPairs_(TOKEN, BASE));
+  assert.deepStrictEqual(pairs.map(([a]) => a.id), [101, 201]);
+  assert.deepStrictEqual(sb.sleepCalls, [2000]);
+  // Still limited after the retry: a plain "try again" error, so the Doc isn't written without Biology.
+  sb = setup({
+    [COURSES_URL]: ok([course(1, 'English 10'), course(2, 'Biology')]),
+    [assignmentsUrl(1)]: ok([assignment(101, 1)]),
+    [assignmentsUrl(2)]: limited,
+  });
+  let err = errorFrom(() => sb.context.fetchCanvasAssignmentPairs_(TOKEN, BASE));
+  assert.equal(err.canvasKind, 'unavailable');
+  assert.equal(err.message, 'Canvas is getting too many requests right now. This student will be tried again at the next update.');
+  // On the class list it isn't called a bad token either.
+  sb = setup({ [PROFILE_URL]: ok({ id: 1 }), [COURSES_URL]: limited });
+  err = errorFrom(() => sb.context.fetchStudentSchedule_(TOKEN, BASE, 2, NOW));
+  assert.equal(err.canvasKind, 'unavailable');
+});
+
+test('classes hidden by COURSE_EXCLUDE are never asked for', () => {
+  const sb = setup({
+    [PROFILE_URL]: ok({ id: 1, name: 'Avery Example' }),
+    [COURSES_URL]: ok([course(1, 'English 10'), course(2, 'Advisory - Smith'), course(3, 'Dorm Life')]),
+    [assignmentsUrl(1)]: ok([assignment(101, 1)]),
+  });
+  const schedule = toPlain(sb.context.fetchStudentSchedule_(TOKEN, BASE, 2, NOW, ['advisory', 'dorm']));
+  assert.deepStrictEqual(schedule.courses, ['English 10']);
+  assert.ok(!sb.fetchCalls.some((c) => /courses\/(2|3)\/assignments/.test(c.url)));
+});
+
 test('503 then 200 -> retried once after 2 seconds, then succeeds', () => {
   const sb = setup({
     [COURSES_URL]: sequence({ code: 503, body: 'Service Unavailable' }, ok([course(1, 'Biology')])),

@@ -34,6 +34,9 @@ var APP_SAFETY_CONTINUE_AFTER_MS = 8 * 60 * 1000; // resumes a run if a batch is
 var APP_RUN_STALE_MS = 15 * 60 * 1000; // a run with no progress this long is treated as stopped
 var APP_STUDENT_BUSY_MS = 7 * 60 * 1000;
 var APP_NOTICE_DAYS = 7; // how long a one-off message (e.g. "made a new Doc") stays on a row
+// A run summary is one Script Property (9 KB at most), so it keeps this many problems in full.
+var APP_MAX_FAILURES_KEPT = 20;
+var APP_STALE_AFTER_MS = 26 * 3600 * 1000; // no finished update for this long means something is wrong
 
 // =====================================================================================
 // The web page
@@ -120,8 +123,20 @@ function getAppState() {
     run: publicRun_(readJson_('run.current')),
     lastRun: readJson_('run.last'),
     automaticUpdatesOn: dailyTriggerCount_() === APP_DAILY_HOURS.length,
+    updatesStaleSince: updatesStaleSince_(),
     contact: APP_CONTACT,
   };
+}
+
+/**
+ * When the last finished update is over a day old (and none is running), its time; otherwise null.
+ * The automatic updates would have finished one by now, so a trigger is failing (for example the
+ * owner's account was closed or lost its permissions) and staff should tell the club.
+ */
+function updatesStaleSince_() {
+  var last = readJson_('run.last');
+  if (!last || !last.finishedAt || activeRun_()) return null;
+  return Date.now() - new Date(last.finishedAt).getTime() > APP_STALE_AFTER_MS ? last.finishedAt : null;
 }
 
 /** Add a student from their Canvas token. Checks the token with Canvas before saving it. */
@@ -403,11 +418,24 @@ function canvasProfileOrFriendlyError_(token) {
 function friendlyError_(err, token) {
   var msg = String((err && err.message) || err || 'Unknown error').replace(/^Error:\s*/, '');
   if (token) msg = msg.split(token).join('[token]');
-  if (docsApiIsQuotaError_(msg)) {
+  if (err && err.canvasKind) {
+    // Canvas messages are already plain English (and a Canvas 429 isn't a Docs problem).
+  } else if (docsApiIsQuotaError_(msg)) {
     msg = 'Google is limiting how fast Docs can be edited right now. This student will be tried again at the next update.';
+  } else if (APP_RAW_GOOGLE_ERROR.test(msg)) {
+    console.warn('Raw error shown to staff in plain words: ' + msg);
+    msg = 'Google Docs or Drive had a temporary problem. This student will be tried again at the next ' +
+      'update. If it keeps happening, contact ' + APP_CONTACT + '.';
   }
   return msg.length > 300 ? msg.substring(0, 297) + '…' : msg;
 }
+
+// Google's own error texts (and a few internal ones) that mean nothing to staff.
+var APP_RAW_GOOGLE_ERROR = new RegExp([
+  'Exception:', 'Service error', 'server error', 'Internal error', 'unavailable', 'Backend Error',
+  'GoogleJsonResponseException', 'Invalid requests\\[', 'addDocumentTab failed', 'Timed out clearing',
+  'Table cell has no paragraph', 'Service invoked too many times',
+].join('|'), 'i');
 
 function escapeHtml_(s) {
   return String(s).replace(/[&<>"']/g, function (c) {
@@ -513,7 +541,11 @@ function writeDocWithRecovery_(student, schedule, info) {
     // The saved Doc is gone (deleted or in the trash): start again with a reused or new Doc.
     delete payload.documentId;
     var other = findReusableDoc_(schedule.student_full_name, student.id);
-    if (other && other !== docId) payload.documentId = other;
+    // Drive can still find the same Doc, not in the trash: it was a hiccup, not a deleted Doc.
+    if (other === docId) {
+      throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
+    }
+    if (other) payload.documentId = other;
     var newId = upsertPlannerDocument_(payload).documentId;
     if (info) {
       info.replaced = payload.documentId
@@ -618,8 +650,11 @@ function recordResult_(runId, result) {
     run.inProgress = null;
     run.heartbeatAt = Date.now();
     if (result.ok) run.updated++;
-    else if (!result.skipped || result.message !== 'That student was removed.') {
-      run.failed.push({ name: result.name || 'A student', message: result.message });
+    else if (result.skipped && result.message === 'That student was removed.') run.total--;
+    else if (run.failed.length < APP_MAX_FAILURES_KEPT) {
+      run.failed.push({ name: result.name || 'A student', message: String(result.message || '').substring(0, 150) });
+    } else {
+      run.moreFailed = (run.moreFailed || 0) + 1;
     }
     writeJson_('run.current', run);
   });
@@ -637,9 +672,10 @@ function finishRun_(runId) {
       finishedAt: new Date().toISOString(),
       total: run.total,
       updated: run.updated,
-      failed: run.failed.slice(0, 40).map(function (f) {
-        return { name: f.name, message: String(f.message || '').substring(0, 200) };
+      failed: run.failed.slice(0, APP_MAX_FAILURES_KEPT).map(function (f) {
+        return { name: f.name, message: String(f.message || '').substring(0, 150) };
       }),
+      moreFailed: run.moreFailed || 0,
     };
     writeJson_('run.last', summary);
     writeJson_('run.current', null);
@@ -654,7 +690,7 @@ function publicRun_(run) {
     startedAt: new Date(run.startedAt).toISOString(),
     total: run.total,
     done: run.total - run.queue.length - (run.inProgress ? 1 : 0),
-    failed: run.failed.length,
+    failed: run.failed.length + (run.moreFailed || 0),
     current: current ? current.label || current.name : '',
   };
 }

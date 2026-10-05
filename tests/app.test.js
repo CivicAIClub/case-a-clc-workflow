@@ -261,6 +261,75 @@ test('a trashed Doc with another of their Docs in the folder: that one is used, 
   assert.match(after.notice.message, /^Their Doc was deleted, so AutoPlanner switched to their other Doc/);
 });
 
+test('staff never see raw Google errors, and a Canvas 429 is not called a Docs problem', () => {
+  const t = setup();
+  const plain = /^Google Docs or Drive had a temporary problem\. This student will be tried again at the next update\. If it keeps happening, contact Cayden Auyang or Luke Ryan/;
+  for (const raw of [
+    'GoogleJsonResponseException: API call to docs.documents.batchUpdate failed with error: Internal error encountered.',
+    'Exception: Service error: Drive',
+    "We're sorry, a server error occurred. Please wait a bit and try again.",
+    'Could not open the saved Google Doc (abc): Exception: Unexpected error while getting the method or property getFileById',
+    'addDocumentTab failed — check Docs API service is enabled. Raw: {}',
+    'Exception: Service invoked too many times for one day: urlfetch.',
+  ]) assert.match(t.ctx.friendlyError_(new Error(raw)), plain, raw);
+  const canvasBusy = Object.assign(new Error('Canvas is busy or down right now (HTTP 429). Try again later.'), { canvasKind: 'unavailable' });
+  assert.strictEqual(t.ctx.friendlyError_(canvasBusy), 'Canvas is busy or down right now (HTTP 429). Try again later.');
+  assert.match(t.ctx.friendlyError_(new Error('Quota exceeded for quota metric write requests (429)')), /limiting how fast Docs/);
+  // Plain messages pass through untouched.
+  assert.strictEqual(t.ctx.friendlyError_(new Error("Canvas didn't accept this student's token.")), "Canvas didn't accept this student's token.");
+});
+
+test("a Drive hiccup on a Doc that isn't gone: no new Doc, and a plain message", () => {
+  const t = setup();
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.updateStudentNow(student.id);
+  const docId = JSON.parse(t.svc.props['student.' + student.id]).docId;
+  t.svc.addFile(docId, 'Avery Example - CLC Assignments', 'FOLDER123');
+  const writes = [];
+  t.ctx.upsertPlannerDocument_ = (payload) => {
+    writes.push(payload.documentId || 'new');
+    if (payload.documentId) throw new Error(t.ctx.DOC_GONE_PREFIX + ' (' + docId + '): Exception: Service error: Drive');
+    return { documentId: 'SHOULD-NOT-HAPPEN' };
+  };
+  const after = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.deepStrictEqual(writes, [docId], 'no second Doc');
+  assert.strictEqual(after.last.ok, false);
+  assert.match(after.last.message, /Google Drive didn't answer about this student's Doc/);
+  assert.match(after.docUrl, new RegExp(docId));
+});
+
+test('run summaries stay small (20 problems kept, the rest counted), and removed students leave the total', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  for (let i = 0; i < 25; i++) {
+    t.svc.props['student.s' + i] = JSON.stringify({ id: 's' + i, name: 'Student ' + i, label: '', canvasUserId: 900 + i });
+    t.svc.props['token.s' + i] = 'TOKEN-BAD-' + i;
+  }
+  t.ctx.startUpdateAll();
+  const last = JSON.parse(t.svc.props['run.last']);
+  assert.strictEqual(last.failed.length, 20);
+  assert.strictEqual(last.moreFailed, 5);
+  assert.ok(t.svc.props['run.last'].length < 9000, 'fits in one Script Property');
+  // A student removed while queued doesn't count as "not updated".
+  const run = { id: 'r1', queue: [], total: 3, updated: 0, failed: [], inProgress: 'x' };
+  t.svc.props['run.current'] = JSON.stringify(run);
+  t.ctx.recordResult_('r1', { ok: false, skipped: true, message: 'That student was removed.' });
+  assert.strictEqual(JSON.parse(t.svc.props['run.current']).total, 2);
+});
+
+test('the page warns when no update has finished for over a day', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  t.ctx.setupTriggers();
+  t.svc.setActive(STAFF);
+  assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, null, 'no update yet: nothing to warn about');
+  const old = new Date(Date.now() - 27 * 3600 * 1000).toISOString();
+  t.svc.props['run.last'] = JSON.stringify({ finishedAt: old, total: 1, updated: 1, failed: [] });
+  assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, old);
+  t.svc.props['run.last'] = JSON.stringify({ finishedAt: new Date().toISOString(), total: 1, updated: 1, failed: [] });
+  assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, null);
+});
+
 test('friendlyError_ scrubs the token and translates Docs quota errors', () => {
   const t = setup();
   assert.strictEqual(t.ctx.friendlyError_(new Error('Error: bad ' + TOKEN_A), TOKEN_A), 'bad [token]');

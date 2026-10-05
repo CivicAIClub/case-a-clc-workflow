@@ -344,7 +344,7 @@ test('week rollover: ended weeks move into "Past weeks" (created once, newest fi
   assert.strictEqual(t.ctx.nextChildTabInsertIndex_(parent), 3);
 });
 
-test('past weeks: Priority cells turn gray in the same batch as the move; nothing else is touched', () => {
+test('past weeks: Priority cells turn gray just before the move; nothing else is touched', () => {
   const t = setup();
   const blank = () => tcell('');
   const head = (second) => ({ tableCells: ['Assignment', second, 'Due Time', 'Priority', 'Status', 'Notes'].map((x) => tcell(x)) });
@@ -373,9 +373,18 @@ test('past weeks: Priority cells turn gray in the same batch as the move; nothin
   t.ctx.docsGet_ = () => ({ tabs: [parent] });
   t.ctx.docsBatchUpdate_ = (id, reqs) => { sent.push(toPlain(reqs)); return { replies: [] }; };
   assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-12'), 1);
-  assert.deepStrictEqual(sent, [expected.concat([
-    { updateDocumentTabProperties: { tabProperties: { tabId: 't.oct5', parentTabId: 't.past', index: 0 }, fields: 'parentTabId,index' } },
-  ])], 'one batch: gray first, then the move');
+  const move = { updateDocumentTabProperties: { tabProperties: { tabId: 't.oct5', parentTabId: 't.past', index: 0 }, fields: 'parentTabId,index' } };
+  assert.deepStrictEqual(sent, [expected, [move]], 'gray first, then the move');
+  // If Google refuses the gray, the week still moves (the gray is only a look).
+  sent.length = 0;
+  t.ctx.docsBatchUpdate_ = (id, reqs) => {
+    if (reqs[0].updateTableCellStyle) throw new Error('Invalid requests[0].updateTableCellStyle');
+    sent.push(toPlain(reqs));
+    return { replies: [] };
+  };
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-12'), 1);
+  assert.deepStrictEqual(sent, [[move]]);
+  t.ctx.docsBatchUpdate_ = (id, reqs) => { sent.push(toPlain(reqs)); return { replies: [] }; };
   // Once it's in Past weeks it is never looked at again.
   parent.childTabs = [weekTab('t.past', 'Past weeks')];
   parent.childTabs[0].childTabs = [ended];
@@ -409,6 +418,17 @@ test("Doc reads leave out Past weeks' content; if Google refuses that, a full re
   t.ctx.docsGet_('DOC');
   assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }, { includeTabsContent: true }, { includeTabsContent: true }]);
   assert.strictEqual(t.ctx.docsGetFieldsRejected_, true);
+});
+
+test('the shared folder deleted, unshared or in the trash: a plain message, and nothing is written', () => {
+  const gone = setup({ DOCS_FOLDER_ID: 'BAD' }, { badFolder: true });
+  assert.throws(() => gone.ctx.upsertPlannerDocument_(base), (e) =>
+    /cannot open that Drive folder\. It may have been deleted, or AutoPlanner's owner lost access to it\. Contact Cayden Auyang or Luke Ryan\.$/.test(e.message) &&
+    !/Exception|No item/.test(e.message));
+  const binned = setup({ DOCS_FOLDER_ID: 'FOLDER123' });
+  binned.svc.folderState.trashed = true;
+  assert.throws(() => binned.ctx.upsertPlannerDocument_(base), /shared folder "AutoPlanner – CLC Student Planners" is in the Drive trash/);
+  assert.deepStrictEqual(binned.calls, []);
 });
 
 test('a Doc in the trash, or gone, is never written: refused before it is opened (with or without a folder)', () => {

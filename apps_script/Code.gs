@@ -226,13 +226,22 @@ function getDocsFolder_() {
   var raw = getScriptProperty_('DOCS_FOLDER_ID');
   if (!raw) return null;
   var id = raw.replace(/^.*\/folders\//, '').replace(/[?#\/].*$/, '');
+  var folder;
   try {
-    return DriveApp.getFolderById(id);
+    folder = DriveApp.getFolderById(id);
   } catch (err) {
     throw new Error(
-      'DOCS_FOLDER_ID is set, but this account cannot open that Drive folder: ' + err
+      "DOCS_FOLDER_ID is set, but this account cannot open that Drive folder. It may have been " +
+        'deleted, or AutoPlanner\'s owner lost access to it. Contact Cayden Auyang or Luke Ryan.'
     );
   }
+  if (folder.isTrashed()) {
+    throw new Error(
+      'AutoPlanner\'s shared folder "' + folder.getName() + '" is in the Drive trash. Its owner can ' +
+        'restore it from the trash; until then no Doc is updated.'
+    );
+  }
+  return folder;
 }
 
 // App.gs looks for this text to make a fresh Doc when the saved one is gone.
@@ -492,13 +501,19 @@ function archivePastWeeks_(docId, parentTabId, today) {
     pastId = addWeekChildTab_(docId, parentTabId, PAST_WEEKS_TITLE, parent.childTabs.length);
     docsBatchUpdate_(docId, [{ insertText: { text: PAST_WEEKS_LINE, location: { tabId: pastId, index: 1 } } }]);
   }
-  // One batch: gray each week's Priority cells, then move it. Nothing in it changes after this.
+  // Gray each week's Priority cells, then move it. Nothing in it changes after this. The gray is
+  // only a look, so if Google refuses it the week still moves.
   var gray = [];
   ended.forEach(function (w) {
     var tab = parent.childTabs.filter(function (t) { return t.tabProperties.tabId === w.id; })[0];
     gray = gray.concat(pastPriorityGrayRequests_(tab));
   });
-  docsBatchUpdate_(docId, gray.concat(archiveMoveRequests_(ended, pastId)));
+  try {
+    docsBatchUpdate_(docId, gray);
+  } catch (err) {
+    console.warn('Past weeks: Priority not grayed: ' + err);
+  }
+  docsBatchUpdate_(docId, archiveMoveRequests_(ended, pastId));
   return ended.length;
 }
 
@@ -527,7 +542,7 @@ function pastPriorityGrayRequests_(tabJson) {
     var start = -1;
     var flush = function (end) {
       if (start < 0) return;
-      reqs.push(cellStyleRequest_(tabId, el.startIndex, start, col, end - start + 1, 1,
+      reqs.push(cellStyleRequest_(tabId, toDocIndex_(el.startIndex), start, col, end - start + 1, 1,
         { backgroundColor: optionalColorFromHex_(PAST_PRIORITY_BG) }, 'backgroundColor'));
       start = -1;
     };

@@ -28,7 +28,7 @@ var CANVAS_RETRY_WAIT_MS = 2000;
 // each one). Classes whose name contains any of `excludeKeywords` (e.g. "advisory") are left
 // out completely. `now` is optional (tests pass a fixed time).
 function fetchStudentSchedule_(token, baseUrl, weeksAhead, now, excludeKeywords) {
-  var data = fetchCanvasData_(token, baseUrl, true);
+  var data = fetchCanvasData_(token, baseUrl, true, excludeKeywords);
   var keep = function (name) { return !canvasCourseExcluded_(name, excludeKeywords); };
   var pairs = data.pairs.filter(function (pair) { return keep(pair[1]); });
   var schedule = buildWeeklySchedule_(pairs, SCHEDULE_TIME_ZONE, weeksAhead, now);
@@ -68,8 +68,9 @@ function canvasCourseExcluded_(name, keywords) {
 }
 
 // The main "gather everything" step. Gives back { profile, pairs, courseNames }.
-// (profile is only fetched when includeProfile is true.)
-function fetchCanvasData_(token, baseUrl, includeProfile) {
+// (profile is only fetched when includeProfile is true.) Classes matching `excludeKeywords` are
+// never asked for, which keeps the number of requests to Canvas down.
+function fetchCanvasData_(token, baseUrl, includeProfile, excludeKeywords) {
   var client = canvasClient_(token, baseUrl);
   var coursesUrl = client.baseUrl + '/api/v1/courses' +
     '?enrollment_type=student&enrollment_state=active&state%5B%5D=available&per_page=100';
@@ -91,7 +92,8 @@ function fetchCanvasData_(token, baseUrl, includeProfile) {
 
   // Keep only open classes, as a second safety check on Canvas's own filter.
   courses = courses.filter(function (course) {
-    return course && course.workflow_state === 'available';
+    return course && course.workflow_state === 'available' &&
+      !canvasCourseExcluded_(course.name || ('Course ' + course.id), excludeKeywords);
   });
 
   // One "to do" record per class: which page to fetch next, and what we've collected so far.
@@ -113,6 +115,11 @@ function fetchCanvasData_(token, baseUrl, includeProfile) {
     var responses = canvasFetchAll_(client, pending.map(function (c) { return c.nextUrl; }));
     pending.forEach(function (c, i) {
       var code = responses[i].getResponseCode();
+      // Too many requests, even after the retry: stop, and leave the Doc as it is, rather than
+      // write it without this class (its tables, Status and Notes would disappear).
+      if (canvasIsRateLimited_(responses[i])) {
+        throw canvasError_('unavailable', CANVAS_RATE_LIMIT_MESSAGE);
+      }
       // Canvas sometimes blocks one class (403) or can't find it (404). Skip just that
       // class so the student's other classes still show up.
       if (code === 403 || code === 404) {
@@ -180,7 +187,7 @@ function canvasFetchAll_(client, urls) {
   var responses = canvasSend_(client, urls);
   var retryIndexes = [];
   for (var i = 0; i < responses.length; i++) {
-    if (canvasIsBusyCode_(responses[i].getResponseCode())) retryIndexes.push(i);
+    if (canvasIsBusyCode_(responses[i].getResponseCode()) || canvasIsRateLimited_(responses[i])) retryIndexes.push(i);
   }
   if (retryIndexes.length > 0) {
     Utilities.sleep(CANVAS_RETRY_WAIT_MS);
@@ -215,12 +222,27 @@ function canvasIsBusyCode_(code) {
   return code === 429 || code >= 500;
 }
 
+// Canvas also says "slow down" as a 403 with "Rate Limit Exceeded" in the answer.
+var CANVAS_RATE_LIMIT_MESSAGE = 'Canvas is getting too many requests right now. This student will be ' +
+  'tried again at the next update.';
+function canvasIsRateLimited_(response) {
+  if (response.getResponseCode() !== 403) return false;
+  try {
+    return /rate limit/i.test(response.getContentText());
+  } catch (e) {
+    return false;
+  }
+}
+
 // Check Canvas's answer and turn it into data, or throw a plain-English error.
 function canvasReadJson_(response, client) {
   var code = response.getResponseCode();
   if (code === 401) {
     throw canvasError_('auth', "Canvas didn't accept this student's token. It may have " +
       "expired or been deleted. Ask the student for a new token.");
+  }
+  if (canvasIsRateLimited_(response)) {
+    throw canvasError_('unavailable', CANVAS_RATE_LIMIT_MESSAGE);
   }
   if (code === 403) {
     throw canvasError_('auth', "Canvas refused this student's token (HTTP 403). " +
