@@ -322,6 +322,8 @@ function upsertPlannerDocument_(data) {
   }
 
   var parentTabId = prepareParentTab_(docId, isNew);
+  removeUpdatingLeftovers_(docId, findTabJsonById_(docsGet_(docId), parentTabId));
+
   // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
   var today = Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
   archivePastWeeks_(docId, parentTabId, today);
@@ -338,6 +340,11 @@ function upsertPlannerDocument_(data) {
     rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
     return { docUrl: doc.getUrl(), documentId: docId };
   }
+
+  // A week's tab somewhere else in the Doc (someone dragged it out of CLC Planner): every title must
+  // be different, so a second one can't be made. Move it back first, so its Status and Notes are
+  // read below and it's rebuilt in place.
+  moveWeekTabsBack_(docId, parentTabId, weekKeys.map(function (k) { return buildWeekTabTitle_(k, weeks[k].week_label); }));
 
   // Read every current and upcoming week's Status and Notes before any tab is rebuilt, so they
   // follow an assignment that moved to another week.
@@ -444,6 +451,59 @@ function findRootTabIdByTitle_(docJson, title) {
   return null;
 }
 
+// Google Docs needs every tab title in a Doc to be different (checked live: even tabs at different
+// levels). A week being rebuilt is written under this temporary title, then renamed.
+var UPDATING_SUFFIX = ' (updating)';
+
+/** The tab with exactly this title anywhere in the Doc (any level), or null. */
+function findTabByTitleAnywhere_(docJson, title) {
+  function walk(tabs) {
+    for (var i = 0; i < (tabs || []).length; i++) {
+      if ((tabs[i].tabProperties || {}).title === title) return tabs[i];
+      var f = walk(tabs[i].childTabs);
+      if (f) return f;
+    }
+    return null;
+  }
+  return walk(docJson.tabs);
+}
+
+/**
+ * Deletes the "(updating)" tabs an earlier update left when it was cut off mid-rebuild. Their
+ * week's real tab is still there, untouched, with its Status and Notes, so nothing is lost.
+ */
+function removeUpdatingLeftovers_(docId, parentTabJson) {
+  var leftovers = ((parentTabJson && parentTabJson.childTabs) || []).filter(function (t) {
+    var title = (t.tabProperties || {}).title || '';
+    return title.length > UPDATING_SUFFIX.length && title.slice(-UPDATING_SUFFIX.length) === UPDATING_SUFFIX;
+  });
+  if (leftovers.length) {
+    docsBatchUpdate_(docId, leftovers.map(function (t) { return { deleteTab: { tabId: t.tabProperties.tabId } }; }));
+  }
+  return leftovers.length;
+}
+
+/** Moves tabs with these titles that aren't under CLC Planner back under it (above "Past weeks"). */
+function moveWeekTabsBack_(docId, parentTabId, titles) {
+  var doc = docsGet_(docId);
+  var parent = findTabJsonById_(doc, parentTabId);
+  var at = nextChildTabInsertIndex_(parent);
+  var moves = [];
+  titles.forEach(function (title) {
+    if (findChildTabIdByTitle_(parent, title)) return;
+    var tab = findTabByTitleAnywhere_(doc, title);
+    if (!tab) return;
+    moves.push({
+      updateDocumentTabProperties: {
+        tabProperties: { tabId: tab.tabProperties.tabId, parentTabId: parentTabId, index: at + moves.length },
+        fields: 'parentTabId,index',
+      },
+    });
+  });
+  if (moves.length) docsBatchUpdate_(docId, moves);
+  return moves.length;
+}
+
 function findTabJsonById_(docJson, tabId) {
   function walk(tab) {
     if (!tab || !tab.tabProperties) return null;
@@ -507,6 +567,11 @@ function archivePastWeeks_(docId, parentTabId, today) {
   var ended = endedWeekTabs_(parent, today);
   if (!ended.length) return 0;
   var pastId = findChildTabIdByTitle_(parent, PAST_WEEKS_TITLE);
+  // A "Past weeks" tab somewhere else in the Doc: titles must be unique, so use that one.
+  if (!pastId) {
+    var other = findTabByTitleAnywhere_(docsGet_(docId), PAST_WEEKS_TITLE);
+    if (other) pastId = other.tabProperties.tabId;
+  }
   if (!pastId) {
     pastId = addWeekChildTab_(docId, parentTabId, PAST_WEEKS_TITLE, parent.childTabs.length);
     docsBatchUpdate_(docId, [{ insertText: { text: PAST_WEEKS_LINE, location: { tabId: pastId, index: 1 } } }]);
@@ -1204,13 +1269,19 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   var savedData = saved || readExistingDataFromTab_(tabProbe);
 
   var parentJson = findTabJsonById_(docProbe, parentTabId);
+  var oldTabId = null;
   if (tabBodyHasHeavyContent_(tabProbe) || !clearTabBodyDocsApi_(docId, tabId)) {
-    // Write a new tab just below the old one, and delete the old one only once the new one is
-    // complete: if an update stops halfway, the old tab, with its Status and Notes, is still there
-    // and still the first one staff see (and the one the home tab links to).
+    // Write the new tab just below the old one, under a temporary title (every title in a Doc must
+    // be different). The old tab is deleted only once the new one is complete, so if an update
+    // stops halfway the old tab, with its Status and Notes, is still there; the next update deletes
+    // the half-written "(updating)" tab and starts again.
+    var tempTitle = tabTitle + UPDATING_SUFFIX;
+    var stale = findTabByTitleAnywhere_(docProbe, tempTitle);
+    if (stale) docsBatchUpdate_(docId, [{ deleteTab: { tabId: stale.tabProperties.tabId } }]);
     var kids = parentJson.childTabs || [];
     var at = kids.map(function (t) { return t.tabProperties.tabId; }).indexOf(tabId);
-    tabId = addWeekChildTab_(docId, parentTabId, tabTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
+    oldTabId = tabId;
+    tabId = addWeekChildTab_(docId, parentTabId, tempTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
     sleepDocsChunkGap_();
   }
 
@@ -1219,12 +1290,13 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   );
   batchUpdateChunked_(docId, requests);
 
-  // The new tab is complete: remove the old one, and any copy an earlier stopped update left.
-  var leftovers = (parentJson.childTabs || []).filter(function (t) {
-    return t.tabProperties.title === tabTitle && t.tabProperties.tabId !== tabId;
-  });
-  if (leftovers.length) {
-    docsBatchUpdate_(docId, leftovers.map(function (t) { return { deleteTab: { tabId: t.tabProperties.tabId } }; }));
+  if (oldTabId) {
+    // One batch, all or nothing (checked live): the old tab goes, and the new one takes its title
+    // and its place in the sidebar.
+    docsBatchUpdate_(docId, [
+      { deleteTab: { tabId: oldTabId } },
+      { updateDocumentTabProperties: { tabProperties: { tabId: tabId, title: tabTitle }, fields: 'title' } },
+    ]);
   }
 }
 
