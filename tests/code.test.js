@@ -443,6 +443,32 @@ test('a Doc in the trash, or gone, is never written: refused before it is opened
   }
 });
 
+test('rebuilding a week: the new tab is written before the old one is deleted, so a stopped update loses nothing', () => {
+  const t = setup();
+  const title = 'Week of Oct 5 – Oct 11, 2026';
+  const withTable = (id) => ({ tabProperties: { tabId: id, title }, documentTab: { body: { content: [
+    { startIndex: 1, endIndex: 2, paragraph: { elements: [] } }, { startIndex: 2, endIndex: 90, table: { columns: 6, tableRows: [trow(url(1), 'In progress', 'keep me')] } },
+  ] } } });
+  const run = (kids, failFill) => {
+    const log = [];
+    t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: kids }] });
+    t.ctx.sleepDocsChunkGap_ = () => {};
+    t.ctx.addWeekChildTab_ = (d, p, ttl, index) => { log.push(['add', index]); return 't.new'; };
+    t.ctx.batchUpdateChunked_ = (d, reqs) => { if (failFill) throw new Error('Exceeded maximum execution time'); log.push(['fill', reqs[0].insertText.location.tabId]); };
+    t.ctx.docsBatchUpdate_ = (d, reqs) => { log.push(['delete'].concat(reqs.map((r) => r.deleteTab.tabId))); return {}; };
+    const week = { week_label: 'Oct 5 – Oct 11', days: [] };
+    try { t.ctx.fillWeekTabDocsApi_('DOC', 't.0', title, kids[1].tabProperties.tabId, '2026-10-05', week, [], {}, { notes: {}, status: {} }); } catch (e) { log.push(['stopped']); }
+    return log;
+  };
+  const other = weekTab('t.oct12', 'Week of Oct 12 – Oct 18, 2026');
+  // Normal: new tab at the old one's place, filled, then the old one deleted.
+  assert.deepStrictEqual(run([other, withTable('t.old')]), [['add', 1], ['fill', 't.new'], ['delete', 't.old']]);
+  // Stopped while filling: the old tab is never deleted.
+  assert.deepStrictEqual(run([other, withTable('t.old')], true), [['add', 1], ['stopped']]);
+  // The next update finds the half-written copy first; both copies go once the new tab is complete.
+  assert.deepStrictEqual(run([other, withTable('t.half'), withTable('t.old')]), [['add', 1], ['fill', 't.new'], ['delete', 't.half', 't.old']]);
+});
+
 test('notes follow an assignment to its new week; the typed value wins; past weeks are never read', () => {
   const t = setup();
   const X = url(7);

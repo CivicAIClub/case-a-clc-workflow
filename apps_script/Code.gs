@@ -1191,10 +1191,13 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   // Status and Notes from all current and upcoming weeks (see collectSavedData_), or this tab's own.
   var savedData = saved || readExistingDataFromTab_(tabProbe);
 
+  var parentJson = findTabJsonById_(docProbe, parentTabId);
   if (tabBodyHasHeavyContent_(tabProbe) || !clearTabBodyDocsApi_(docId, tabId)) {
-    docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
-    var parentJson = findTabJsonById_(docsGet_(docId), parentTabId);
-    tabId = addWeekChildTab_(docId, parentTabId, tabTitle, nextChildTabInsertIndex_(parentJson));
+    // Write a new tab just above the old one, and delete the old one only once the new one is
+    // complete: if an update stops halfway, the old tab, with its Status and Notes, is still there.
+    var kids = parentJson.childTabs || [];
+    var at = kids.map(function (t) { return t.tabProperties.tabId; }).indexOf(tabId);
+    tabId = addWeekChildTab_(docId, parentTabId, tabTitle, at >= 0 ? at : nextChildTabInsertIndex_(parentJson));
     sleepDocsChunkGap_();
   }
 
@@ -1202,6 +1205,14 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
     tabId, weekKey, weekData, courses, colorMap, savedData, tabContentWidth_(tabProbe)
   );
   batchUpdateChunked_(docId, requests);
+
+  // The new tab is complete: remove the old one, and any copy an earlier stopped update left.
+  var leftovers = (parentJson.childTabs || []).filter(function (t) {
+    return t.tabProperties.title === tabTitle && t.tabProperties.tabId !== tabId;
+  });
+  if (leftovers.length) {
+    docsBatchUpdate_(docId, leftovers.map(function (t) { return { deleteTab: { tabId: t.tabProperties.tabId } }; }));
+  }
 }
 
 /** Usable page width in points (page width minus margins); 468 on US Letter with 1" margins. */
