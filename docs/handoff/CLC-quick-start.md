@@ -16,7 +16,7 @@ That's long, so you can also go to **civicaiclub.github.io/case-a-clc-workflow**
 
 1. Ask the student for their Canvas access token. Give them the [student token guide](student-token-guide.md) if they don't have one.
 2. Paste it into **Canvas access token** under **Add a student**. **Label** is optional, just for you (for example "Table 4"). Click **Add student**.
-3. AutoPlanner checks the token with Canvas, then makes the student's Doc. This takes about 2 minutes, and you'll see a ✅ on their row when it's done.
+3. AutoPlanner checks the token with Canvas, then makes the student's Doc. This takes about 2 minutes. When it's done, their row's **Last update** says "Updated:" and how many assignments it found. The row also shows when their token expires.
 
 After that you only ever see the token's **last 4 characters**. If a student was on the list before, AutoPlanner finds and reuses their existing Doc.
 
@@ -24,11 +24,11 @@ After that you only ever see the token's **last 4 characters**. If a student was
 
 - **Automatic:** every day at about **7 pm** and about **midnight**. They run on Google's servers, so no computer needs to be on.
 - **Right now:** click **Update all students now** (about 2 minutes per student). You can close the page; it keeps going. To refresh just one student, click **Update** on their row.
-- **Last update** shows when the last update ran and any student who had a problem, with the reason. A ⚠️ on a student's row means the same thing.
+- **Last update** shows when the last update ran and any student who had a problem, with the reason. That student's row has a black **Needs attention** tag with the same reason.
 
 ## 4. Where the Docs live
 
-Every Doc is in the Google Drive folder **AutoPlanner – CLC Student Planners**, under **Shared with me** in Drive. Click **Open their Doc ↗** on a student's row to jump straight to it.
+Every Doc is in the Google Drive folder **AutoPlanner – CLC Student Planners**, under **Shared with me** in Drive. Click **Open Doc ↗** on a student's row to jump straight to it.
 
 - Each Doc is called "*Student Name* - CLC Assignments".
 - The **CLC Planner** tab at the top is a one-page summary: how many assignments each class has this week, when each is next due, and a link to this week's tab. On **Saturday and Sunday** it shows the **coming week** instead, and how many assignments are due that weekend.
@@ -52,16 +52,28 @@ AutoPlanner never changes these two columns, so what you type survives every upd
 
 ## 6. Change or remove a student
 
-- **New token** (for example after the old one expired): click **Edit** on their row, paste the new token, and click **Save**. Then click **Update**.
+- **New token** (for example after the old one expired): click **Edit** on their row, paste the new token, and click **Save**. Then click **Update**. It's the same student and the same Doc, so their Status and Notes are kept.
 - **Remove:** click **Remove**. Their Doc stays in the shared folder. If you add them again later, AutoPlanner reuses it.
 
 ## 7. Long-term care
 
 AutoPlanner is meant to run all year without anyone touching the code. Three things need a person.
 
-### Tokens expire on June 30, 2027
+### Tokens expire, so renew them
 
-Every student's token stops working on the expiration date they picked (the token guide says June 30, 2027). After that, their row says **Needs attention** with "Canvas didn't accept this student's token". Ask the student to make a new token with the [student token guide](student-token-guide.md), then click **Edit** on their row, paste it, click **Save**, and click **Update**. A student who deletes their token, or whose Canvas account changes, needs the same steps.
+Pomfret's Canvas limits tokens to about 90 days (a token made on Oct 4, 2026 expires on Jan 2, 2027), so expect to renew every student's token about once a term.
+
+- Each student's row shows **Token expires** and the date.
+- Two weeks before any token expires, the page lists who needs a new one, under **Update all students now**.
+- Once a token has expired, the row says **Needs attention** with "This student's Canvas token expired on" and the date.
+
+To renew a token:
+
+1. Ask the student to make a new token with the [student token guide](student-token-guide.md), picking the latest expiration date Canvas allows.
+2. Click **Edit** on their row, paste the new token, and click **Save**.
+3. Click **Update**.
+
+It's the same student and the same Doc, so their Status and Notes are kept. A student who deletes their token, or whose Canvas account changes, needs the same steps.
 
 ### When a row says "Needs attention"
 
@@ -69,7 +81,7 @@ The message next to it says what happened. Most fix themselves:
 
 | The message says | What to do |
 |---|---|
-| "Canvas didn't accept this student's token" or "Canvas refused this student's token" | Get a new token from the student (see above). |
+| "This student's Canvas token expired on …", "Canvas didn't accept this student's token" or "Canvas refused this student's token" | Renew the token (see above). |
 | "This token now belongs to a different Canvas user" | Click **Edit** and paste this student's own token. |
 | "Canvas is busy", "Canvas is getting too many requests", "Google is limiting how fast Docs can be edited", "Google Docs or Drive had a temporary problem", or "Google Drive didn't answer" | Nothing. AutoPlanner tries again at the next update (7 pm or midnight). If the same message is still there after two days, contact us. |
 | "AutoPlanner only updates Docs in the … folder" | Someone moved the Doc. Move it back into **AutoPlanner – CLC Student Planners**, then click **Update**. |
@@ -90,7 +102,7 @@ Everything runs as one Google account: right now Cayden Auyang's Pomfret account
 2. **Give them the project.** Cayden: in Google Drive, find the **AutoPlanner** Apps Script project. Click **Share**, add the new owner as **Editor**, and click **Send**. Open **Share** again, click the dropdown next to their name, and choose **Transfer ownership**. The new owner accepts from the email Google sends them.
 3. **Give them the folder and the Docs.** Cayden: open the folder **AutoPlanner – CLC Student Planners**, select everything in it (Cmd+A on a Mac, Ctrl+A on Windows), click **Share**, and transfer ownership to the new owner the same way. Then do the same for the folder itself (right-click it → **Share**). The new owner accepts again.
    - If **Transfer ownership** isn't offered (Pomfret may block it for student accounts), ask Pomfret's Google Workspace admin to transfer the AutoPlanner project, the folder and the Docs in it from Cayden's account to the new owner.
-4. **New owner: publish the web page as yourself.** Open the project at [script.google.com](https://script.google.com). Click **Deploy → Manage deployments**, click the pencil (✏️), and check that **Execute as** says **Me** with *your* email. Set **Version** to **New version** and click **Deploy**. Allow the permissions Google asks for. The web address stays the same, so bookmarks keep working.
+4. **New owner: publish the web page as yourself.** Open the project at [script.google.com](https://script.google.com). Click **Deploy → Manage deployments**, click the pencil icon, and check that **Execute as** says **Me** with *your* email. Set **Version** to **New version** and click **Deploy**. Allow the permissions Google asks for. The web address stays the same, so bookmarks keep working.
 5. **New owner: turn on the automatic updates as yourself.** In the editor, pick **setupTriggers** in the function menu at the top and click **Run**. Allow the permissions again if asked. Then run **checkSetup**: every line should start with **OK**.
 6. **Cayden: turn off your own automatic updates.** In the project, click **Triggers** (the clock icon) and delete the triggers that list Cayden as the owner. Until you do, both accounts start an update at 7 pm and midnight. That's harmless (the second one sees an update is already running and stops), but it's tidier to have one.
 7. **Check it the next morning.** Open AutoPlanner: **Last update** should show the midnight update, with no warning above it.

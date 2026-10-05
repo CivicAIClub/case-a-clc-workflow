@@ -330,6 +330,45 @@ test('the page warns when no update has finished for over a day', () => {
   assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, null);
 });
 
+test('token dates: "Token expires …" on the row, a warning 14 days ahead, and the date in the expired message', () => {
+  const t = setup();
+  const soon = new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString();
+  const later = '2099-01-02T05:00:00Z';
+  t.ctx.fetchCanvasTokenExpiry_ = (token) => (token === TOKEN_A ? { expiresAt: later, createdAt: '2026-10-04T20:54:53Z' } : token === TOKEN_B ? { expiresAt: soon, createdAt: null } : null);
+  const a = addAs(t, STAFF, TOKEN_A, '').student;
+  const b = addAs(t, STAFF, TOKEN_B, '').student;
+  const c = addAs(t, STAFF, TOKEN_C, '').student;
+  assert.strictEqual(a.tokenDate, 'Token expires Jan 2, 2099');
+  assert.match(c.tokenDate, /^Token added [A-Z][a-z]{2} \d{1,2}, \d{4}$/, "Canvas didn't say: the date it was added");
+  const state = toPlain(t.ctx.getAppState());
+  assert.deepStrictEqual(state.tokensExpiring.map((x) => [x.name, x.expired]), [['Blake Sample', false]]);
+  // Expired: the next update says so, with the date.
+  const rec = JSON.parse(t.svc.props['student.' + b.id]);
+  rec.tokenExpiresAt = '2026-01-02T05:00:00Z';
+  t.svc.props['student.' + b.id] = JSON.stringify(rec);
+  t.badTokens.add(TOKEN_B);
+  const after = toPlain(t.ctx.updateStudentNow(b.id));
+  assert.strictEqual(after.last.message, "This student's Canvas token expired on Jan 2, 2026. Ask the student for a new token, then click Edit on their row, paste it and click Save.");
+  assert.strictEqual(after.tokenDate, 'Token expired Jan 2, 2026');
+  assert.ok(toPlain(t.ctx.getAppState()).tokensExpiring.some((x) => x.name === 'Blake Sample' && x.expired));
+});
+
+test('students added before expiry dates existed are checked with Canvas once, at their next update', () => {
+  const t = setup();
+  t.ctx.fetchCanvasTokenExpiry_ = () => null;
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  const rec = JSON.parse(t.svc.props['student.' + student.id]);
+  delete rec.tokenChecked; delete rec.tokenExpiresAt; delete rec.tokenAddedAt;
+  t.svc.props['student.' + student.id] = JSON.stringify(rec);
+  let asked = 0;
+  t.ctx.fetchCanvasTokenExpiry_ = () => { asked++; return { expiresAt: '2099-01-02T05:00:00Z', createdAt: '2026-09-01T12:00:00Z' }; };
+  const once = toPlain(t.ctx.updateStudentNow(student.id));
+  assert.strictEqual(once.tokenDate, 'Token expires Jan 2, 2099');
+  t.ctx.updateStudentNow(student.id);
+  assert.strictEqual(asked, 1);
+  assert.strictEqual(JSON.parse(t.svc.props['student.' + student.id]).tokenAddedAt, '2026-09-01T12:00:00Z');
+});
+
 test('friendlyError_ scrubs the token and translates Docs quota errors', () => {
   const t = setup();
   assert.strictEqual(t.ctx.friendlyError_(new Error('Error: bad ' + TOKEN_A), TOKEN_A), 'bad [token]');

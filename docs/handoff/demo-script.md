@@ -29,13 +29,14 @@ A Doc update takes about 2 minutes, so the script starts one early and talks whi
 **2:30–3:30 Automatic updates** (Presenter, pointing at the **Update** card)
 "Every day at about 7 pm and midnight, AutoPlanner updates every Doc on Google's servers, so no computer needs to be on. Here's last night's run. If a student's token stops working, it says so here and on their row, in plain English. The other students still update."
 
-**3:30–4:45 The Doc** (once the row shows ✅, Driver clicks **Open their Doc ↗**)
+**3:30–4:45 The Doc** (once the row's **Last update** says "Updated: …", Driver clicks **Open Doc ↗**)
 The **CLC Planner** tab opens first: "One page per student: this week by class, and a link straight to this week's tab. On weekends it looks ahead to the coming week." Open the **Document tabs** sidebar: one tab per week. "Every class gets its own table, even when nothing is due, and By Day shows the same work day by day." Point at the reminder line at the top, then at the Status and Note typed before the meeting: "You type Not started, In progress, or Complete, and any notes you like. That update just refreshed everything from Canvas, and your Status and Notes are still here. If a teacher moves the due date, they move with the assignment." If it's there, point at **Past weeks**: "When a week ends, it's filed here with everything you typed, and it never changes."
 
-**4:45–5:30 Three things to know** (Presenter)
+**4:45–5:30 Four things to know** (Presenter)
 1. "The Docs live in this Drive folder, already shared with all of you. Keep them in it."
 2. "If you're signed in to several Google accounts, use a window with only your Pomfret account."
 3. "Need it now instead of tonight? Click Update all students now."
+4. "Canvas tokens last about 90 days. Each row shows when its token expires, and the page warns you two weeks ahead."
 
 **5:30–6:00 Hand over** (Presenter)
 Hand out the quick start and token guides. "If anything looks wrong, email Cayden or Luke a screenshot of the message." Take questions.
@@ -46,7 +47,8 @@ Hand out the quick start and token guides. "If anything looks wrong, email Cayde
 |---|---|---|
 | "Not authorized" with **your** email | Your address isn't on AutoPlanner's list. | Ask the club to add you to `ALLOWED_USERS`. |
 | "Not authorized" with a **different** email, or a Google error page | You're signed in to several Google accounts. | Use a browser window or Chrome profile signed in only to your Pomfret account. |
-| ⚠️ "Canvas didn't accept this student's token…" | The token expired, was deleted, or was pasted incompletely. | Get a new token from the student, click **Edit**, paste it, click **Save**, then **Update**. |
+| **Needs attention**: "This student's Canvas token expired on …" or "Canvas didn't accept this student's token…" | The token expired, was deleted, or was pasted incompletely. | Get a new token from the student, click **Edit**, paste it, click **Save**, then **Update**. Same Doc, notes kept. |
+| "Canvas tokens expiring: …" under **Update all students now** | Those tokens expire within two weeks (Pomfret limits tokens to about 90 days). | Ask those students for new tokens before then, and renew them the same way. |
 | "That token belongs to …" / "now belongs to a different Canvas user" | Someone else's token was pasted on this row. | Paste this student's own token, or use **Add student** for the other one. |
 | "Google is limiting how fast Docs can be edited" | Google's per-minute limit on Doc edits. | Nothing; it's retried at the next update. Don't click Update repeatedly. |
 | "Took longer than Apps Script allows" | A very large planner ran past Google's 6-minute limit. | It's retried at the next update; tell the club if it keeps happening. |
@@ -56,4 +58,4 @@ Hand out the quick start and token guides. "If anything looks wrong, email Cayde
 | "Automatic updates haven't finished since …" | The automatic updates stopped, usually because the owner's account changed. | Club: see "Long-term care" in the quick start. |
 | "An update for all students is running" | An update is already going (yours or the automatic one). | Wait; the progress shows under **Update**. |
 | "Automatic updates are not turned on yet" | The daily triggers aren't installed. | Club: run `setupTriggers` in the Apps Script editor. |
-| Club only: "Script function not found: doGet" | The deployment still points at an old version. | **Deploy → Manage deployments → ✏️ → Version: New version → Deploy.** |
+| Club only: "Script function not found: doGet" | The deployment still points at an old version. | **Deploy → Manage deployments →** pencil icon **→ Version: New version → Deploy.** |

@@ -37,6 +37,7 @@ var APP_NOTICE_DAYS = 7; // how long a one-off message (e.g. "made a new Doc") s
 // A run summary is one Script Property (9 KB at most), so it keeps this many problems in full.
 var APP_MAX_FAILURES_KEPT = 20;
 var APP_STALE_AFTER_MS = 26 * 3600 * 1000; // no finished update for this long means something is wrong
+var APP_TOKEN_WARN_DAYS = 14; // the page warns this long before a student's Canvas token expires
 
 // =====================================================================================
 // The web page
@@ -124,6 +125,7 @@ function getAppState() {
     lastRun: readJson_('run.last'),
     automaticUpdatesOn: dailyTriggerCount_() === APP_DAILY_HOURS.length,
     updatesStaleSince: updatesStaleSince_(),
+    tokensExpiring: tokensExpiringSoon_(),
     contact: APP_CONTACT,
   };
 }
@@ -168,6 +170,7 @@ function addStudent(token, label) {
       addedBy: email,
       last: null,
     };
+    setTokenDates_(student, token);
     saveStudent_(student);
     PropertiesService.getScriptProperties().setProperty('token.' + student.id, token);
     return {
@@ -197,9 +200,35 @@ function editStudent(id, label, newToken) {
     if (profile) {
       student.name = profile.name;
       PropertiesService.getScriptProperties().setProperty('token.' + id, token);
+      setTokenDates_(student, token);
     }
     saveStudent_(student);
     return publicStudent_(student);
+  });
+}
+
+/** Records when this token was added and when Canvas says it expires (null if Canvas doesn't say). */
+function setTokenDates_(student, token) {
+  var info = fetchCanvasTokenExpiry_(token, canvasBaseUrl_());
+  student.tokenAddedAt = new Date().toISOString();
+  student.tokenExpiresAt = info ? info.expiresAt : null;
+  student.tokenChecked = !!info;
+}
+
+/** "Jan 2, 2027" in New York time. */
+function shortDate_(iso) {
+  return Utilities.formatDate(new Date(iso), APP_TIME_ZONE, 'MMM d, yyyy');
+}
+
+/** Students whose token expires within APP_TOKEN_WARN_DAYS (or already has), soonest first. */
+function tokensExpiringSoon_() {
+  var limit = Date.now() + APP_TOKEN_WARN_DAYS * 24 * 3600 * 1000;
+  return listStudents_().filter(function (s) {
+    return s.tokenExpiresAt && new Date(s.tokenExpiresAt).getTime() <= limit;
+  }).sort(function (a, b) {
+    return new Date(a.tokenExpiresAt).getTime() - new Date(b.tokenExpiresAt).getTime();
+  }).map(function (s) {
+    return { name: s.name || 'Student', date: shortDate_(s.tokenExpiresAt), expired: new Date(s.tokenExpiresAt).getTime() <= Date.now() };
   });
 }
 
@@ -376,6 +405,9 @@ function publicStudent_(s) {
     docUrl: s.docId ? 'https://docs.google.com/document/d/' + s.docId + '/edit' : '',
     last: s.last || null,
     notice: recentNotice_(s.notice),
+    tokenDate: s.tokenExpiresAt
+      ? (new Date(s.tokenExpiresAt).getTime() <= Date.now() ? 'Token expired ' : 'Token expires ') + shortDate_(s.tokenExpiresAt)
+      : s.tokenAddedAt ? 'Token added ' + shortDate_(s.tokenAddedAt) : '',
   };
 }
 
@@ -488,6 +520,14 @@ function updateOneStudent_(id) {
   }
   var token = getToken_(id);
   var result;
+  // Students added before AutoPlanner knew about expiry dates: ask Canvas once.
+  var tokenInfo = student.tokenChecked ? null : fetchCanvasTokenExpiry_(token, canvasBaseUrl_());
+  var applyTokenInfo = function (s) {
+    if (!tokenInfo || s.tokenChecked) return;
+    s.tokenExpiresAt = tokenInfo.expiresAt;
+    s.tokenChecked = true;
+    if (!s.tokenAddedAt && tokenInfo.createdAt) s.tokenAddedAt = tokenInfo.createdAt;
+  };
   try {
     var schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD, undefined, courseExcludeKeywords_());
     if (
@@ -503,6 +543,7 @@ function updateOneStudent_(id) {
     var docInfo = {};
     var docId = writeDocWithRecovery_(student, schedule, docInfo);
     student = getStudent_(id) || student;
+    applyTokenInfo(student);
     student.name = schedule.student_full_name || student.name;
     student.docId = docId;
     if (docInfo.replaced) student.notice = { at: new Date().toISOString(), message: docInfo.replaced };
@@ -515,7 +556,13 @@ function updateOneStudent_(id) {
     result = { ok: true, name: student.name, message: student.last.message };
   } catch (err) {
     student = getStudent_(id) || student;
-    student.last = { at: new Date().toISOString(), ok: false, message: friendlyError_(err, token) };
+    applyTokenInfo(student);
+    var message = friendlyError_(err, token);
+    if (err && err.canvasKind === 'auth' && student.tokenExpiresAt && new Date(student.tokenExpiresAt).getTime() <= Date.now()) {
+      message = "This student's Canvas token expired on " + shortDate_(student.tokenExpiresAt) + '. Ask the student for a ' +
+        'new token, then click Edit on their row, paste it and click Save.';
+    }
+    student.last = { at: new Date().toISOString(), ok: false, message: message };
     result = { ok: false, name: student.name, message: student.last.message };
   } finally {
     PropertiesService.getScriptProperties().deleteProperty('busy.' + id);
@@ -874,7 +921,7 @@ function runSelfTest_(keepToken) {
     if (check(name, fn)) passedIds[id] = true;
   }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
-  var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo, tabsBefore;
+  var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo, tabsBefore, original;
   // Only the weeks AutoPlanner just wrote; tabs from earlier weeks are left as they were.
   var currentWeeks = function () {
     var titles = Object.keys(schedule.weeks || {}).map(function (k) {
@@ -1050,7 +1097,10 @@ function runSelfTest_(keepToken) {
     step('type', ['doc'], 'Doc: type a test Status and Note into a By Class table', function () {
       target = findFirstAssignmentRow_(docId);
       if (!target) throw new Error('No assignments in the next ' + APP_WEEKS_AHEAD + ' weeks to test with.');
-      testStatus = getCellText_(target.status) === 'In progress' ? 'Complete' : 'In progress';
+      // What to put back at the end. A note left by an earlier selfTest counts as no note.
+      original = { status: normalizeStatus_(getCellText_(target.status)) || STATUS_DEFAULT, note: getCellText_(target.note) };
+      if (/^selfTest note /.test(original.note)) original = { status: STATUS_DEFAULT, note: '' };
+      testStatus = original.status === 'In progress' ? 'Complete' : 'In progress';
       testNote = 'selfTest note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
       writeStatusAndNote_(docId, target, testStatus, testNote);
       return '"' + testStatus + '" and a note on "' + target.title + '"';
@@ -1104,13 +1154,32 @@ function runSelfTest_(keepToken) {
       if (!rebuilt) throw new Error('no existing week tab was rebuilt');
       return rebuilt + ' existing week tab' + (rebuilt === 1 ? '' : 's') + ' rebuilt; ' + after.length + ' tabs in the same order';
     });
-    step('cameback', ['type', 'normal'], 'Status and Note came back with it', function () {
+    step('cameback', ['type', 'normal'], 'Status and Note came back with it, in exactly one week tab', function () {
       var rows = findRowsByUrl_(docId, target.url);
-      if (rows.length < 2) throw new Error('Expected the assignment in both tables, found ' + rows.length + '.');
+      if (rows.length !== 2) throw new Error('Expected the assignment once in By Class and once in By Day, found ' + rows.length + ' rows.');
+      if (rows[0].weekKey !== rows[1].weekKey) throw new Error('it is in two week tabs: ' + rows[0].weekKey + ' and ' + rows[1].weekKey);
       rows.forEach(function (r) {
         if (r.status !== testStatus || r.note !== testNote) throw new Error(r.table + ' lost them');
       });
       return 'week of ' + rows[0].weekKey;
+    });
+    step('cleanup', ['type'], "Clean-up: the test assignment's Status and Note are back to what they were", function () {
+      // One row at a time, reading the Doc again each time (each edit moves the text after it).
+      for (var n = 0; n < 8; n++) {
+        var row = rowCellsByUrl_(docId, target.url).filter(function (r) {
+          return getCellText_(r.status) !== original.status || getCellText_(r.note) !== original.note;
+        })[0];
+        if (!row) break;
+        writeStatusAndNote_(docId, row, original.status, original.note);
+      }
+      var rows = findRowsByUrl_(docId, target.url);
+      if (!rows.length) throw new Error('the test assignment is not in any week tab');
+      rows.forEach(function (r) {
+        if (r.status !== original.status || r.note !== original.note) throw new Error(r.table + ' still has the test values');
+      });
+      // Recorded as written, so the next update (and the next selfTest) starts clean.
+      recordWritten_(docId, target.url, rows[0].weekKey, original.status, original.note);
+      return '"' + original.status + '"' + (original.note ? ' and its note' : ' and no note') + ' back in ' + rows.length + ' rows';
     });
     step('trashed', ['folder'], 'A Doc in the trash is never written to (so the student gets a fresh Doc)', function () {
       // A throwaway Doc in your My Drive, trashed at once; Google empties the trash after 30 days.
@@ -1271,6 +1340,25 @@ function findRowsByUrl_(docId, url) {
         var cells = row.tableCells || [];
         if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
           rows.push({ table: kind, weekKey: key, status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
+        }
+      });
+    });
+  });
+  return rows;
+}
+
+/** Every row for this Canvas URL in the current and upcoming week tabs, with the cells to edit. */
+function rowCellsByUrl_(docId, url) {
+  var rows = [];
+  weekTabsOf_(docsGet_(docId)).forEach(function (w) {
+    if (!weekKeyFromTabTitle_(w.title)) return;
+    var body = w.tab.documentTab && w.tab.documentTab.body;
+    ((body && body.content) || []).forEach(function (el) {
+      if (!el.table) return;
+      (el.table.tableRows || []).forEach(function (row) {
+        var cells = row.tableCells || [];
+        if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
+          rows.push({ tabId: w.tab.tabProperties.tabId, status: cells[4], note: cells[5] });
         }
       });
     });

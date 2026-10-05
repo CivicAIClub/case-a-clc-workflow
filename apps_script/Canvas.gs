@@ -53,6 +53,25 @@ function fetchCanvasProfile_(token, baseUrl) {
   return { id: id, name: canvasDisplayName_(profile) };
 }
 
+// When this token expires, from Canvas itself: { expiresAt, createdAt } (ISO text; expiresAt is null
+// for a token that never expires), or null if Canvas doesn't say. Canvas finds a token by its
+// "hint": everything up to the "~" plus the next 5 characters (checked live). Never throws, and the
+// hint never appears in a message or log.
+function fetchCanvasTokenExpiry_(token, baseUrl) {
+  var t = String(token || '');
+  var cut = t.indexOf('~');
+  if (cut < 1) return null;
+  try {
+    var client = canvasClient_(token, baseUrl);
+    var response = canvasSend_(client, [client.baseUrl + '/api/v1/users/self/tokens/' + encodeURIComponent(t.slice(0, cut + 6))])[0];
+    if (response.getResponseCode() !== 200) return null;
+    var info = JSON.parse(response.getContentText()) || {};
+    return { expiresAt: info.expires_at || null, createdAt: info.created_at || null };
+  } catch (e) {
+    return null;
+  }
+}
+
 // Get every assignment from the student's current classes, as [assignment, className] pairs.
 function fetchCanvasAssignmentPairs_(token, baseUrl) {
   return fetchCanvasData_(token, baseUrl, false).pairs;

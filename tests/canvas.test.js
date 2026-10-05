@@ -255,6 +255,19 @@ test('classes hidden by COURSE_EXCLUDE are never asked for', () => {
   assert.ok(!sb.fetchCalls.some((c) => /courses\/(2|3)\/assignments/.test(c.url)));
 });
 
+test('token expiry: Canvas finds the token by its hint (up to "~" plus 5) and says when it expires; never throws', () => {
+  const tok = '1234~abcdefghijklmnop';
+  const hintUrl = `${BASE}/api/v1/users/self/tokens/1234~abcde`;
+  let sb = setup({ [hintUrl]: ok({ id: 1, expires_at: '2027-01-02T05:00:00Z', created_at: '2026-10-04T20:54:53Z', token_hint: '1234~abcde' }) });
+  assert.deepStrictEqual(toPlain(sb.context.fetchCanvasTokenExpiry_(tok, BASE)), { expiresAt: '2027-01-02T05:00:00Z', createdAt: '2026-10-04T20:54:53Z' });
+  assert.ok(sb.fetchCalls.every((c) => !c.url.includes(tok)), 'only the hint is sent in the address, never the whole token');
+  sb = setup({ [hintUrl]: ok({ id: 1, expires_at: null, created_at: '2026-10-04T20:54:53Z' }) });
+  assert.deepStrictEqual(toPlain(sb.context.fetchCanvasTokenExpiry_(tok, BASE)), { expiresAt: null, createdAt: '2026-10-04T20:54:53Z' });
+  sb = setup({});
+  assert.strictEqual(sb.context.fetchCanvasTokenExpiry_(tok, BASE), null, "Canvas doesn't say: null");
+  assert.strictEqual(sb.context.fetchCanvasTokenExpiry_('no-tilde-token', BASE), null);
+});
+
 test('503 then 200 -> retried once after 2 seconds, then succeeds', () => {
   const sb = setup({
     [COURSES_URL]: sequence({ code: 503, body: 'Service Unavailable' }, ok([course(1, 'Biology')])),

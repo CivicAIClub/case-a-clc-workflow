@@ -23,6 +23,7 @@ CLC staff open one web page, signed in with their Pomfret Google account. They a
 - Staff type **Status** (Not started, In progress or Complete, as plain text) and **Notes**. Both are kept across updates, keyed by the assignment's Canvas link, and follow an assignment whose due date moves to another week.
 - Work due earlier in the week stays in its week as **Past due** (gray) until the week ends. Then the tab moves into a **Past weeks** tab, newest first, and its Priority cells turn gray in the same step. After that AutoPlanner never edits, rebuilds or deletes past weeks, and its Doc reads leave their content out so updates stay fast all year.
 - If a student's Doc is deleted or in the trash, AutoPlanner never writes to it: it makes a fresh Doc in the shared folder and says so on the student's row.
+- Each row shows when the student's Canvas token expires (Canvas reports it; Pomfret limits tokens to about 90 days), and the page warns 14 days ahead.
 - Updates run automatically every day at about 7 pm and just after midnight (New York time), or on demand from the page.
 
 ## How it works
@@ -70,7 +71,7 @@ clasp (Google's command-line tool) is blocked for Workspace for Education accoun
 3. In a terminal, run `scripts/copy-to-apps-script.sh` for every file, or `scripts/copy-to-apps-script.sh App.gs Index.html` for just the ones you changed. For each file it puts on your clipboard:
    - click that file in **Files** (or **+ → Script / HTML** to create it, typing the name without its extension)
    - click inside the code and press **⌘A, ⌘V, ⌘S**
-4. **Deploy → Manage deployments**, then select the web app deployment and click ✏️. Set **Version** to **New version**, and click **Deploy**.
+4. **Deploy → Manage deployments**, then select the web app deployment and click the pencil icon. Set **Version** to **New version**, and click **Deploy**.
    - Pasting alone changes nothing for staff: the deployment keeps running its old version until you pick **New version**. "Script function not found: doGet" means you forgot this step.
    - The web app URL stays the same.
 5. Use **Deploy → Test deployments** for a private `/dev` link that runs your latest saved code before you deploy it.
@@ -145,7 +146,7 @@ Everything belongs to the owner's account: the script, its triggers, the stored 
 
 1. Log into Canvas → profile picture → **Settings**.
 2. Scroll to **Approved Integrations** → **+ New Access Token**.
-3. Purpose: "AutoPlanner". Expiry: June 30, 2027.
+3. Purpose: "AutoPlanner". Expiry: the latest date Canvas allows. Pomfret limits tokens to about 90 days; AutoPlanner shows each token's expiry date and warns 14 days ahead.
 4. Copy the token immediately (Canvas will not show it again) and paste it into AutoPlanner's **Add a student** box.
 
 The student-facing version is [`docs/handoff/student-token-guide.md`](docs/handoff/student-token-guide.md).

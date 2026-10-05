@@ -6,7 +6,7 @@ The CLC uses AutoPlanner to copy your Canvas assignments into a weekly planner G
 2. Click **Account** (your picture, in the menu on the left), then **Settings**.
 3. Scroll down to **Approved Integrations** and click **+ New Access Token**.
 4. **Purpose:** type `AutoPlanner`.
-   **Expiration date:** pick **June 30, 2027**.
+   **Expiration date:** pick the **latest date** Canvas lets you choose. Pomfret may limit tokens to about 90 days; when yours expires, the CLC will ask you for a new one.
 5. Click **Generate Token**.
 6. Copy the whole token **right away**. Canvas only shows it once; if you lose it, delete it and make a new one.
 

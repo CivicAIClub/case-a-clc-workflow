@@ -232,6 +232,7 @@
     .s-name { grid-area: name; font-weight: var(--fw-regular); line-height: 1.3; overflow-wrap: anywhere; }
     .s-name .student-label { color: var(--ink-2); font-weight: var(--fw-light); }
     .s-token { grid-area: token; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0; }
+    .s-token .s-tdate { display: block; margin-top: 4px; font-family: var(--font-sans); font-size: var(--fs-ui); color: var(--ink-2); }
     .s-last { grid-area: last; font-size: var(--fs-ui); line-height: 1.45; color: var(--ink-2); }
     .s-last.bad { color: var(--ink); }
     /* A one-off message from AutoPlanner, such as "made a new Doc", kept on the row for a week. */
@@ -316,6 +317,7 @@
       <p class="status" id="runStatus" role="status" aria-live="polite"></p>
       <div class="last-run" id="lastRun"></div>
       <p class="note" id="autoNote"></p>
+      <p class="note off" id="tokenNote" hidden></p>
     </section>
 
     <section class="block" aria-labelledby="h-students">
@@ -480,7 +482,8 @@
         card.className = 'student-card';
         card.innerHTML =
           '<div class="s-name' + (s.last && !s.last.ok ? ' bad' : '') + '">' + studentTitle(s) + '</div>' +
-          '<div class="s-token"><span class="s-k">Token</span>••••' + esc(s.tokenEnd) + '</div>' +
+          '<div class="s-token"><span class="s-k">Token</span>••••' + esc(s.tokenEnd) +
+            (s.tokenDate ? '<span class="s-tdate">' + esc(s.tokenDate) + '</span>' : '') + '</div>' +
           '<div class="s-last' + (s.last && !s.last.ok ? ' bad' : '') + '"><span class="s-k">Last update</span>' + last + '</div>' +
           '<div class="s-doc">' +
             (s.docUrl ? arrowLink(s.docUrl, 'Open Doc', s.name) : '<span class="none">No Doc yet</span>') +
@@ -708,6 +711,15 @@
       } else {
         note.textContent = 'Automatic updates are not turned on yet. Contact ' + s.contact + '.';
         note.classList.add('off');
+      }
+      var expiring = s.tokensExpiring || [];
+      if (expiring.length) {
+        // Same plain style as the other warnings: who, when, and what to do.
+        var tn = document.getElementById('tokenNote');
+        tn.textContent = 'Canvas tokens expiring: ' + expiring.map(function (t) {
+          return t.name + ' (' + (t.expired ? 'expired ' : '') + t.date + ')';
+        }).join(', ') + '. Ask each student for a new token, then click Edit on their row and paste it. Their Doc and notes stay the same.';
+        tn.hidden = false;
       }
       apply(s);
       if (s.run) startPolling(5000);
