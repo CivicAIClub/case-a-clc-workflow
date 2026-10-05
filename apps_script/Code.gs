@@ -152,15 +152,34 @@ function docsApiIsQuotaError_(err) {
   );
 }
 
+/**
+ * Reads leave out the content of the week tabs inside "Past weeks" (the third tab level): nothing
+ * reads them, and they grow all year, so a full read would get slower and bigger every week. Their
+ * titles and IDs are still there. Pass opts (e.g. { includeTabsContent: true }) for a full read.
+ */
+var DOCS_GET_FIELDS = 'tabs(tabProperties,documentTab,childTabs(tabProperties,documentTab,childTabs(tabProperties)))';
+var docsGetFieldsRejected_ = false; // set if Google ever refuses DOCS_GET_FIELDS; then reads are full
+
 /** Docs.Documents.get with retries when Google returns quota / rate limit errors. */
 function docsGet_(docId, opts) {
-  var options = opts || { includeTabsContent: true };
+  var options = opts ||
+    (docsGetFieldsRejected_ ? { includeTabsContent: true } : { includeTabsContent: true, fields: DOCS_GET_FIELDS });
   var lastErr;
+  var fellBack = false;
   for (var attempt = 0; attempt < 7; attempt++) {
     try {
-      return Docs.Documents.get(docId, options);
+      var doc = Docs.Documents.get(docId, options);
+      // The full read worked where the shorter one didn't: use full reads for the rest of this run.
+      if (fellBack) docsGetFieldsRejected_ = true;
+      return doc;
     } catch (e) {
       lastErr = e;
+      if (options.fields && !docsApiIsQuotaError_(e)) {
+        // Never let the shorter read break an update: try a full read.
+        fellBack = true;
+        options = { includeTabsContent: true };
+        continue;
+      }
       if (docsApiIsQuotaError_(e) && attempt < 6) {
         Utilities.sleep(2000 * (attempt + 1));
         continue;

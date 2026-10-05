@@ -370,6 +370,33 @@ test('past weeks: Priority cells turn gray in the same batch as the move; nothin
   assert.deepStrictEqual(sent, []);
 });
 
+test("Doc reads leave out Past weeks' content; if Google refuses that, a full read is used instead", () => {
+  const t = setup();
+  const asked = [];
+  let refuse = false;
+  t.ctx.Docs = { Documents: { get: (id, opts) => {
+    asked.push(toPlain(opts));
+    if (opts.fields && refuse) throw new Error('Invalid field selection tabs');
+    if (id === 'GONE') throw new Error('Requested entity was not found.');
+    return { tabs: [] };
+  } } };
+  const mask = 'tabs(tabProperties,documentTab,childTabs(tabProperties,documentTab,childTabs(tabProperties)))';
+  t.ctx.docsGet_('DOC');
+  assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }]);
+  t.ctx.docsGet_('DOC', { includeTabsContent: true });
+  assert.deepStrictEqual(asked[1], { includeTabsContent: true }, 'a full read when asked for one');
+  // A missing Doc is still an error, and doesn't switch reads to full.
+  assert.throws(() => t.ctx.docsGet_('GONE'), /not found/);
+  assert.strictEqual(t.ctx.docsGetFieldsRejected_, false);
+  // Google refuses the shorter read: the update still works, with full reads from then on.
+  refuse = true;
+  asked.length = 0;
+  t.ctx.docsGet_('DOC');
+  t.ctx.docsGet_('DOC');
+  assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }, { includeTabsContent: true }, { includeTabsContent: true }]);
+  assert.strictEqual(t.ctx.docsGetFieldsRejected_, true);
+});
+
 test('a Doc in the trash, or gone, is never written: refused before it is opened (with or without a folder)', () => {
   for (const props of [{ DOCS_FOLDER_ID: 'FOLDER123' }, {}]) {
     const t = setup(props);

@@ -879,7 +879,7 @@ function runSelfTest_(keepToken) {
       docId = writeDocWithRecovery_(selfStudent, schedule);
       firstSeconds = Math.round((Date.now() - t0) / 1000);
       assertDocIsInFolder_(docId, getDocsFolder_());
-      doc = docsGet_(docId);
+      doc = docsGet_(docId, { includeTabsContent: true }); // full read: the Past weeks check looks inside
       return how + ' in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
     }) &&
     check('Every class has its own By Class table in every week', function () {
@@ -1061,6 +1061,21 @@ function runSelfTest_(keepToken) {
       if (!refused(temp.getId())) throw new Error('a trashed Doc was opened for writing');
       if (!refused('no-such-doc-' + Utilities.getUuid())) throw new Error('a missing Doc was not reported as gone');
       return 'both refused before any edit; updateOneStudent_ then makes a new Doc and tells staff on the row';
+    }) &&
+    check("Doc reads skip Past weeks' content, so updates stay fast all year", function () {
+      var short = docsGet_(docId);
+      if (docsGetFieldsRejected_) {
+        throw new Error('Google refused the shorter read, so AutoPlanner reads everything. Updates still work but get slower as Past weeks grows.');
+      }
+      var parent = findTabJsonById_(short, findRootTabIdByTitle_(short, PARENT_TAB_TITLE));
+      var weeks = (parent.childTabs || []).filter(function (t) { return t.tabProperties.title !== PAST_WEEKS_TITLE; });
+      if (weeks.some(function (t) { return !t.documentTab; })) throw new Error('a current week came back without its content');
+      var past = (parent.childTabs || []).filter(function (t) { return t.tabProperties.title === PAST_WEEKS_TITLE; })[0];
+      var kids = (past && past.childTabs) || [];
+      if (kids.some(function (t) { return t.documentTab; })) throw new Error('past weeks came back with their content');
+      var kb = function (o) { return Math.round(JSON.stringify(o).length / 1024); };
+      return kb(short) + ' KB per read instead of ' + kb(doc) + ' KB; ' + kids.length + ' past week' +
+        (kids.length === 1 ? '' : 's') + ' left out, current weeks complete';
     });
 
   if (!keepToken) {
