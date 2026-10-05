@@ -9,7 +9,8 @@ A Doc update takes about 2 minutes, so the script starts one early and talks whi
 - [ ] **Chrome profile signed in only to the presenter's Pomfret account.** Other Google accounts in the same window can stop the page from loading.
 - [ ] Open AutoPlanner in that profile. "Signed in as …" shows the right email, and "Automatic updates run every day at about 7 pm and about midnight" is shown.
 - [ ] The demo student (your own Canvas account) is on the list, and **Last update** shows last night's automatic run. That's your proof the schedule works.
-- [ ] In the demo student's Doc, type a Status ("In progress") and a Note on one assignment **before** the meeting.
+- [ ] In the demo student's Doc, type a Status ("In progress") and a Note on one assignment in **this week's** tab **before** the meeting.
+- [ ] In the same Doc, check for **Past weeks** in the sidebar. If the Doc had a tab for last week, the midnight run moved it there. If there's no Past weeks tab yet, skip the Past weeks line in the script.
 - [ ] Open tabs, in order: AutoPlanner, the Drive folder **AutoPlanner – CLC Student Planners**, the demo Doc.
 - [ ] Print the [quick start](CLC-quick-start.md) for each staff member and a stack of [student token guides](student-token-guide.md).
 - [ ] Notifications off, browser zoomed to 125%, no other tabs. Never paste a token while the projector is on.
@@ -29,7 +30,7 @@ A Doc update takes about 2 minutes, so the script starts one early and talks whi
 "Every day at about 7 pm and midnight, AutoPlanner updates every Doc on Google's servers, so no computer needs to be on. Here's last night's run. If a student's token stops working, it says so here and on their row, in plain English. The other students still update."
 
 **3:30–4:45 The Doc** (once the row shows ✅, Driver clicks **Open their Doc ↗**)
-Open the **Document tabs** sidebar: one tab per week. "Every class gets its own table, even when nothing is due, and By Day shows the same work day by day." Point at the reminder line at the top, then at the Status and Note typed before the meeting: "You type Not started, In progress, or Complete, and any notes you like. That update just refreshed everything from Canvas, and your Status and Notes are still here."
+The **CLC Planner** tab opens first: "One page per student: this week by class, and a link straight to this week's tab. On weekends it looks ahead to the coming week." Open the **Document tabs** sidebar: one tab per week. "Every class gets its own table, even when nothing is due, and By Day shows the same work day by day." Point at the reminder line at the top, then at the Status and Note typed before the meeting: "You type Not started, In progress, or Complete, and any notes you like. That update just refreshed everything from Canvas, and your Status and Notes are still here. If a teacher moves the due date, they move with the assignment." If it's there, point at **Past weeks**: "When a week ends, it's filed here with everything you typed, and it never changes."
 
 **4:45–5:30 Three things to know** (Presenter)
 1. "The Docs live in this Drive folder, already shared with all of you. Keep them in it."
@@ -50,6 +51,7 @@ Hand out the quick start and token guides. "If anything looks wrong, email Cayde
 | "Google is limiting how fast Docs can be edited" | Google's per-minute limit on Doc edits. | Nothing; it's retried at the next update. Don't click Update repeatedly. |
 | "Took longer than Apps Script allows" | A very large planner ran past Google's 6-minute limit. | It's retried at the next update; tell the club if it keeps happening. |
 | "AutoPlanner only updates Docs in the … folder" | The student's Doc was moved out of the shared folder. | Move it back into **AutoPlanner – CLC Student Planners**, then click **Update**. |
+| A week's tab is gone from under **CLC Planner** | The week ended. | Open **Past weeks**: it's there, with its Status and Notes. |
 | "An update for all students is running" | An update is already going (yours or the automatic one). | Wait; the progress shows under **Update**. |
 | "Automatic updates are not turned on yet" | The daily triggers aren't installed. | Club: run `setupTriggers` in the Apps Script editor. |
 | Club only: "Script function not found: doGet" | The deployment still points at an old version. | **Deploy → Manage deployments → ✏️ → Version: New version → Deploy.** |
