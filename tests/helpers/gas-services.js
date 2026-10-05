@@ -30,8 +30,22 @@ function fakeServices(options) {
     }),
   };
 
+  // Strict on purpose: taking the script lock while it's already held (nesting) throws, so tests
+  // catch code that would wait on itself in Apps Script.
+  let lockHeld = false;
   const LockService = {
-    getScriptLock: () => ({ tryLock: () => true, waitLock: () => {}, releaseLock: () => {} }),
+    getScriptLock: () => ({
+      tryLock: () => {
+        if (lockHeld) throw new Error('nested script lock');
+        lockHeld = true;
+        return true;
+      },
+      waitLock: () => {
+        if (lockHeld) throw new Error('nested script lock');
+        lockHeld = true;
+      },
+      releaseLock: () => { lockHeld = false; },
+    }),
   };
 
   const Session = {
@@ -76,47 +90,60 @@ function fakeServices(options) {
     createHtmlOutput: (html) => output('html', html),
   };
 
-  // Drive: one shared folder (id FOLDER123) holding `files`; other files live elsewhere.
+  // Drive: the shared folder (id FOLDER123) and any folders created inside it, holding `files`;
+  // other files live elsewhere (a parent that isn't a known folder). Like DriveApp, lookups by
+  // name include trashed items; moving a file changes its parent.
   const files = {};
   const folderState = { trashed: false };
-  const folder = {
-    getId: () => 'FOLDER123',
-    getName: () => 'AutoPlanner – CLC Student Planners',
-    isTrashed: () => !!folderState.trashed,
-    searchFiles: (query) => {
-      const m = /title = '((?:[^'\\]|\\.)*)'/.exec(query);
-      const title = m ? m[1].replace(/\\(.)/g, '$1') : null;
-      const found = Object.values(files).filter(
-        (f) => f.parent === 'FOLDER123' && !f.trashed && f.name === title
-      );
-      let i = 0;
-      return { hasNext: () => i < found.length, next: () => wrapFile(found[i++]) };
-    },
-  };
+  const folders = { FOLDER123: { id: 'FOLDER123', name: 'AutoPlanner – CLC Student Planners', parent: 'ROOT', state: folderState } };
+  let folderCounter = 0;
+  const iter = (list, wrap) => { let i = 0; return { hasNext: () => i < list.length, next: () => wrap(list[i++]) }; };
+  function wrapFolder(fd) {
+    const trashed = () => !!(fd.state ? fd.state.trashed : fd.trashed);
+    return {
+      getId: () => fd.id,
+      getName: () => fd.name,
+      setName: (n) => { fd.name = n; },
+      isTrashed: trashed,
+      getParents: () => iter(folders[fd.parent] ? [folders[fd.parent]] : [], wrapFolder),
+      createFolder: (name) => {
+        const id = 'FOLDER-' + (++folderCounter);
+        folders[id] = { id, name, parent: fd.id, trashed: false };
+        return wrapFolder(folders[id]);
+      },
+      getFoldersByName: (name) => iter(Object.values(folders).filter((x) => x.parent === fd.id && x.name === name), wrapFolder),
+      getFolders: () => iter(Object.values(folders).filter((x) => x.parent === fd.id), wrapFolder),
+      getFilesByType: () => iter(Object.values(files).filter((f) => f.parent === fd.id && !f.trashed), wrapFile),
+      getFiles: () => iter(Object.values(files).filter((f) => f.parent === fd.id && !f.trashed), wrapFile),
+      searchFiles: (query) => {
+        const m = /title = '((?:[^'\\]|\\.)*)'/.exec(query);
+        const title = m ? m[1].replace(/\\(.)/g, '$1') : null;
+        return iter(Object.values(files).filter((f) => f.parent === fd.id && !f.trashed && f.name === title), wrapFile);
+      },
+    };
+  }
+  const folder = wrapFolder(folders.FOLDER123);
   function wrapFile(f) {
     return {
       getId: () => f.id,
       getName: () => f.name,
       getLastUpdated: () => f.updated || new Date(0),
       isTrashed: () => !!f.trashed,
-      getParents: () => {
-        const ps = f.parent ? [f.parent] : [];
-        let i = 0;
-        return { hasNext: () => i < ps.length, next: () => ({ getId: () => ps[i++] }) };
-      },
+      getParents: () => iter(f.parent ? [f.parent] : [], (pid) => (folders[pid] ? wrapFolder(folders[pid]) : { getId: () => pid, getName: () => pid, getParents: () => iter([], (x) => x) })),
       moveTo: (dest) => { f.parent = dest.getId(); },
     };
   }
   const DriveApp = {
     getFolderById: (id) => {
-      if (id !== 'FOLDER123') throw new Error('No item with the given ID could be found');
-      return folder;
+      if (!folders[id]) throw new Error('No item with the given ID could be found');
+      return wrapFolder(folders[id]);
     },
     getFileById: (id) => {
       if (!files[id]) throw new Error('No item with the given ID could be found');
       return wrapFile(files[id]);
     },
   };
+  const MimeType = { GOOGLE_DOCS: 'application/vnd.google-apps.document' };
 
   const Utilities = {
     formatDate,
@@ -125,7 +152,7 @@ function fakeServices(options) {
   };
 
   return {
-    globals: { PropertiesService, LockService, Session, ScriptApp, HtmlService, DriveApp, Utilities },
+    globals: { PropertiesService, LockService, Session, ScriptApp, HtmlService, DriveApp, Utilities, MimeType },
     props,
     triggers,
     files,
@@ -133,6 +160,7 @@ function fakeServices(options) {
     setActive: (email) => { active = email; },
     addFile: (id, name, parent, extra) => { files[id] = Object.assign({ id, name, parent }, extra || {}); },
     folderState,
+    folders,
   };
 }
 

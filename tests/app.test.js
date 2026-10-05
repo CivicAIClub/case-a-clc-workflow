@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createSandbox, toPlain, REPO_ROOT } = require('./helpers/gas-sandbox');
 const { fakeServices } = require('./helpers/gas-services');
-const { fakeDocs, withRendering, copiesOf, staffTypes } = require('./helpers/fake-docs');
+const { fakeDocs, withRendering, copiesOf, staffTypes, staffWrites } = require('./helpers/fake-docs');
 
 const OWNER = 'owner@pomfret.org';
 const STAFF = 'staff@pomfret.org';
@@ -77,7 +77,7 @@ test('only the intended functions are callable from the page (no trailing unders
   }
   assert.deepStrictEqual(publicNames.sort(), [
     'addStudent', 'checkSetup', 'continueRun', 'doGet', 'editStudent', 'getAppState', 'getRunStatus', 'measureTimeLimit',
-    'removeStudent', 'scheduleTestRun', 'scheduledRun', 'selfTest', 'selfTestEveryday', 'selfTestKeepToken', 'setupTriggers',
+    'removeStudent', 'scheduleTestRun', 'scheduledRun', 'selfTest', 'selfTestEveryday', 'selfTestKeepToken', 'setStudentTeacher', 'setupTriggers',
     'startUpdateAll', 'updateStudentNow',
   ].sort());
 });
@@ -661,6 +661,10 @@ function liveSetup() {
     const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.tabId === target.tabId);
     staffTypes(docs, tab.tabProperties.title, target.url, target.kind === 'By Day' ? 'day' : 'class', status, note);
   };
+  ctx.writeStaffRow_ = (docId, tabId, r, texts) => {
+    const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.tabId === tabId);
+    staffWrites(docs, tab.tabProperties.title, r, texts);
+  };
   svc.setActive(STAFF);
   const student = toPlain(ctx.addStudent(TOKEN_A, 'Demo')).student;
   const rec = JSON.parse(svc.props['student.' + student.id]);
@@ -692,13 +696,27 @@ test('selfTest (real code, fake Docs API): two runs in a row pass the type, move
     ctx.selfTestKeepToken();
     const log = sb.logs.join('\n');
     for (const name of ['Your row is held for selfTest', 'Doc: create or update yours in the shared folder', 'Doc: type a test Status and Note',
-      'Status and Note followed the assignment to its new week', 'Doc: run a normal update', 'Existing week tabs were rebuilt in place',
-      'Status and Note came back with it, in exactly one week tab', 'Clean-up']) {
+      'Doc: type a row into "Added by staff" in that week', 'Status and Note followed the assignment to its new week', 'Doc: run a normal update',
+      'Existing week tabs were rebuilt in place', 'Status and Note came back with it, in exactly one week tab',
+      'The "Added by staff" row came through both updates exactly', 'Clean-up']) {
       assert.match(log, new RegExp('PASS ' + name.replace(/[()]/g, '\\$&')), 'run ' + run + ': ' + name + '\n' + log);
     }
     assert.ok(log.indexOf('PASS Doc: run a normal update') < log.indexOf('Every class has its own By Class table'), 'layout checks come after the update');
     assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']], 'run ' + run + ' cleaned up');
+    const staffTab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === 'Week of Jan 5 – Jan 11, 2099');
+    assert.deepStrictEqual(toPlain(ctx.readStaffRows_(staffTab)).map((r) => r.map((c) => c.text).join('')), ['', ''], 'staff test row cleared');
   }
+});
+
+test('selfTest teacher-folder check (real code): assign, switch, drag-in, folder lock, Unassigned, then your row exactly as before', () => {
+  const { sb, ctx, svc, student } = liveSetup();
+  svc.props.CLC_TEACHERS = TEACHERS;
+  ctx.teacherFolderCache_ = null;
+  ctx.selfTestKeepToken();
+  const log = sb.logs.join('\n');
+  assert.match(log, /PASS CLC teacher folders: assign, switch, a Drive drag-in, the folder lock, Unassigned: your Doc went to Pat Example, then Sam Sample, was adopted after a drag, then back to the shared folder; your row is Unassigned again/);
+  assert.strictEqual(svc.files.DOC1.parent, 'FOLDER123');
+  assert.strictEqual(JSON.parse(svc.props['student.' + student.id]).teacher, '');
 });
 
 test('Drive says "Invalid argument" about a Doc: no new Doc the first time; a new one only when an update 4+ hours later agrees', () => {
@@ -731,6 +749,126 @@ test('Drive says "Invalid argument" about a Doc: no new Doc the first time; a ne
   assert.match(after.docUrl, /FRESH-DOC/);
   assert.strictEqual(after.notice.message, 'Their Doc was deleted, so AutoPlanner made a new one.');
   assert.ok(!JSON.parse(t.svc.props['student.' + student.id]).docUnsureSince, 'cleared once it worked');
+});
+
+// ---- CLC teachers -------------------------------------------------------------------------------
+
+const TEACHERS = 'Pat Example <pexample@pomfret.org>, Sam Sample <SSample@pomfret.org>';
+const folderNamed = (svc, name) => Object.values(svc.folders).filter((f) => f.name === name);
+
+test('CLC teacher folders: one per teacher inside the shared folder, made once, made again if trashed or deleted', () => {
+  const t = setup({ CLC_TEACHERS: TEACHERS });
+  t.svc.setActive(STAFF);
+  assert.deepStrictEqual(toPlain(t.ctx.getAppState()).teachers, [{ name: 'Pat Example', email: 'pexample@pomfret.org' }, { name: 'Sam Sample', email: 'ssample@pomfret.org' }]);
+  assert.deepStrictEqual(folderNamed(t.svc, 'Pat Example').map((f) => f.parent), ['FOLDER123']);
+  assert.deepStrictEqual(folderNamed(t.svc, 'Sam Sample').map((f) => f.parent), ['FOLDER123']);
+  const stored = JSON.parse(t.svc.props.teacherFolders);
+  // Later calls (new executions) reuse the stored folders.
+  t.ctx.teacherFolderCache_ = null;
+  t.ctx.getAppState();
+  assert.strictEqual(folderNamed(t.svc, 'Pat Example').length, 1);
+  // Trashed: a new one is made, the trashed one is left alone.
+  t.svc.folders[stored['pexample@pomfret.org']].trashed = true;
+  t.ctx.teacherFolderCache_ = null;
+  t.ctx.getAppState();
+  assert.strictEqual(folderNamed(t.svc, 'Pat Example').length, 2);
+  assert.notStrictEqual(JSON.parse(t.svc.props.teacherFolders)['pexample@pomfret.org'], stored['pexample@pomfret.org']);
+  // Deleted for good: made again.
+  delete t.svc.folders[JSON.parse(t.svc.props.teacherFolders)['ssample@pomfret.org']];
+  t.ctx.teacherFolderCache_ = null;
+  t.ctx.getAppState();
+  assert.ok(t.svc.folders[JSON.parse(t.svc.props.teacherFolders)['ssample@pomfret.org']]);
+  // A folder with the teacher's name already there (made by hand) is used, not duplicated.
+  const u = setup({ CLC_TEACHERS: 'Pat Example <pexample@pomfret.org>' });
+  const own = u.svc.globals.DriveApp.getFolderById('FOLDER123').createFolder('Pat Example');
+  u.svc.setActive(STAFF);
+  u.ctx.getAppState();
+  assert.strictEqual(JSON.parse(u.svc.props.teacherFolders)['pexample@pomfret.org'], own.getId());
+  assert.strictEqual(folderNamed(u.svc, 'Pat Example').length, 1);
+});
+
+test('changing a student\'s CLC teacher moves the same Doc (same ID) into that folder, and back for Unassigned', () => {
+  const t = setup({ CLC_TEACHERS: TEACHERS });
+  t.svc.addFile('DOC-A', 'Avery Example - CLC Assignments', 'FOLDER123');
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  const pat = JSON.parse(t.svc.props.teacherFolders)['pexample@pomfret.org'];
+  const res = toPlain(t.ctx.setStudentTeacher(student.id, 'PExample@pomfret.org'));
+  assert.strictEqual(t.svc.files['DOC-A'].parent, pat);
+  assert.strictEqual(res.student.teacher, 'pexample@pomfret.org');
+  assert.match(res.student.docUrl, /DOC-A/, 'same Doc');
+  assert.strictEqual(res.message, "Moved Avery Example's Doc into Pat Example's folder. Same Doc and link, with all its notes.");
+  const back = toPlain(t.ctx.setStudentTeacher(student.id, ''));
+  assert.strictEqual(t.svc.files['DOC-A'].parent, 'FOLDER123');
+  assert.strictEqual(back.student.teacher, '');
+  assert.match(back.message, /^Moved Avery Example's Doc back to the shared folder \(no CLC teacher\)/);
+  assert.throws(() => t.ctx.setStudentTeacher(student.id, 'nobody@pomfret.org'), /no longer on the list/);
+  t.svc.setActive(STRANGER);
+  assert.throws(() => t.ctx.setStudentTeacher(student.id, ''), /Not authorized/);
+});
+
+test('Add a student with a CLC teacher: an existing Doc moves there; a new Doc is made there and the home tab names the teacher', () => {
+  const t = setup({ CLC_TEACHERS: TEACHERS });
+  t.svc.addFile('DOC-A', 'Avery Example - CLC Assignments', 'FOLDER123');
+  t.svc.setActive(STAFF);
+  const a = toPlain(t.ctx.addStudent(TOKEN_A, '', 'ssample@pomfret.org')).student;
+  const sam = JSON.parse(t.svc.props.teacherFolders)['ssample@pomfret.org'];
+  assert.strictEqual(t.svc.files['DOC-A'].parent, sam);
+  assert.strictEqual(a.teacher, 'ssample@pomfret.org');
+  const b = toPlain(t.ctx.addStudent(TOKEN_B, '', 'pexample@pomfret.org')).student;
+  t.ctx.updateStudentNow(b.id);
+  const pay = t.docWrites[t.docWrites.length - 1];
+  assert.strictEqual(pay.targetFolderId, JSON.parse(t.svc.props.teacherFolders)['pexample@pomfret.org'], 'a new Doc goes into the teacher folder');
+  assert.strictEqual(pay.teacherName, 'Pat Example');
+  // With no teacher chosen, a re-added student keeps the teacher whose folder their Doc is in.
+  t.ctx.removeStudent(a.id);
+  const again = toPlain(t.ctx.addStudent(TOKEN_A, '', '')).student;
+  assert.strictEqual(again.teacher, 'ssample@pomfret.org');
+  assert.match(again.docUrl, /DOC-A/, 'found in the teacher folder (not a new Doc)');
+});
+
+test('a Doc dragged into another teacher\'s folder in Drive brings that teacher (page load or next update); dragged to the top = Unassigned', () => {
+  const t = setup({ CLC_TEACHERS: TEACHERS });
+  t.svc.addFile('DOC-A', 'Avery Example - CLC Assignments', 'FOLDER123');
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  const ids = JSON.parse(t.svc.props.teacherFolders);
+  t.svc.files['DOC-A'].parent = ids['ssample@pomfret.org']; // staff drag it in Drive
+  const page = toPlain(t.ctx.getAppState()).students[0];
+  assert.strictEqual(page.teacher, 'ssample@pomfret.org');
+  t.svc.files['DOC-A'].parent = ids['pexample@pomfret.org'];
+  t.ctx.updateStudentNow(student.id);
+  assert.strictEqual(JSON.parse(t.svc.props['student.' + student.id]).teacher, 'pexample@pomfret.org');
+  assert.strictEqual(t.docWrites[t.docWrites.length - 1].teacherName, 'Pat Example', 'the home tab line follows');
+  t.svc.files['DOC-A'].parent = 'FOLDER123';
+  assert.strictEqual(toPlain(t.ctx.getAppState()).students[0].teacher, '');
+});
+
+test('removing a teacher from CLC_TEACHERS: their students become Unassigned, Docs move to the top; nothing is deleted', () => {
+  const t = setup({ CLC_TEACHERS: TEACHERS });
+  t.svc.addFile('DOC-A', 'Avery Example - CLC Assignments', 'FOLDER123');
+  const { student } = addAs(t, STAFF, TOKEN_A, '');
+  t.ctx.setStudentTeacher(student.id, 'ssample@pomfret.org');
+  const samFolder = JSON.parse(t.svc.props.teacherFolders)['ssample@pomfret.org'];
+  t.svc.props.CLC_TEACHERS = 'Pat Example <pexample@pomfret.org>';
+  t.ctx.teacherFolderCache_ = null;
+  const page = toPlain(t.ctx.getAppState());
+  assert.deepStrictEqual(page.teachers.map((x) => x.name), ['Pat Example']);
+  assert.strictEqual(page.students[0].teacher, '');
+  assert.strictEqual(t.svc.files['DOC-A'].parent, 'FOLDER123');
+  assert.ok(t.svc.folders[samFolder] && !t.svc.folders[samFolder].trashed, 'the old folder is left as it was');
+  assert.ok(t.svc.files['DOC-A'], 'the Doc is kept');
+});
+
+test('folder lock with teacher folders: Docs anywhere inside the shared folder are updated, never outside it; finding a Doc searches teacher folders', () => {
+  const t = setup({ CLC_TEACHERS: TEACHERS });
+  t.svc.setActive(STAFF);
+  t.ctx.getAppState();
+  const pat = JSON.parse(t.svc.props.teacherFolders)['pexample@pomfret.org'];
+  t.svc.addFile('IN-TEACHER', 'Blake Sample - CLC Assignments', pat);
+  t.svc.addFile('OUTSIDE', 'Blake Sample - CLC Assignments', 'SOMEWHERE-ELSE');
+  const folder = t.ctx.getDocsFolder_();
+  t.ctx.assertDocIsInFolder_('IN-TEACHER', folder);
+  assert.throws(() => t.ctx.assertDocIsInFolder_('OUTSIDE', folder), /only updates Docs in the "AutoPlanner – CLC Student Planners" folder \(or a CLC teacher's folder inside it\)/);
+  assert.strictEqual(t.ctx.findReusableDoc_('Blake Sample', null), 'IN-TEACHER');
 });
 
 test("selfTest's gray check: passes when a past week's Priority cells are gray, fails when one isn't", () => {

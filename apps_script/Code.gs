@@ -353,18 +353,30 @@ function savedDocFile_(docId) {
   return file;
 }
 
-/** Throws unless the Doc's Drive file sits directly in `folder`. Checked before any edit. */
+/**
+ * Throws unless the Doc's Drive file is inside `folder`: directly, or in a folder inside it (a CLC
+ * teacher's folder). Checked before any edit.
+ */
 function assertDocIsInFolder_(docId, folder) {
   var file = savedDocFile_(docId);
-  var parents = file.getParents();
-  while (parents.hasNext()) {
-    if (parents.next().getId() === folder.getId()) return;
-  }
+  if (isInsideFolder_(file, folder.getId(), 0)) return;
   // The message never names the Doc, so it can't reveal the title of a Doc outside the folder.
   throw new Error(
-    'AutoPlanner only updates Docs in the "' + folder.getName() + '" folder, and this ' +
-      "student's Doc is not in it. Move the Doc back into that folder and try again."
+    'AutoPlanner only updates Docs in the "' + folder.getName() + '" folder (or a CLC teacher\'s ' +
+      "folder inside it), and this student's Doc is not there. Move the Doc back into that folder and try again."
   );
+}
+
+/** True if one of a Drive item's folders is `folderId` or is inside it (up to 4 levels up). */
+function isInsideFolder_(item, folderId, depth) {
+  if (depth > 4) return false;
+  var parents = item.getParents();
+  while (parents.hasNext()) {
+    var p = parents.next();
+    if (p.getId() === folderId) return true;
+    if (p.getParents && isInsideFolder_(p, folderId, depth + 1)) return true;
+  }
+  return false;
 }
 
 /**
@@ -395,7 +407,16 @@ function upsertPlannerDocument_(data) {
     doc = DocumentApp.create(desiredTitle);
     docId = doc.getId();
     if (folder) {
-      DriveApp.getFileById(docId).moveTo(folder);
+      // Into the student's CLC teacher's folder if they have one, else the shared folder.
+      var dest = folder;
+      if (data.targetFolderId) {
+        try {
+          dest = DriveApp.getFolderById(data.targetFolderId);
+        } catch (e) {
+          dest = folder;
+        }
+      }
+      DriveApp.getFileById(docId).moveTo(dest);
     }
   }
 

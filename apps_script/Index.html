@@ -232,6 +232,18 @@
     .s-name { grid-area: name; font-weight: var(--fw-regular); line-height: 1.3; overflow-wrap: anywhere; }
     .s-name .student-label { color: var(--ink-2); font-weight: var(--fw-light); }
     .s-token { grid-area: token; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0; }
+    /* CLC teacher: a small labeled dropdown under each student's name, in the Add form, and the
+       "Show" filter above the list. Native selects with the form fields' edge. */
+    .teacher-select {
+      font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: var(--fw-regular); color: var(--ink);
+      padding: 6px 10px; min-height: 32px; border: 1px solid var(--field); border-radius: 0; background: var(--mark-text);
+      max-width: 100%;
+    }
+    .s-teacher { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 8px; font-weight: var(--fw-light); }
+    .s-teacher .t-mono { color: var(--ink-2); }
+    .filter { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); }
+    .block-head .head-right { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+    .field select.teacher-select { width: 100%; min-height: 44px; font-size: 16px; padding: 10px 12px; }
     .s-token .s-tdate { display: block; margin-top: 4px; font-family: var(--font-sans); font-size: var(--fs-ui); color: var(--ink-2); }
     .s-last { grid-area: last; font-size: var(--fs-ui); line-height: 1.45; color: var(--ink-2); }
     .s-last.bad { color: var(--ink); }
@@ -323,7 +335,12 @@
     <section class="block" aria-labelledby="h-students">
       <div class="block-head">
         <h2 class="t-mono block-label" id="h-students">Students</h2>
-        <span class="t-mono count" id="studentCount"></span>
+        <span class="head-right">
+          <label class="t-mono filter" id="teacherFilterWrap" hidden>Show
+            <select id="teacherFilter" class="teacher-select"></select>
+          </label>
+          <span class="t-mono count" id="studentCount"></span>
+        </span>
       </div>
       <div class="cols t-mono" aria-hidden="true"><span>Name</span><span>Token</span><span>Last update</span><span>Doc</span></div>
       <p class="empty-note" id="emptyNote" hidden>No students yet. Add the first one below.</p>
@@ -345,6 +362,10 @@
           <label class="t-mono" for="newLabel">Label (optional)</label>
           <input id="newLabel" type="text" maxlength="60" placeholder="e.g. Table 4" autocomplete="off" />
         </div>
+        <div class="field" id="newTeacherField" hidden>
+          <label class="t-mono" for="newTeacher">CLC teacher (optional)</label>
+          <select id="newTeacher" class="teacher-select"></select>
+        </div>
       </div>
       <div class="form-actions">
         <button type="button" class="btn-secondary" id="addBtn">Add student</button>
@@ -365,7 +386,7 @@
   <script>
     /* AutoPlanner page. Every action calls a function in App.gs through google.script.run;
        nothing is stored in this browser. */
-    var state = { user: '', students: [], run: null, lastRun: null, busy: {}, editing: {} };
+    var state = { user: '', students: [], run: null, lastRun: null, busy: {}, editing: {}, teachers: [], filter: '' };
     var pollTimer = null;
 
     /** The crimson hairline under the header shows while any update is running. */
@@ -447,6 +468,37 @@
       renderRun();
     }
 
+    /** <option>s: Unassigned, then each CLC teacher (their email is the value). */
+    function teacherOptions(selected, firstLabel) {
+      return '<option value=""' + (selected ? '' : ' selected') + '>' + esc(firstLabel || 'Unassigned') + '</option>' +
+        state.teachers.map(function (t) {
+          return '<option value="' + esc(t.email) + '"' + (selected === t.email ? ' selected' : '') + '>' + esc(t.name) + '</option>';
+        }).join('');
+    }
+
+    function teacherName(email) {
+      var t = state.teachers.filter(function (x) { return x.email === email; })[0];
+      return t ? t.name : '';
+    }
+
+    /** The "Show" filter and the Add form's teacher field, only when there are CLC teachers. */
+    function renderTeacherControls() {
+      var on = state.teachers.length > 0;
+      var wrap = document.getElementById('teacherFilterWrap');
+      wrap.hidden = !on;
+      document.getElementById('newTeacherField').hidden = !on;
+      if (!on) { state.filter = ''; return; }
+      var f = document.getElementById('teacherFilter');
+      if (state.filter && state.filter !== '-' && !teacherName(state.filter)) state.filter = '';
+      f.innerHTML = '<option value="">All students</option>' + state.teachers.map(function (t) {
+        return '<option value="' + esc(t.email) + '">' + esc(t.name) + '</option>';
+      }).join('') + '<option value="-">Unassigned</option>';
+      f.value = state.filter;
+      var nt = document.getElementById('newTeacher');
+      var keep = nt.value;
+      nt.innerHTML = teacherOptions(keep);
+    }
+
     function studentTitle(s) {
       return esc(s.name) + (s.label ? ' <span class="student-label">· ' + esc(s.label) + '</span>' : '');
     }
@@ -454,8 +506,13 @@
     function renderStudents() {
       var root = document.getElementById('studentList');
       document.getElementById('emptyNote').hidden = state.students.length > 0;
+      var shown = state.students.filter(function (s) {
+        if (!state.filter) return true;
+        return state.filter === '-' ? !s.teacher : s.teacher === state.filter;
+      });
+      var total = state.students.length === 1 ? '1 student' : state.students.length + ' students';
       document.getElementById('studentCount').textContent =
-        state.students.length === 1 ? '1 student' : state.students.length + ' students';
+        shown.length === state.students.length ? total : shown.length + ' of ' + total;
       // Keep any in-progress edit text and row messages while re-drawing.
       var drafts = {};
       Object.keys(state.editing).forEach(function (id) {
@@ -470,7 +527,7 @@
       });
 
       root.innerHTML = '';
-      state.students.forEach(function (s) {
+      shown.forEach(function (s) {
         var running = !!state.run;
         var busy = !!state.busy[s.id];
         var last = s.last
@@ -481,7 +538,12 @@
         var card = document.createElement('div');
         card.className = 'student-card';
         card.innerHTML =
-          '<div class="s-name' + (s.last && !s.last.ok ? ' bad' : '') + '">' + studentTitle(s) + '</div>' +
+          '<div class="s-name' + (s.last && !s.last.ok ? ' bad' : '') + '">' + studentTitle(s) +
+            (state.teachers.length
+              ? '<label class="s-teacher"><span class="t-mono">CLC teacher</span>' +
+                '<select class="teacher-select" data-act="teacher" aria-label="CLC teacher for ' + esc(s.name) + '"' + (busy ? ' disabled' : '') + '>' +
+                teacherOptions(s.teacher) + '</select></label>'
+              : '') + '</div>' +
           '<div class="s-token"><span class="s-k">Token</span>••••' + esc(s.tokenEnd) +
             (s.tokenDate ? '<span class="s-tdate">' + esc(s.tokenDate) + '</span>' : '') + '</div>' +
           '<div class="s-last' + (s.last && !s.last.ok ? ' bad' : '') + '"><span class="s-k">Last update</span>' + last + '</div>' +
@@ -516,6 +578,8 @@
         card.querySelectorAll('button[data-act]').forEach(function (b) {
           b.addEventListener('click', function () { onRowAction(s, b.getAttribute('data-act')); });
         });
+        var sel = card.querySelector('select[data-act="teacher"]');
+        if (sel) sel.addEventListener('change', function () { changeTeacher(s, sel); });
         root.appendChild(card);
         if (drafts[s.id]) {
           document.getElementById('editLabel-' + s.id).value = drafts[s.id].label;
@@ -635,6 +699,23 @@
       if (!found) state.students.push(fresh);
     }
 
+    /** Moves the student's Doc to the chosen teacher's folder (same Doc), with a plain confirmation. */
+    function changeTeacher(s, sel) {
+      var value = sel.value;
+      var before = s.teacher || '';
+      sel.disabled = true;
+      setStatus('st-' + s.id, 'loading', value ? 'Moving their Doc into ' + teacherName(value) + '’s folder…' : 'Moving their Doc back to the shared folder…');
+      call('setStudentTeacher', s.id, value).then(function (res) {
+        replaceStudent(res.student);
+        renderStudents();
+        setStatus('st-' + s.id, 'success', res.message);
+      }).catch(function (err) {
+        sel.value = before;
+        sel.disabled = false;
+        setStatus('st-' + s.id, 'error', errText(err));
+      });
+    }
+
     function onRowAction(s, act) {
       if (act === 'update') return updateOne(s);
       if (act === 'edit') { state.editing[s.id] = true; return renderStudents(); }
@@ -675,9 +756,11 @@
       }
       btn.disabled = true;
       setStatus('addStatus', 'loading', 'Checking the token with Canvas…');
-      call('addStudent', tokenEl.value, labelEl.value).then(function (res) {
+      var teacherEl = document.getElementById('newTeacher');
+      call('addStudent', tokenEl.value, labelEl.value, teacherEl.value).then(function (res) {
         tokenEl.value = '';
         labelEl.value = '';
+        teacherEl.value = '';
         replaceStudent(res.student);
         render();
         if (state.run) {
@@ -696,8 +779,15 @@
     document.getElementById('updateAllBtn').addEventListener('click', updateAll);
     document.getElementById('addBtn').addEventListener('click', addStudent);
 
+    document.getElementById('teacherFilter').addEventListener('change', function (e) {
+      state.filter = e.target.value;
+      renderStudents();
+    });
+
     call('getAppState').then(function (s) {
       state.user = s.user;
+      state.teachers = s.teachers || [];
+      renderTeacherControls();
       document.getElementById('userChip').innerHTML = 'Signed in as <span class="who-v">' + esc(s.user) + '</span>';
       var note = document.getElementById('autoNote');
       if (s.automaticUpdatesOn && s.updatesStaleSince) {
