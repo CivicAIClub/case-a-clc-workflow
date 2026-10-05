@@ -276,6 +276,20 @@ test('home tab on a weekend summarizes the coming week, with "due this weekend"'
   assert.ok(!/Open the coming week/.test(qt));
 });
 
+test('work from earlier this week (Past due) is counted in the week, but not as next due or due this weekend', () => {
+  const t = setup();
+  const data = homeData();
+  data.weeks['2026-09-28'] = { week_label: 'x', days: [{ day: 'Saturday', assignments: [
+    { assignment: 'Saturday quiz', course: 'Eng: Jane Austen-Garcia-B', due_time: '9:00 AM', priority: 'Past due',
+      days_until_due: -1, due_date: '2026-10-03', week_start: '2026-09-28', url: url(98) }] }] };
+  const courses = t.ctx.plannerCourseList_(data);
+  const s = toPlain(t.ctx.homeSummary_(data, courses, SUNDAY_8PM));
+  assert.strictEqual(s.soonCount, 0, "Saturday's quiz is past, so nothing is due this weekend");
+  const eng = s.rows.filter((r) => /Austen/.test(r.course))[0];
+  assert.notStrictEqual(eng.next, 'Sat, Oct 3', 'next due skips past-due work');
+  assert.strictEqual(t.ctx.PRIORITY_COLORS['Past due'], '#E0E0E0');
+});
+
 test('home tab flips at the midnight runs: Saturday 12:10 AM is weekend, Monday 12:05 AM is a weekday', () => {
   const t = setup();
   const data = homeData();

@@ -374,7 +374,7 @@ function buildWeeklySchedule_(pairs, timeZone, weeksAhead, now) {
 }
 
 // Clean up one Canvas assignment. Gives back a tidy summary, or null if it should be
-// left off the planner (no due date, or already past due).
+// left off the planner (no due date, or due before this week's Monday).
 // `today` is today's date string in the school's time zone.
 function normalizeAssignment_(raw, courseName, timeZone, today) {
   // Assignments with no due date can't go on a day-by-day planner.
@@ -389,7 +389,9 @@ function normalizeAssignment_(raw, courseName, timeZone, today) {
 
   // 0 = due today, 1 = tomorrow, and so on. Anything due earlier today still counts.
   var daysUntil = scheduleDaysBetween_(today, dueDate);
-  if (daysUntil < 0) return null;
+  // Work from earlier this week stays (as "Past due"), so a week keeps all of its assignments
+  // and their Status and Notes until it ends and moves into "Past weeks".
+  if (dueDate < scheduleWeekStart_(today)) return null;
 
   // The key order here matters: it matches the Python version's JSON exactly.
   return {
@@ -407,6 +409,7 @@ function normalizeAssignment_(raw, courseName, timeZone, today) {
 
 // Turn "how many days until this is due" into a short urgency label.
 function schedulePriority_(days) {
+  if (days < 0) return 'Past due';
   if (days === 0) return 'Today';
   if (days === 1) return 'Tomorrow';
   if (days <= 3) return 'Due Soon';
@@ -414,13 +417,15 @@ function schedulePriority_(days) {
   return 'Upcoming';
 }
 
-// Keep assignments due from today through the last Sunday of the requested window.
-// Example: asked for 2 weeks on a Wednesday, it keeps work due through next week's Sunday.
+// Keep assignments due from this week's Monday through the last Sunday of the requested window.
+// Example: asked for 2 weeks on a Wednesday, it keeps work due from this Monday through next
+// week's Sunday.
 function filterAssignmentsInCalendarWeeks_(assignments, weeksAhead, today) {
-  var lastIncludedSunday = scheduleAddDays_(scheduleWeekStart_(today), weeksAhead * 7 - 1);
+  var monday = scheduleWeekStart_(today);
+  var lastIncludedSunday = scheduleAddDays_(monday, weeksAhead * 7 - 1);
   // 'yyyy-MM-dd' strings sort the same way the dates do, so plain < and > work here.
   return assignments.filter(function (a) {
-    return a.due_date >= today && a.due_date <= lastIncludedSunday;
+    return a.due_date >= monday && a.due_date <= lastIncludedSunday;
   });
 }
 

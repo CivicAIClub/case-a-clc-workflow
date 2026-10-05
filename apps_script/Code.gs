@@ -103,6 +103,7 @@ var PRIORITY_COLORS = {
   'Due Soon': '#FFD966',
   'This Week': '#93C47D',
   Upcoming: '#A4C2F4',
+  'Past due': '#E0E0E0', // earlier this week; the same gray as Priority in Past weeks
 };
 
 var HEADER_BG = '#434343';
@@ -905,7 +906,8 @@ function homeSummary_(data, courses, now) {
   var unique = shortNames.every(function (n, i) { return shortNames.indexOf(n) === i; });
   var rows = courses.map(function (course, i) {
     var mine = all.filter(function (a) { return (cellText_(a.course) || '(No Course)') === course; });
-    var next = mine.map(function (a) { return a.due_date; }).sort()[0];
+    var next = mine.filter(function (a) { return a.due_date >= today; })
+      .map(function (a) { return a.due_date; }).sort()[0];
     return {
       course: course,
       name: unique ? shortNames[i] : course,
@@ -926,7 +928,9 @@ function homeSummary_(data, courses, now) {
     weekCount: thisWeek.length,
     // Weekdays: due today or tomorrow. Weekends: due this Saturday or Sunday.
     soonCount: all.filter(function (a) {
-      return weekend ? a.due_date === saturday || a.due_date === sunday : a.days_until_due === 0 || a.days_until_due === 1;
+      return weekend
+        ? (a.due_date === saturday || a.due_date === sunday) && a.due_date >= today
+        : a.days_until_due === 0 || a.days_until_due === 1;
     }).length,
     rows: rows,
   };
