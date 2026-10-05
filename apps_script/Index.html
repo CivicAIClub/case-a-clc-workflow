@@ -224,10 +224,18 @@
       grid-template-areas: 'name token last doc actions';
       column-gap: var(--gutter);
     }
-    /* With CLC teachers set up, a "CLC teacher" column comes after the name. */
+    /* With CLC teachers set up, a "CLC teacher" column comes after the name. Its width is set to fit
+       the longest teacher's name (--teacher-w, from fitTeacherColumn). */
     body.has-teachers .cols, body.has-teachers .student-card {
-      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.15fr) minmax(0, 0.8fr) minmax(0, 1.55fr) minmax(0, 0.7fr) 170px;
+      grid-template-columns: minmax(0, 1fr) var(--teacher-w, 168px) minmax(0, 0.75fr) minmax(0, 1.45fr) minmax(0, 0.72fr) 170px;
       grid-template-areas: 'name teacher token last doc actions';
+    }
+    /* Tablet widths: no room for a sixth column, so the dropdown goes under the name. */
+    @media (min-width: 768px) and (max-width: 1023px) {
+      body.has-teachers .cols, body.has-teachers .student-card {
+        grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.8fr) minmax(0, 1.4fr) minmax(0, 0.8fr) 170px;
+        grid-template-areas: 'name token last doc actions' 'teacher token last doc actions';
+      }
     }
     .cols { margin-top: 24px; padding-bottom: 8px; color: var(--ink-2); }
     .cols .c-name { grid-area: name; } .cols .c-token { grid-area: token; }
@@ -488,6 +496,19 @@
         }).join('');
     }
 
+    /** Sizes the CLC teacher column to the longest teacher's name, so no name is cut off. */
+    function fitTeacherColumn() {
+      var probe = document.createElement('div');
+      probe.className = 's-teacher';
+      probe.style.cssText = 'position: absolute; left: -9999px; top: 0; visibility: hidden;';
+      probe.innerHTML = '<select class="teacher-select" tabindex="-1" aria-hidden="true" style="width: auto; max-width: none;">' +
+        teacherOptions('') + '</select>';
+      document.body.appendChild(probe);
+      var w = Math.ceil(probe.firstChild.getBoundingClientRect().width) + 2;
+      document.body.removeChild(probe);
+      document.documentElement.style.setProperty('--teacher-w', Math.min(Math.max(w, 120), 240) + 'px');
+    }
+
     function teacherName(email) {
       var t = state.teachers.filter(function (x) { return x.email === email; })[0];
       return t ? t.name : '';
@@ -510,6 +531,9 @@
       var nt = document.getElementById('newTeacher');
       var keep = nt.value;
       nt.innerHTML = teacherOptions(keep);
+      fitTeacherColumn();
+      // Measure again once the page's font has loaded; it can be wider than the fallback.
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitTeacherColumn);
     }
 
     function shownByFilter(s) {
