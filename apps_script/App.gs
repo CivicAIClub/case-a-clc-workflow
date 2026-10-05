@@ -862,7 +862,7 @@ function runSelfTest_(keepToken) {
     }
   }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
-  var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo;
+  var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo, tabsBefore;
   // Only the weeks AutoPlanner just wrote; tabs from earlier weeks are left as they were.
   var currentWeeks = function () {
     var titles = Object.keys(schedule.weeks || {}).map(function (k) {
@@ -1068,9 +1068,30 @@ function runSelfTest_(keepToken) {
       return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
     }) &&
     check('Doc: run a normal update (the real due date again)', function () {
+      tabsBefore = weekTabsOf_(docsGet_(docId)).map(function (w) { return { title: w.title, id: w.tab.tabProperties.tabId }; });
       var t0 = Date.now();
       writeDocWithRecovery_(selfStudent, schedule);
       return 'took ' + Math.round((Date.now() - t0) / 1000) + ' s';
+    }) &&
+    check('Existing week tabs were rebuilt in place: same titles and order, all titles unique, no "(updating)" tab left', function () {
+      var now = docsGet_(docId);
+      var after = weekTabsOf_(now).map(function (w) { return { title: w.title, id: w.tab.tabProperties.tabId }; });
+      var names = function (list) { return list.map(function (w) { return w.title; }).join(' | '); };
+      if (names(after) !== names(tabsBefore)) throw new Error('before: ' + names(tabsBefore) + '; after: ' + names(after));
+      var seen = {};
+      (function walk(tabs) {
+        (tabs || []).forEach(function (t) {
+          var title = t.tabProperties.title;
+          if (title.slice(-UPDATING_SUFFIX.length) === UPDATING_SUFFIX) throw new Error('"' + title + '" was left behind');
+          if (seen[title]) throw new Error('two tabs are called "' + title + '"');
+          seen[title] = true;
+          walk(t.childTabs);
+        });
+      })(now.tabs);
+      var titles = Object.keys(schedule.weeks || {}).map(function (k) { return buildWeekTabTitle_(k, schedule.weeks[k].week_label); });
+      var rebuilt = after.filter(function (w, i) { return titles.indexOf(w.title) !== -1 && w.id !== tabsBefore[i].id; }).length;
+      if (!rebuilt) throw new Error('no existing week tab was rebuilt');
+      return rebuilt + ' existing week tab' + (rebuilt === 1 ? '' : 's') + ' rebuilt; ' + after.length + ' tabs in the same order';
     }) &&
     check('Status and Note came back with it', function () {
       var rows = findRowsByUrl_(docId, target.url);

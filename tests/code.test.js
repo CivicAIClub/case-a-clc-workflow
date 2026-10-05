@@ -443,34 +443,127 @@ test('a Doc in the trash, or gone, is never written: refused before it is opened
   }
 });
 
-test('rebuilding a week: the new tab is written before the old one is deleted, so a stopped update loses nothing', () => {
-  const t = setup();
-  const title = 'Week of Oct 5 – Oct 11, 2026';
-  const withTable = (id) => ({ tabProperties: { tabId: id, title }, documentTab: { body: { content: [
-    { startIndex: 1, endIndex: 2, paragraph: { elements: [] } }, { startIndex: 2, endIndex: 90, table: { columns: 6, tableRows: [trow(url(1), 'In progress', 'keep me')] } },
-  ] } } });
-  const run = (kids, failFill) => {
-    const log = [];
-    t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: kids }] });
-    t.ctx.sleepDocsChunkGap_ = () => {};
-    t.ctx.addWeekChildTab_ = (d, p, ttl, index) => { log.push(['add', index]); return 't.new'; };
-    t.ctx.batchUpdateChunked_ = (d, reqs) => { if (failFill) throw new Error('Exceeded maximum execution time'); log.push(['fill', reqs[0].insertText.location.tabId]); };
-    t.ctx.docsBatchUpdate_ = (d, reqs) => { log.push(['delete'].concat(reqs.map((r) => r.deleteTab.tabId))); return {}; };
-    const week = { week_label: 'Oct 5 – Oct 11', days: [] };
-    try { t.ctx.fillWeekTabDocsApi_('DOC', 't.0', title, kids[1].tabProperties.tabId, '2026-10-05', week, [], {}, { notes: {}, status: {} }); } catch (e) { log.push(['stopped']); }
-    return log;
+// A stateful fake of the Docs API's tab handling. Like the real one (checked live): every tab title
+// in a Doc must be different, at any level; a batch is all or nothing; requests run in order.
+// Text requests are recorded per tab (not rendered), so tests can see what was written where.
+function fakeDocs(tabs) {
+  const st = { tabs, written: {}, batches: [], n: 0, failOnFill: false };
+  const all = () => { const out = []; const walk = (ts) => ts.forEach((t) => { out.push(t); walk(t.childTabs || []); }); walk(st.tabs); return out; };
+  const find = (id) => all().find((t) => t.tabProperties.tabId === id);
+  const kidsOf = (parentId) => (parentId ? (find(parentId).childTabs = find(parentId).childTabs || []) : st.tabs);
+  const detach = (t) => { const k = kidsOf(t.tabProperties.parentTabId); k.splice(k.indexOf(t), 1); };
+  const unique = (title, id) => {
+    if (all().some((t) => t.tabProperties.title === title && t.tabProperties.tabId !== id)) throw new Error('Invalid requests[0].addDocumentTab: Tab title must be unique');
   };
-  const other = weekTab('t.oct12', 'Week of Oct 12 – Oct 18, 2026');
-  // Normal: new tab just below the old one, filled, then the old one deleted (the new one takes its place).
-  assert.deepStrictEqual(run([other, withTable('t.old')]), [['add', 2], ['fill', 't.new'], ['delete', 't.old']]);
-  // Stopped while filling: the old tab is never deleted, and it's still the top copy.
-  assert.deepStrictEqual(run([other, withTable('t.old')], true), [['add', 2], ['stopped']]);
-  // The next update rebuilds from the old (top) copy; both copies go once the new tab is complete.
-  assert.deepStrictEqual(run([other, withTable('t.old'), withTable('t.half')]), [['add', 2], ['fill', 't.new'], ['delete', 't.old', 't.half']]);
-  // With two copies, the top one's Status and Notes win (it's the one staff see and edit).
-  const X = url(1);
-  const two = { childTabs: [weekTab('t.top', title, [trow(X, 'Complete', 'edited this morning')]), weekTab('t.half', title, [trow(X, 'In progress', 'old note')])] };
-  assert.deepStrictEqual(toPlain(t.ctx.collectSavedData_(two)), { notes: { [X]: 'edited this morning' }, status: { [X]: 'Complete' } });
+  const apply = (r) => {
+    if (r.addDocumentTab) {
+      const p = r.addDocumentTab.tabProperties;
+      unique(p.title);
+      const t = { tabProperties: { tabId: 't.n' + (++st.n), title: p.title, parentTabId: p.parentTabId },
+        documentTab: { body: { content: [{ startIndex: 1, endIndex: 2, paragraph: { elements: [{ startIndex: 1, endIndex: 2, textRun: { content: '\n' } }] } }] } }, childTabs: [] };
+      const k = kidsOf(p.parentTabId);
+      k.splice(p.index === undefined ? k.length : p.index, 0, t);
+      return { addDocumentTab: { tabProperties: { tabId: t.tabProperties.tabId } } };
+    }
+    if (r.deleteTab) { detach(find(r.deleteTab.tabId)); return {}; }
+    if (r.updateDocumentTabProperties) {
+      const p = r.updateDocumentTabProperties.tabProperties;
+      const t = find(p.tabId);
+      const fields = r.updateDocumentTabProperties.fields;
+      if (/title/.test(fields)) { unique(p.title, p.tabId); t.tabProperties.title = p.title; }
+      if (/parentTabId/.test(fields)) { detach(t); t.tabProperties.parentTabId = p.parentTabId; const k = kidsOf(p.parentTabId); k.splice(p.index, 0, t); }
+      return {};
+    }
+    const loc = r.insertText && r.insertText.location;
+    if (loc) {
+      if (!find(loc.tabId)) throw new Error('No tab ' + loc.tabId);
+      if (st.failOnFill && /\(updating\)$/.test(find(loc.tabId).tabProperties.title)) throw new Error('Exceeded maximum execution time');
+      (st.written[loc.tabId] = st.written[loc.tabId] || []).push(r.insertText.text);
+    }
+    return {};
+  };
+  st.service = { Documents: {
+    get: () => JSON.parse(JSON.stringify({ tabs: st.tabs })),
+    batchUpdate: (body) => {
+      const backup = JSON.stringify(st.tabs);
+      try {
+        const replies = body.requests.map(apply);
+        st.batches.push(body.requests.map((r) => Object.keys(r)[0]));
+        return { replies };
+      } catch (e) { st.tabs = JSON.parse(backup); throw e; }
+    },
+  } };
+  st.titles = (parentId) => kidsOf(parentId).map((t) => t.tabProperties.title);
+  st.titleAnywhere = (re) => all().filter((t) => re.test(t.tabProperties.title)).map((t) => t.tabProperties.title);
+  st.find = find;
+  return st;
+}
+
+const W = 'Week of Jan 5 – Jan 11, 2099';
+const W2 = 'Week of Jan 12 – Jan 18, 2099';
+const homeTab = (kids) => ({ tabProperties: { tabId: 't.0', title: 'CLC Planner' },
+  documentTab: { body: { content: [{ startIndex: 1, endIndex: 2, paragraph: { elements: [{ startIndex: 1, endIndex: 2, textRun: { content: '\n' } }] } }] } }, childTabs: kids });
+const typedWeek = (id, title, status, note, n) => ({ tabProperties: { tabId: id, title, parentTabId: 't.0' }, childTabs: [],
+  documentTab: { body: { content: [{ startIndex: 1, endIndex: 2, paragraph: { elements: [] } },
+    { startIndex: 2, endIndex: 90, table: { columns: 6, tableRows: [trow(url(n || 1), status, note)] } }] } } });
+const scheduleFor = () => Object.assign({}, base, { documentId: 'DOC1', courses: ['Biology'], weeks: { '2099-01-05': { week_label: 'Jan 5 – Jan 11', days: [{ day: 'Monday', assignments: [
+  { day: 'Monday', assignment: 'Essay', course: 'Biology', due_time: '8:30 AM', priority: 'Upcoming', days_until_due: 9, due_date: '2099-01-05', week_start: '2099-01-05', url: url(1) }] }] } } });
+
+function rebuildSetup(kids, extraRoots) {
+  const t = setup();
+  t.svc.addFile('DOC1', 'Test Student - CLC Assignments', null);
+  const docs = fakeDocs([homeTab(kids)].concat(extraRoots || []));
+  t.ctx.Docs = docs.service;
+  t.ctx.sleepDocsChunkGap_ = () => {};
+  return { t, docs };
+}
+
+test('rebuilding an EXISTING week tab: same title and place, Status and Notes kept, no "(updating)" left (unique titles enforced)', () => {
+  const { t, docs } = rebuildSetup([typedWeek('t.old', W, 'In progress', 'keep me'), typedWeek('t.next', W2, 'Complete', 'later week', 2)]);
+  t.ctx.upsertPlannerDocument_(scheduleFor());
+  assert.deepStrictEqual(docs.titles('t.0'), [W, W2], 'same titles, same order');
+  const rebuilt = docs.find('t.n1');
+  assert.strictEqual(rebuilt.tabProperties.title, W);
+  assert.ok(!docs.find('t.old'), 'the old tab is gone');
+  assert.ok(docs.find('t.next'), 'a week not in the schedule is left alone');
+  assert.ok(docs.written['t.n1'].includes('In progress') && docs.written['t.n1'].includes('keep me'), 'Status and Notes written into the new tab');
+  assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+  assert.ok(docs.batches.some((b) => b.join() === 'deleteTab,updateDocumentTabProperties'), 'delete and rename in one batch');
+});
+
+test('an update cut off mid-rebuild leaves the old tab untouched; the next one removes the "(updating)" tab and keeps Status and Notes', () => {
+  const { t, docs } = rebuildSetup([typedWeek('t.old', W, 'In progress', 'keep me')]);
+  docs.failOnFill = true;
+  assert.throws(() => t.ctx.upsertPlannerDocument_(scheduleFor()), /Exceeded maximum execution time/);
+  assert.deepStrictEqual(docs.titles('t.0'), [W, W + ' (updating)'], 'old tab still first, half-written copy below it');
+  assert.ok(docs.find('t.old'), 'the old tab, with its Status and Notes, is still there');
+  // The next update: the leftover goes first, and the week is rebuilt from the old tab.
+  docs.failOnFill = false;
+  t.ctx.upsertPlannerDocument_(scheduleFor());
+  assert.deepStrictEqual(docs.titles('t.0'), [W]);
+  assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+  const finalId = docs.service.Documents.get().tabs[0].childTabs[0].tabProperties.tabId;
+  assert.ok(docs.written[finalId].includes('In progress') && docs.written[finalId].includes('keep me'));
+  // A leftover "(updating)" copy with other values is never trusted.
+  const again = rebuildSetup([typedWeek('t.old', W, 'In progress', 'keep me'), typedWeek('t.half', W + ' (updating)', 'Complete', 'half-written')]);
+  again.t.ctx.upsertPlannerDocument_(scheduleFor());
+  const id = again.docs.service.Documents.get().tabs[0].childTabs[0].tabProperties.tabId;
+  assert.deepStrictEqual(again.docs.titles('t.0'), [W]);
+  assert.ok(again.docs.written[id].includes('In progress') && !again.docs.written[id].includes('half-written'));
+});
+
+test('titles that already exist elsewhere in the Doc: a dragged-out week is moved back, and an existing "Past weeks" is reused', () => {
+  const ended = typedWeek('t.ended', 'Week of Jan 6 – Jan 12, 2020', 'Complete', 'old', 3);
+  const dragged = Object.assign(typedWeek('t.dragged', W, 'In progress', 'keep me'), {});
+  dragged.tabProperties.parentTabId = undefined;
+  const past = { tabProperties: { tabId: 't.mypast', title: 'Past weeks' }, documentTab: { body: { content: [] } }, childTabs: [] };
+  const { t, docs } = rebuildSetup([ended], [dragged, past]);
+  t.ctx.upsertPlannerDocument_(scheduleFor());
+  assert.deepStrictEqual(docs.titles('t.0'), [W], 'the week is back under CLC Planner (and rebuilt)');
+  assert.deepStrictEqual(docs.titles('t.mypast'), ['Week of Jan 6 – Jan 12, 2020'], 'the ended week went into the existing Past weeks');
+  assert.deepStrictEqual(docs.titleAnywhere(/^Past weeks$/), ['Past weeks'], 'no second "Past weeks"');
+  const id = docs.service.Documents.get().tabs[0].childTabs[0].tabProperties.tabId;
+  assert.ok(docs.written[id].includes('keep me'));
 });
 
 test('an update that runs across Sunday midnight never writes the week it just filed', () => {
