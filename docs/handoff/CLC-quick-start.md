@@ -84,6 +84,7 @@ The message next to it says what happened. Most fix themselves:
 | "This student's Canvas token expired on …", "Canvas didn't accept this student's token" or "Canvas refused this student's token" | Renew the token (see above). |
 | "This token now belongs to a different Canvas user" | Click **Edit** and paste this student's own token. |
 | "Canvas is busy", "Canvas is getting too many requests", "Google is limiting how fast Docs can be edited", "Google Docs or Drive had a temporary problem", or "Google Drive didn't answer" | Nothing. AutoPlanner tries again at the next update (7 pm or midnight). If the same message is still there after two days, contact us. |
+| "Google Drive couldn't find this student's Doc just now" | Nothing. If the Doc is really gone, the next scheduled update makes a new one and says so on the row. |
 | "AutoPlanner only updates Docs in the … folder" | Someone moved the Doc. Move it back into **AutoPlanner – CLC Student Planners**, then click **Update**. |
 | "Took longer than Apps Script allows" | Nothing; it's tried again at the next update. Contact us if it keeps happening. |
 | "…shared folder … is in the Drive trash" or "cannot open that Drive folder" | The shared folder was deleted or unshared. Its owner can restore it from the Drive trash; otherwise contact us. |

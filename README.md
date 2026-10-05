@@ -94,12 +94,15 @@ Only needed for a brand-new project, for example to move AutoPlanner to a CLC st
 
    Properties named `student.*`, `token.*`, `busy.*`, `run.*` and `trigger.*` are written by the app. Don't edit them by hand.
 4. In the editor, open **App.gs** (the function menu only lists functions from the open file). Run **setupTriggers** and approve the permissions. It installs the daily updates and logs a setup check.
-5. Run **selfTest**. Using your own token, it:
+5. Run **selfTest** (about 4 minutes). Don't open or edit your planner Doc while it runs. Using your own token, it:
    - fetches your Canvas assignments
-   - creates or reuses your Doc in the folder
-   - types a test Status and Note, runs an update, and checks both survived in both tables
+   - creates or reuses your Doc in the folder, and holds your student row so no other update writes it meanwhile
+   - types a test Status and Note, moves that assignment to another week and back with two updates, and checks both followed it, in both tables, in exactly one week tab
+   - checks the layout after a full update, then puts the test assignment's Status and Note back
 
-   Every line of the log should say `PASS`.
+   Every line of the log should say `PASS` (a `SKIP` says why it skipped).
+
+   **selfTestEveryday** (about 2 minutes) checks the everyday case on its own: a Status and Note changed in By Class survive a plain update, in both tables. It keeps `TEST_CANVAS_TOKEN`.
 6. **Deploy → New deployment →** ⚙ **Web app**. Set **Execute as: Me** and **Who has access: Anyone within Pomfret School**, then click **Deploy**.
 
 Other functions you can run from the editor (they only run for the owner):

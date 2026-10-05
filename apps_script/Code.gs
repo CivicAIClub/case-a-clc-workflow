@@ -253,6 +253,10 @@ var DOC_GONE_PREFIX = 'Could not open the saved Google Doc';
 // What Drive says when a file or folder doesn't exist (or this account can't see it). Any other
 // error is a hiccup, and must never make AutoPlanner start a new Doc.
 var DRIVE_NOT_FOUND = /No item with the given ID|Invalid file or folder ID|Unexpected error while getting the method or property get(File|Folder)ById|do not have permission|Access denied/i;
+// Drive also says "Invalid argument" for a Doc that doesn't exist (seen live), but that wording isn't
+// specific enough to make a new Doc on the first try: App.gs waits for a second update to agree.
+var DRIVE_UNSURE = /Invalid argument/i;
+var DOC_UNSURE_PREFIX = "Google Drive couldn't find this student's Doc just now";
 
 /**
  * The saved Doc's Drive file. Throws an error starting with DOC_GONE_PREFIX when the Doc is in the
@@ -269,6 +273,11 @@ function savedDocFile_(docId) {
       lastErr = err;
       if (attempt === 0) Utilities.sleep(2000);
     }
+  }
+  if (!file && !DRIVE_NOT_FOUND.test(String(lastErr)) && DRIVE_UNSURE.test(String(lastErr))) {
+    console.warn('Drive error for Doc ' + docId + ' (not sure it is gone yet): ' + lastErr);
+    throw new Error(DOC_UNSURE_PREFIX + '. If it is still missing at an update 4 or more hours from now, ' +
+      'AutoPlanner will make a new one.');
   }
   if (!file && !DRIVE_NOT_FOUND.test(String(lastErr))) {
     console.warn('Drive error for Doc ' + docId + ' (treated as a hiccup): ' + lastErr); // Drive's own words
