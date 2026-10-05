@@ -46,6 +46,8 @@ Type in the white **Status** and **Notes** cells, in either table:
 - **Status:** type **Not started**, **In progress**, or **Complete**, as plain words. New assignments start as Not started.
 - **Notes:** type anything you like.
 
+Use the Notes column, not comments, for anything you want to keep. Comments on week tabs can be lost when AutoPlanner updates.
+
 AutoPlanner never changes these two columns, so what you type survives every update. The same reminder is at the top of every week tab. If a teacher moves an assignment's due date to another week, its Status and Notes move with it.
 
 **Everything else is rewritten on each update, including the CLC Planner tab.** For notes about the student in general, add your own tab with **+** at the top of the **Document tabs** sidebar. AutoPlanner leaves tabs it didn't make alone.
