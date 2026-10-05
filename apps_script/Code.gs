@@ -265,6 +265,8 @@ function upsertPlannerDocument_(data) {
   }
 
   var parentTabId = prepareParentTab_(docId, isNew);
+  // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
+  archivePastWeeks_(docId, parentTabId, Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd'));
 
   var weeks = data.weeks || {};
   var weekKeys = Object.keys(weeks).sort();
@@ -276,6 +278,10 @@ function upsertPlannerDocument_(data) {
     rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
     return { docUrl: doc.getUrl(), documentId: docId };
   }
+
+  // Read every current and upcoming week's Status and Notes before any tab is rebuilt, so they
+  // follow an assignment that moved to another week.
+  var saved = collectSavedData_(findTabJsonById_(docsGet_(docId), parentTabId));
 
   weekKeys.forEach(function (weekKey) {
     var weekData = weeks[weekKey];
@@ -298,7 +304,7 @@ function upsertPlannerDocument_(data) {
       );
     }
 
-    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap);
+    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved);
     sleepDocsChunkGap_();
   });
 
@@ -406,11 +412,95 @@ function findChildTabIdByTitle_(parentTabJson, title) {
   return null;
 }
 
-/** Next sibling index under the parent tab (append = chronological order top → bottom). */
+/** Where a new week tab goes: after the other weeks, but before the "Past weeks" tab (kept last). */
 function nextChildTabInsertIndex_(parentTabJson) {
-  return (parentTabJson && parentTabJson.childTabs
-    ? parentTabJson.childTabs.length
-    : 0);
+  var kids = (parentTabJson && parentTabJson.childTabs) || [];
+  for (var i = 0; i < kids.length; i++) {
+    if ((kids[i].tabProperties || {}).title === PAST_WEEKS_TITLE) return i;
+  }
+  return kids.length;
+}
+
+// ---- Past weeks: ended week tabs move into one "Past weeks" tab, untouched -----------------
+var PAST_WEEKS_TITLE = 'Past weeks';
+var PAST_WEEKS_LINE = 'Every past week, with the Status and Notes typed during it. AutoPlanner never changes these.';
+
+/** "Week of Oct 5 – Oct 11, 2026" gives '2026-10-05' (its Monday); any other tab title gives null. */
+function weekKeyFromTabTitle_(title) {
+  var m = /^Week of ([A-Z][a-z]{2}) (\d{1,2}) \u2013 [A-Z][a-z]{2} \d{1,2}, (\d{4})$/.exec(String(title || ''));
+  if (!m) return null;
+  var month = SCHEDULE_MONTH_NAMES.indexOf(m[1]);
+  if (month === -1) return null;
+  return m[3] + '-' + ('0' + (month + 1)).slice(-2) + '-' + ('0' + m[2]).slice(-2);
+}
+
+/**
+ * Moves every week tab that has ended (its Sunday is before `today`, New York time) into the
+ * "Past weeks" tab, newest first. Creates "Past weeks" for the first past week. Moving the tab is
+ * the only change: a past week's content is never read, edited, rebuilt or deleted.
+ * Returns how many tabs moved.
+ */
+function archivePastWeeks_(docId, parentTabId, today) {
+  var parent = findTabJsonById_(docsGet_(docId), parentTabId);
+  var ended = endedWeekTabs_(parent, today);
+  if (!ended.length) return 0;
+  var pastId = findChildTabIdByTitle_(parent, PAST_WEEKS_TITLE);
+  if (!pastId) {
+    pastId = addWeekChildTab_(docId, parentTabId, PAST_WEEKS_TITLE, parent.childTabs.length);
+    docsBatchUpdate_(docId, [{ insertText: { text: PAST_WEEKS_LINE, location: { tabId: pastId, index: 1 } } }]);
+  }
+  docsBatchUpdate_(docId, archiveMoveRequests_(ended, pastId));
+  return ended.length;
+}
+
+/** The week tabs directly under CLC Planner whose week ended before `today`, oldest first. */
+function endedWeekTabs_(parentTabJson, today) {
+  var thisMonday = scheduleWeekStart_(today);
+  return ((parentTabJson && parentTabJson.childTabs) || []).map(function (t) {
+    var p = t.tabProperties || {};
+    return { id: p.tabId, key: weekKeyFromTabTitle_(p.title) };
+  }).filter(function (w) {
+    return w.key && w.key < thisMonday;
+  }).sort(function (a, b) {
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  });
+}
+
+/** Oldest first, each to the top of "Past weeks", so the newest week ends up first. */
+function archiveMoveRequests_(ended, pastId) {
+  return ended.map(function (w) {
+    return {
+      updateDocumentTabProperties: {
+        tabProperties: { tabId: w.id, parentTabId: pastId, index: 0 },
+        fields: 'parentTabId,index',
+      },
+    };
+  });
+}
+
+/**
+ * Status and Notes from every current and upcoming week tab, by Canvas link, so they follow an
+ * assignment whose due date moves to another week. "Past weeks" is never read. When a link has
+ * values in two weeks, a typed Status beats the default, and between two typed values the most
+ * recent week's wins (Notes the same way).
+ */
+function collectSavedData_(parentTabJson) {
+  var result = { notes: {}, status: {} };
+  ((parentTabJson && parentTabJson.childTabs) || []).map(function (t) {
+    return { key: weekKeyFromTabTitle_((t.tabProperties || {}).title), tab: t };
+  }).filter(function (w) {
+    return w.key;
+  }).sort(function (a, b) {
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  }).forEach(function (w) {
+    var d = readExistingDataFromTab_(w.tab);
+    Object.keys(d.status).forEach(function (url) {
+      var cur = result.status[url];
+      if (!cur || cur === STATUS_DEFAULT || d.status[url] !== STATUS_DEFAULT) result.status[url] = d.status[url];
+    });
+    Object.keys(d.notes).forEach(function (url) { result.notes[url] = d.notes[url]; });
+  });
+  return result;
 }
 
 function addWeekChildTab_(docId, parentTabId, title, insertIndex) {
@@ -709,7 +799,12 @@ function shortCourseName_(name) {
 /** Everything the home tab shows, worked out from the schedule (pure, so it can be tested). */
 function homeSummary_(data, courses, now) {
   var today = Utilities.formatDate(now, SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
-  var weekKey = scheduleWeekStart_(today);
+  var monday = scheduleWeekStart_(today);
+  // Saturday and Sunday (New York time) look ahead to the coming week.
+  var weekend = scheduleWeekdayIndex_(today) >= 5;
+  var weekKey = weekend ? scheduleAddDays_(monday, 7) : monday;
+  var saturday = scheduleAddDays_(monday, 5);
+  var sunday = scheduleAddDays_(monday, 6);
   var all = [];
   Object.keys(data.weeks || {}).forEach(function (k) {
     (data.weeks[k].days || []).forEach(function (d) {
@@ -730,13 +825,21 @@ function homeSummary_(data, courses, now) {
       next: next ? Utilities.formatDate(new Date(scheduleDateToMs_(next) + 12 * 3600000), 'UTC', 'EEE, MMM d') : '—',
     };
   });
+  var weekRange = scheduleShortDate_(weekKey) + ' – ' + scheduleShortDate_(scheduleAddDays_(weekKey, 6));
   return {
     name: cellText_(data.studentFullName || data.student_full_name) || 'Student',
     updated: Utilities.formatDate(now, SCHEDULE_TIME_ZONE, "EEEE, MMM d 'at' h:mm a"),
+    weekend: weekend,
     weekKey: weekKey,
-    weekRange: scheduleShortDate_(weekKey) + ' – ' + scheduleShortDate_(scheduleAddDays_(weekKey, 6)),
+    weekRange: weekRange,
+    heading: weekend
+      ? ('Coming week · Mon ' + scheduleShortDate_(weekKey) + ' – Sun ' + scheduleShortDate_(scheduleAddDays_(weekKey, 6))).toUpperCase()
+      : ('This week · ' + weekRange).toUpperCase(),
     weekCount: thisWeek.length,
-    soonCount: all.filter(function (a) { return a.days_until_due === 0 || a.days_until_due === 1; }).length,
+    // Weekdays: due today or tomorrow. Weekends: due this Saturday or Sunday.
+    soonCount: all.filter(function (a) {
+      return weekend ? a.due_date === saturday || a.due_date === sunday : a.days_until_due === 0 || a.days_until_due === 1;
+    }).length,
     rows: rows,
   };
 }
@@ -772,18 +875,18 @@ function buildHomeTabRequests_(tabId, summary, weekTabId, contentWidth, colorMap
   }
 
   // 1. Name, caps line, last updated, this week.
-  var summaryLine = summary.weekCount
-    ? summary.weekCount + ' assignment' + (summary.weekCount === 1 ? '' : 's') + ' this week · ' +
-      summary.soonCount + ' due today or tomorrow.'
-    : 'Nothing is due this week. ' + summary.soonCount + ' due today or tomorrow.';
-  var a = [
-    summary.name,
-    HOME_SUBTITLE,
-    'Last updated ' + summary.updated,
-    ('This week · ' + summary.weekRange).toUpperCase(),
-    summaryLine,
-  ];
-  if (weekTabId) a.push('Open this week →');
+  var plural = function (n) { return n + ' assignment' + (n === 1 ? '' : 's'); };
+  var summaryLine;
+  if (summary.weekend) {
+    summaryLine = (summary.weekCount ? plural(summary.weekCount) + ' in the coming week' : 'Nothing is due in the coming week') +
+      ' · ' + (summary.soonCount ? summary.soonCount + ' due this weekend.' : 'Nothing due this weekend.');
+  } else {
+    summaryLine = summary.weekCount
+      ? plural(summary.weekCount) + ' this week · ' + summary.soonCount + ' due today or tomorrow.'
+      : 'Nothing is due this week. ' + summary.soonCount + ' due today or tomorrow.';
+  }
+  var a = [summary.name, HOME_SUBTITLE, 'Last updated ' + summary.updated, summary.heading, summaryLine];
+  if (weekTabId) a.push(summary.weekend ? 'Open the coming week →' : 'Open this week →');
   if (!summary.rows.length) a.push('No current classes found in Canvas.');
   var aStart = insertLines(1, a);
   var lineEnd = function (i) { return aStart[i] + a[i].length; };
@@ -803,7 +906,9 @@ function buildHomeTabRequests_(tabId, summary, weekTabId, contentWidth, colorMap
   // 2. Class | This week | Next due.
   var next;
   if (summary.rows.length) {
-    next = appendHomeClassTable_(reqs, tabId, at, summary.rows, scaledColumnWidths_(HOME_CLASS_WIDTHS, contentWidth), colorMap);
+    var headers = HOME_CLASS_HEADERS.slice();
+    if (summary.weekend) headers[1] = 'Coming week';
+    next = appendHomeClassTable_(reqs, tabId, at, summary.rows, scaledColumnWidths_(HOME_CLASS_WIDTHS, contentWidth), colorMap, headers);
   } else {
     // No table: split off an empty paragraph for the rest.
     reqs.push({ insertText: { text: '\n', location: { tabId: tabId, index: at } } });
@@ -837,12 +942,12 @@ function buildHomeTabRequests_(tabId, summary, weekTabId, contentWidth, colorMap
  * of the paragraph above it). Same cell values as the week tables. Returns the index of the
  * empty paragraph Docs adds after it.
  */
-function appendHomeClassTable_(reqs, tabId, at, rows, widths, colorMap) {
+function appendHomeClassTable_(reqs, tabId, at, rows, widths, colorMap, headers) {
   var C = 3;
   var R = rows.length + 1;
   var tableStart = at + 1;
   var emptyAfter = at + 3 + R * (2 * C + 1);
-  var texts = [HOME_CLASS_HEADERS.slice()].concat(rows.map(function (r) {
+  var texts = [(headers || HOME_CLASS_HEADERS).slice()].concat(rows.map(function (r) {
     return [cellText_(r.name), String(r.count), r.next];
   }));
   var emptyIndex = function (r, c) { return at + 4 + r * (2 * C + 1) + 2 * c; };
@@ -973,10 +1078,11 @@ function tabBodyHasHeavyContent_(tabJson) {
  * Writes one week tab from scratch: a heading, the help line, one table per class, and the By Day
  * table. The tab has just been created or cleared, so it holds one empty paragraph at index 1.
  */
-function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap) {
+function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved) {
   var docProbe = docsGet_(docId);
   var tabProbe = findTabJsonById_(docProbe, tabId);
-  var savedData = readExistingDataFromTab_(tabProbe);
+  // Status and Notes from all current and upcoming weeks (see collectSavedData_), or this tab's own.
+  var savedData = saved || readExistingDataFromTab_(tabProbe);
 
   if (tabBodyHasHeavyContent_(tabProbe) || !clearTabBodyDocsApi_(docId, tabId)) {
     docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);

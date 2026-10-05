@@ -241,3 +241,114 @@ test('home tab: with no current-week tab there is no link, and with no classes t
   assert.strictEqual(reqs.filter((r) => r.insertTable).length, 0);
   assert.ok(!JSON.stringify(reqs).includes('"tabId":null'));
 });
+
+// ---- Weekends, past weeks, and notes that follow an assignment ----------------------------
+
+const SUNDAY_8PM = new Date('2026-10-05T00:00:00Z'); // Sun Oct 4, 8:00 PM New York
+const MONDAY_0005 = new Date('2026-10-05T04:05:00Z'); // Mon Oct 5, 12:05 AM
+const SATURDAY_0010 = new Date('2026-10-10T04:10:00Z'); // Sat Oct 10, 12:10 AM
+const FRIDAY_2355 = new Date('2026-10-10T03:55:00Z'); // Fri Oct 9, 11:55 PM
+
+test('home tab on a weekend summarizes the coming week, with "due this weekend"', () => {
+  const t = setup();
+  const data = homeData();
+  data.weeks['2026-09-28'] = { week_label: 'x', days: [{ day: 'Sunday', assignments: [
+    { assignment: 'Weekend reading', course: 'Eng: Jane Austen-Garcia-B', due_time: '11:59 PM', priority: 'Today',
+      days_until_due: 0, due_date: '2026-10-04', week_start: '2026-09-28', url: url(99) }] }] };
+  const courses = t.ctx.plannerCourseList_(data);
+  const s = toPlain(t.ctx.homeSummary_(data, courses, SUNDAY_8PM));
+  assert.strictEqual(s.weekend, true);
+  assert.strictEqual(s.weekKey, '2026-10-05');
+  assert.strictEqual(s.heading, 'COMING WEEK · MON OCT 5 – SUN OCT 11');
+  assert.strictEqual(s.weekCount, 7);
+  assert.strictEqual(s.soonCount, 1, 'only the Sunday assignment is "this weekend"');
+  assert.deepStrictEqual(s.rows.map((r) => r.count), [0, 1, 1, 2, 3], 'class column counts the coming week');
+  const reqs = toPlain(t.ctx.buildHomeTabRequests_('t.0', s, 't.week', 468, t.ctx.buildCourseColorMap_(courses)));
+  const texts = reqs.filter((r) => r.insertText).map((r) => r.insertText.text).join('\n');
+  assert.match(texts, /COMING WEEK · MON OCT 5 – SUN OCT 11\n7 assignments in the coming week · 1 due this weekend\.\nOpen the coming week →/);
+  assert.ok(reqs.some((r) => r.insertText && r.insertText.text === 'Coming week'), 'class table column header');
+  assert.ok(!/today or tomorrow/.test(texts));
+  // Nothing due this weekend, and no tab for the coming week: no link.
+  const quiet = toPlain(t.ctx.homeSummary_(homeData(), courses, SUNDAY_8PM));
+  const q = toPlain(t.ctx.buildHomeTabRequests_('t.0', quiet, null, 468, {}));
+  const qt = q.filter((r) => r.insertText).map((r) => r.insertText.text).join('\n');
+  assert.match(qt, /7 assignments in the coming week · Nothing due this weekend\./);
+  assert.ok(!/Open the coming week/.test(qt));
+});
+
+test('home tab flips at the midnight runs: Saturday 12:10 AM is weekend, Monday 12:05 AM is a weekday', () => {
+  const t = setup();
+  const data = homeData();
+  const courses = t.ctx.plannerCourseList_(data);
+  const sat = toPlain(t.ctx.homeSummary_(data, courses, SATURDAY_0010));
+  assert.deepStrictEqual([sat.weekend, sat.heading], [true, 'COMING WEEK · MON OCT 12 – SUN OCT 18']);
+  const mon = toPlain(t.ctx.homeSummary_(data, courses, MONDAY_0005));
+  assert.deepStrictEqual([mon.weekend, mon.heading], [false, 'THIS WEEK · OCT 5 – OCT 11']);
+  // A run at 11:55 PM Friday would still be a weekday, which is why midnight's trigger runs 12:00–12:30 AM.
+  assert.strictEqual(toPlain(t.ctx.homeSummary_(data, courses, FRIDAY_2355)).weekend, false);
+});
+
+// Fake Docs tabs for the past-weeks and notes tests.
+const tcell = (text, link) => ({ content: [{ paragraph: { elements: [{ textRun: { content: text + '\n', textStyle: link ? { link: { url: link } } : {} } }] } }] });
+const trow = (u, status, note) => ({ tableCells: [tcell('Essay', u), tcell('x'), tcell('x'), tcell('x'), tcell(status), tcell(note)] });
+const weekTab = (id, title, rows) => ({
+  tabProperties: { tabId: id, title },
+  documentTab: { body: { content: rows ? [{ table: { columns: 6, tableRows: rows } }] : [] } },
+});
+
+test('week rollover: ended weeks move into "Past weeks" (created once, newest first), content untouched', () => {
+  const t = setup();
+  const parent = { tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [
+    weekTab('t.sep28', 'Week of Sep 28 – Oct 4, 2026', [trow(url(1), 'In progress', 'kept forever')]),
+    weekTab('t.oct5', 'Week of Oct 5 – Oct 11, 2026', [trow(url(2), 'Complete', 'also kept')]),
+    weekTab('t.oct12', 'Week of Oct 12 – Oct 18, 2026', [trow(url(3), 'Not started', '')]),
+  ] };
+  const doc = { tabs: [parent] };
+  const sent = [];
+  t.ctx.docsGet_ = () => doc;
+  t.ctx.docsBatchUpdate_ = (id, reqs) => { sent.push(...toPlain(reqs)); return { replies: [] }; };
+  t.ctx.addWeekChildTab_ = (id, parentId, title, index) => { sent.push({ addTab: { parentId, title, index } }); return 't.past'; };
+  // Monday Oct 12: the weeks of Sep 28 and Oct 5 have ended.
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-12'), 2);
+  assert.deepStrictEqual(sent, [
+    { addTab: { parentId: 't.0', title: 'Past weeks', index: 3 } },
+    { insertText: { text: 'Every past week, with the Status and Notes typed during it. AutoPlanner never changes these.', location: { tabId: 't.past', index: 1 } } },
+    { updateDocumentTabProperties: { tabProperties: { tabId: 't.sep28', parentTabId: 't.past', index: 0 }, fields: 'parentTabId,index' } },
+    { updateDocumentTabProperties: { tabProperties: { tabId: 't.oct5', parentTabId: 't.past', index: 0 }, fields: 'parentTabId,index' } },
+  ], 'only the folder is written to; the moved tabs only change parent (oldest moved first, so the newest ends on top)');
+  // The current week is not moved, and on a Sunday nothing has ended yet.
+  sent.length = 0;
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-11'), 1);
+  assert.deepStrictEqual(sent.map((r) => Object.keys(r)[0]), ['addTab', 'insertText', 'updateDocumentTabProperties']);
+  // With "Past weeks" already there, it isn't created again, and new week tabs go just above it.
+  const withPast = { tabProperties: parent.tabProperties, childTabs: [parent.childTabs[2], weekTab('t.past', 'Past weeks')] };
+  doc.tabs = [withPast];
+  sent.length = 0;
+  assert.strictEqual(t.ctx.archivePastWeeks_('DOC', 't.0', '2026-10-19'), 1);
+  assert.deepStrictEqual(sent, [{ updateDocumentTabProperties: { tabProperties: { tabId: 't.oct12', parentTabId: 't.past', index: 0 }, fields: 'parentTabId,index' } }]);
+  assert.strictEqual(t.ctx.nextChildTabInsertIndex_(withPast), 1);
+  assert.strictEqual(t.ctx.nextChildTabInsertIndex_(parent), 3);
+});
+
+test('notes follow an assignment to its new week; the typed value wins; past weeks are never read', () => {
+  const t = setup();
+  const X = url(7);
+  const parent = { childTabs: [
+    weekTab('t.a', 'Week of Oct 5 – Oct 11, 2026', [trow(X, 'In progress', 'Ask about the lab')]),
+    weekTab('t.b', 'Week of Oct 12 – Oct 18, 2026', [trow(X, 'Not started', '')]),
+    Object.assign(weekTab('t.past', 'Past weeks'), { childTabs: [weekTab('t.old', 'Week of Sep 28 – Oct 4, 2026', [trow(url(8), 'Complete', 'old')])] }),
+  ] };
+  let saved = toPlain(t.ctx.collectSavedData_(parent));
+  assert.deepStrictEqual(saved, { notes: { [X]: 'Ask about the lab' }, status: { [X]: 'In progress' } }, 'past week (url 8) not read');
+  // Both weeks edited: the most recent week's values win.
+  parent.childTabs[1] = weekTab('t.b', 'Week of Oct 12 – Oct 18, 2026', [trow(X, 'Complete', 'Turned in late')]);
+  saved = toPlain(t.ctx.collectSavedData_(parent));
+  assert.deepStrictEqual(saved, { notes: { [X]: 'Turned in late' }, status: { [X]: 'Complete' } });
+  // The rebuilt week that now holds the assignment gets its Status and Note.
+  const week = { week_label: 'Oct 12 – Oct 18', days: [{ day: 'Monday', assignments: [{ day: 'Monday', assignment: 'Essay', course: 'Biology',
+    due_time: '9:00 AM', priority: 'This Week', days_until_due: 7, due_date: '2026-10-12', week_start: '2026-10-12', url: X }] }] };
+  const reqs = toPlain(t.ctx.buildWeekTabRequests_('t.b', '2026-10-12', week, ['Biology'], { Biology: '#D9EAD3' }, saved, 468));
+  const texts = reqs.filter((r) => r.insertText).map((r) => r.insertText.text);
+  assert.strictEqual(texts.filter((x) => x === 'Complete').length, 2, 'By Class and By Day');
+  assert.strictEqual(texts.filter((x) => x === 'Turned in late').length, 2);
+});

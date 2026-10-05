@@ -664,7 +664,9 @@ function setupTriggers() {
     ScriptApp.newTrigger('scheduledRun')
       .timeBased()
       .atHour(hour)
-      .nearMinute(0)
+      // "Near minute 15" runs midnight's update between 12:00 and 12:30 AM, never just before
+      // midnight, so the home tab's weekend switch and the past-weeks move happen at that run.
+      .nearMinute(hour === 0 ? 15 : 0)
       .everyDays(1)
       .inTimezone(APP_TIME_ZONE)
       .create();
@@ -755,7 +757,7 @@ function runSelfTest_(keepToken) {
     }
   }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
-  var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent;
+  var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo;
   // Only the weeks AutoPlanner just wrote; tabs from earlier weeks are left as they were.
   var currentWeeks = function () {
     var titles = Object.keys(schedule.weeks || {}).map(function (k) {
@@ -880,19 +882,42 @@ function runSelfTest_(keepToken) {
       if (lines[0] !== expected.name) throw new Error('title is "' + lines[0] + '"');
       var updated = lines.filter(function (l) { return l.indexOf('Last updated ') === 0; })[0];
       if (!updated) throw new Error('no "Last updated" line');
-      var week = lines.filter(function (l) { return l.indexOf('THIS WEEK · ') === 0; })[0];
-      if (!week) throw new Error('no "THIS WEEK" line');
-      if (!lines.some(function (l) { return / this week · \d+ due today or tomorrow\.$|^Nothing is due this week\./.test(l); })) {
+      var week = lines.filter(function (l) { return l.indexOf(expected.heading) === 0; })[0];
+      if (!week) throw new Error('no "' + expected.heading + '" line (' + (expected.weekend ? 'weekend: coming week' : 'weekday: this week') + ')');
+      var summaryRe = expected.weekend
+        ? /( in the coming week|^Nothing is due in the coming week) · (\d+ due this weekend|Nothing due this weekend)\.$/
+        : / this week · \d+ due today or tomorrow\.$|^Nothing is due this week\./;
+      if (!lines.some(function (l) { return summaryRe.test(l); })) {
         throw new Error('no this-week summary line');
       }
       var table = (body.content || []).filter(function (el) { return el.table; })[0];
       var rows = table ? table.table.tableRows || [] : [];
       var header = rows.length ? (rows[0].tableCells || []).map(getCellText_).join(' | ') : '';
-      if (header !== HOME_CLASS_HEADERS.join(' | ')) throw new Error('class table header is "' + header + '"');
+      var wantHeader = HOME_CLASS_HEADERS.slice();
+      if (expected.weekend) wantHeader[1] = 'Coming week';
+      if (header !== wantHeader.join(' | ')) throw new Error('class table header is "' + header + '"');
       if (rows.length - 1 !== expected.rows.length) {
         throw new Error('class table has ' + (rows.length - 1) + ' classes, expected ' + expected.rows.length);
       }
       return expected.name + '; ' + updated + '; ' + week + '; ' + expected.rows.length + ' classes';
+    }) &&
+    check('Past weeks: ended weeks are filed under "Past weeks", newest first', function () {
+      var parent = findTabJsonById_(doc, findRootTabIdByTitle_(doc, PARENT_TAB_TITLE));
+      var today = Utilities.formatDate(new Date(), APP_TIME_ZONE, 'yyyy-MM-dd');
+      var stray = endedWeekTabs_(parent, today);
+      if (stray.length) throw new Error(stray.length + ' ended week tab(s) still outside "Past weeks"');
+      var kids = parent.childTabs || [];
+      var past = kids.filter(function (t) { return t.tabProperties.title === PAST_WEEKS_TITLE; })[0];
+      if (!past) return { skip: 'no past weeks yet' };
+      if (kids[kids.length - 1] !== past) throw new Error('"Past weeks" is not the last tab under CLC Planner');
+      if (tabBodyPlainText_(past.documentTab.body).indexOf(PAST_WEEKS_LINE) === -1) throw new Error('its line is missing');
+      var keys = (past.childTabs || []).map(function (t) { return weekKeyFromTabTitle_(t.tabProperties.title); });
+      var thisMonday = scheduleWeekStart_(today);
+      keys.forEach(function (k, i) {
+        if (!k || k >= thisMonday) throw new Error('"' + past.childTabs[i].tabProperties.title + '" does not belong in Past weeks');
+        if (i && k > keys[i - 1]) throw new Error('Past weeks are not newest first');
+      });
+      return keys.length + ' past week' + (keys.length === 1 ? '' : 's') + ', newest first';
     }) &&
     check('Doc: type a test Status and Note into a By Class table', function () {
       target = findFirstAssignmentRow_(docId);
@@ -902,24 +927,41 @@ function runSelfTest_(keepToken) {
       writeStatusAndNote_(docId, target, testStatus, testNote);
       return '"' + testStatus + '" and a note on "' + target.title + '"';
     }) &&
-    check('Doc: run an update (timed)', function () {
+    check('Doc: run an update with that assignment moved to another week (timed)', function () {
+      var from = weekKeyOfTab_(docsGet_(docId), target.tabId);
+      movedTo = Object.keys(schedule.weeks || {}).sort().filter(function (k) { return k !== from; })[0] || null;
       var t0 = Date.now();
-      writeDocWithRecovery_({ id: selfStudent.id, docId: docId }, schedule);
+      writeDocWithRecovery_(selfStudent, movedTo ? scheduleWithMovedAssignment_(schedule, target.url, movedTo) : schedule);
       var s = Math.round((Date.now() - t0) / 1000);
       if (s * 1000 > 6 * 60 * 1000 - APP_BATCH_BUDGET_MS) {
         throw new Error('took ' + s + ' s: too close to the 6-minute limit for the 2-minute batch budget');
       }
-      return 'took ' + s + ' s (first write ' + firstSeconds + ' s; each student must fit in the ' +
+      return (movedTo ? 'moved from the week of ' + from + ' to ' + movedTo + '; ' : 'only one week, so not moved; ') +
+        'took ' + s + ' s (first write ' + firstSeconds + ' s; each student must fit in the ' +
         (6 * 60 - APP_BATCH_BUDGET_MS / 1000) + ' s left after the batch budget)';
     }) &&
-    check('Status and Note survived in both tables', function () {
+    check('Status and Note followed the assignment to its new week', function () {
       var rows = findRowsByUrl_(docId, target.url);
       if (rows.length < 2) throw new Error('Expected the assignment in both tables, found ' + rows.length + '.');
       rows.forEach(function (r) {
+        if (movedTo && r.weekKey !== movedTo) throw new Error('found in the week of ' + r.weekKey + ', expected ' + movedTo);
         if (r.status !== testStatus) throw new Error(r.table + ' Status is "' + r.status + '"');
         if (r.note !== testNote) throw new Error(r.table + ' Notes is "' + r.note + '"');
       });
-      return 'By Class and By Day both kept them';
+      return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
+    }) &&
+    check('Doc: run a normal update (the real due date again)', function () {
+      var t0 = Date.now();
+      writeDocWithRecovery_(selfStudent, schedule);
+      return 'took ' + Math.round((Date.now() - t0) / 1000) + ' s';
+    }) &&
+    check('Status and Note came back with it', function () {
+      var rows = findRowsByUrl_(docId, target.url);
+      if (rows.length < 2) throw new Error('Expected the assignment in both tables, found ' + rows.length + '.');
+      rows.forEach(function (r) {
+        if (r.status !== testStatus || r.note !== testNote) throw new Error(r.table + ' lost them');
+      });
+      return 'week of ' + rows[0].weekKey;
     });
 
   if (!keepToken) {
@@ -995,19 +1037,54 @@ function findFirstAssignmentRow_(docId) {
   return found;
 }
 
-/** Every row (in every table) for this Canvas URL, with its Status and Notes text. */
+/** Every row for this Canvas URL in the current and upcoming week tabs, with its week and text. */
 function findRowsByUrl_(docId, url) {
   var rows = [];
-  eachTable_(docsGet_(docId), function (tabId, table) {
-    var kind = tableKind_(table);
-    (table.tableRows || []).forEach(function (row) {
-      var cells = row.tableCells || [];
-      if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
-        rows.push({ table: kind, status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
-      }
+  weekTabsOf_(docsGet_(docId)).forEach(function (w) {
+    var key = weekKeyFromTabTitle_(w.title);
+    var body = w.tab.documentTab && w.tab.documentTab.body;
+    ((body && body.content) || []).forEach(function (el) {
+      if (!el.table) return;
+      var kind = tableKind_(el.table);
+      (el.table.tableRows || []).forEach(function (row) {
+        var cells = row.tableCells || [];
+        if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
+          rows.push({ table: kind, weekKey: key, status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
+        }
+      });
     });
   });
   return rows;
+}
+
+/** The week ('yyyy-MM-dd' Monday) of the week tab with this ID, or null. */
+function weekKeyOfTab_(docJson, tabId) {
+  var w = weekTabsOf_(docJson).filter(function (x) { return x.tab.tabProperties.tabId === tabId; })[0];
+  return w ? weekKeyFromTabTitle_(w.title) : null;
+}
+
+/** A copy of the schedule with one assignment moved to the same weekday of another week. */
+function scheduleWithMovedAssignment_(schedule, url, toWeekKey) {
+  var copy = JSON.parse(JSON.stringify(schedule));
+  var moved = null;
+  Object.keys(copy.weeks).forEach(function (k) {
+    (copy.weeks[k].days || []).forEach(function (d) {
+      d.assignments = (d.assignments || []).filter(function (a) {
+        if (a.url !== url) return true;
+        moved = a;
+        return false;
+      });
+    });
+  });
+  if (!moved) throw new Error('Assignment not found in the schedule.');
+  var dayIndex = scheduleWeekdayIndex_(moved.due_date);
+  moved.due_date = scheduleAddDays_(toWeekKey, dayIndex);
+  moved.week_start = toWeekKey;
+  var today = Utilities.formatDate(new Date(), APP_TIME_ZONE, 'yyyy-MM-dd');
+  moved.days_until_due = scheduleDaysBetween_(today, moved.due_date);
+  moved.priority = schedulePriority_(moved.days_until_due);
+  copy.weeks[toWeekKey].days[dayIndex].assignments.push(moved);
+  return copy;
 }
 
 /** Calls fn(tabId, table) for every table in every tab. */
