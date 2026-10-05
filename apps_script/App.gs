@@ -861,6 +861,18 @@ function runSelfTest_(keepToken) {
       return false;
     }
   }
+  // Every check runs, even after a failure, unless a check it needs (by its id) didn't pass.
+  var passedIds = {};
+  var skippedForDeps = 0;
+  function step(id, needs, name, fn) {
+    var missing = needs.filter(function (n) { return !passedIds[n]; });
+    if (missing.length) {
+      skippedForDeps++;
+      Logger.log('SKIP ' + name + ': needs an earlier check that did not pass (' + missing.join(', ') + ')');
+      return;
+    }
+    if (check(name, fn)) passedIds[id] = true;
+  }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
   var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo, tabsBefore;
   // Only the weeks AutoPlanner just wrote; tabs from earlier weeks are left as they were.
@@ -871,19 +883,18 @@ function runSelfTest_(keepToken) {
     return weekTabsOf_(doc).filter(function (w) { return titles.indexOf(w.title) !== -1; });
   };
 
-  var ok =
-    check('TEST_CANVAS_TOKEN is set', function () {
+    step('token', [], 'TEST_CANVAS_TOKEN is set', function () {
       if (!token) throw new Error('Add the TEST_CANVAS_TOKEN Script Property first.');
-    }) &&
-    check('Shared folder is set', function () {
+    });
+    step('folder', [], 'Shared folder is set', function () {
       var f = getDocsFolder_();
       if (!f) throw new Error('DOCS_FOLDER_ID is not set.');
       return f.getName();
-    }) &&
-    check('You are in ALLOWED_USERS', function () {
+    });
+    step('allowed', [], 'You are in ALLOWED_USERS', function () {
       if (!isAllowedUser_(requireOwner_())) throw new Error('Add your email to ALLOWED_USERS.');
-    }) &&
-    check('Not authorized page: the CLC-staff message, and no data or actions', function () {
+    });
+    step('notauth', [], 'Not authorized page: the CLC-staff message, and no data or actions', function () {
       var stranger = 'not-on-the-list@pomfret.org';
       if (isAllowedUser_(stranger)) throw new Error(stranger + ' is allowed in');
       var html = notAuthorizedPage_(stranger).getContent();
@@ -891,8 +902,8 @@ function runSelfTest_(keepToken) {
       if (html.indexOf(want) === -1) throw new Error('the message is missing');
       if (/<script|google\.script\.run/.test(html)) throw new Error('the page has a script');
       return 'shows "' + want + '"';
-    }) &&
-    check('Canvas: fetch your assignments and classes', function () {
+    });
+    step('canvas', ['token'], 'Canvas: fetch your assignments and classes', function () {
       try {
         schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD, undefined, courseExcludeKeywords_());
       } catch (err) {
@@ -901,8 +912,8 @@ function runSelfTest_(keepToken) {
       }
       return schedule.student_full_name + ', ' + schedule.total_assignments + ' assignments in the next ' +
         APP_WEEKS_AHEAD + ' weeks, ' + schedule.courses.length + ' classes: ' + schedule.courses.join('; ');
-    }) &&
-    check('Doc: create or update yours in the shared folder', function () {
+    });
+    step('doc', ['folder', 'canvas'], 'Doc: create or update yours in the shared folder', function () {
       // If you're also on the student list, test that same Doc, so selfTest never makes a second
       // copy of your planner in the folder.
       var row = listStudents_().filter(function (s) {
@@ -917,8 +928,8 @@ function runSelfTest_(keepToken) {
       assertDocIsInFolder_(docId, getDocsFolder_());
       doc = docsGet_(docId, { includeTabsContent: true }); // full read: the Past weeks check looks inside
       return how + ' in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
-    }) &&
-    check('Every class has its own By Class table in every week', function () {
+    });
+    step('classes', ['doc'], 'Every class has its own By Class table in every week', function () {
       var weeks = currentWeeks();
       if (weeks.length !== Object.keys(schedule.weeks || {}).length) {
         throw new Error('Found ' + weeks.length + ' week tabs for the ' + Object.keys(schedule.weeks || {}).length + ' weeks with work due.');
@@ -932,8 +943,8 @@ function runSelfTest_(keepToken) {
         }
       });
       return weeks.length + ' week tabs × ' + plannerCourseList_(schedule).length + ' classes';
-    }) &&
-    check('A class with nothing due shows "' + NO_ASSIGNMENTS_TEXT + '"', function () {
+    });
+    step('empty', ['doc'], 'A class with nothing due shows "' + NO_ASSIGNMENTS_TEXT + '"', function () {
       var seen = 0;
       currentWeeks().forEach(function (w) {
         tablesOfTab_(w).forEach(function (t) {
@@ -945,8 +956,8 @@ function runSelfTest_(keepToken) {
         });
       });
       return seen ? seen + ' empty class tables, each with the single row' : { skip: 'every class had work due in every week' };
-    }) &&
-    check('Status is plain text (no symbols) everywhere', function () {
+    });
+    step('plain', ['doc'], 'Status is plain text (no symbols) everywhere', function () {
       var n = 0;
       currentWeeks().forEach(function (w) {
         tablesOfTab_(w).forEach(function (t) {
@@ -960,8 +971,8 @@ function runSelfTest_(keepToken) {
         });
       });
       return n + ' Status cells checked';
-    }) &&
-    check('All By Class tables share one set of column widths, By Day another, all full width', function () {
+    });
+    step('widths', ['doc'], 'All By Class tables share one set of column widths, By Day another, all full width', function () {
       var full = null;
       var sets = { 'By Class': {}, 'By Day': {} };
       currentWeeks().forEach(function (w) {
@@ -978,16 +989,16 @@ function runSelfTest_(keepToken) {
         if (n !== 1) throw new Error(k + ' tables have ' + n + ' different width sets');
       });
       return 'By Class ' + Object.keys(sets['By Class'])[0] + ' | By Day ' + Object.keys(sets['By Day'])[0] + ' (pt)';
-    }) &&
-    check('The Status/Notes help line is on every week tab', function () {
+    });
+    step('help', ['doc'], 'The Status/Notes help line is on every week tab', function () {
       var tabs = currentWeeks();
       tabs.forEach(function (w) {
         var body = w.tab && w.tab.documentTab && w.tab.documentTab.body;
         if (!body || tabBodyPlainText_(body).indexOf(STATUS_HELP_LINE) === -1) throw new Error('missing on "' + w.title + '"');
       });
       return tabs.length + ' tabs';
-    }) &&
-    check('Home tab: name, last updated, this-week summary and class table', function () {
+    });
+    step('home', ['doc'], 'Home tab: name, last updated, this-week summary and class table', function () {
       var home = findTabJsonById_(doc, findRootTabIdByTitle_(doc, PARENT_TAB_TITLE));
       var body = home && home.documentTab && home.documentTab.body;
       if (!body) throw new Error('No CLC Planner tab.');
@@ -1014,8 +1025,8 @@ function runSelfTest_(keepToken) {
         throw new Error('class table has ' + (rows.length - 1) + ' classes, expected ' + expected.rows.length);
       }
       return expected.name + '; ' + updated + '; ' + week + '; ' + expected.rows.length + ' classes';
-    }) &&
-    check('Past weeks: ended weeks are filed under "Past weeks", newest first', function () {
+    });
+    step('past', ['doc'], 'Past weeks: ended weeks are filed under "Past weeks", newest first', function () {
       var parent = findTabJsonById_(doc, findRootTabIdByTitle_(doc, PARENT_TAB_TITLE));
       var today = Utilities.formatDate(new Date(), APP_TIME_ZONE, 'yyyy-MM-dd');
       var stray = endedWeekTabs_(parent, today);
@@ -1035,16 +1046,16 @@ function runSelfTest_(keepToken) {
       (past.childTabs || []).forEach(function (t) { grayCells += assertPriorityGray_(t); });
       return keys.length + ' past week' + (keys.length === 1 ? '' : 's') + ', newest first; ' +
         grayCells + ' Priority cells gray';
-    }) &&
-    check('Doc: type a test Status and Note into a By Class table', function () {
+    });
+    step('type', ['doc'], 'Doc: type a test Status and Note into a By Class table', function () {
       target = findFirstAssignmentRow_(docId);
       if (!target) throw new Error('No assignments in the next ' + APP_WEEKS_AHEAD + ' weeks to test with.');
       testStatus = getCellText_(target.status) === 'In progress' ? 'Complete' : 'In progress';
       testNote = 'selfTest note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
       writeStatusAndNote_(docId, target, testStatus, testNote);
       return '"' + testStatus + '" and a note on "' + target.title + '"';
-    }) &&
-    check('Doc: run an update with that assignment moved to another week (timed)', function () {
+    });
+    step('moved', ['type'], 'Doc: run an update with that assignment moved to another week (timed)', function () {
       var from = weekKeyOfTab_(docsGet_(docId), target.tabId);
       movedTo = Object.keys(schedule.weeks || {}).sort().filter(function (k) { return k !== from; })[0] || null;
       var t0 = Date.now();
@@ -1056,8 +1067,8 @@ function runSelfTest_(keepToken) {
       return (movedTo ? 'moved from the week of ' + from + ' to ' + movedTo + '; ' : 'only one week, so not moved; ') +
         'took ' + s + ' s (first write ' + firstSeconds + ' s; each student must fit in the ' +
         (6 * 60 - APP_BATCH_BUDGET_MS / 1000) + ' s left after the batch budget)';
-    }) &&
-    check('Status and Note followed the assignment to its new week', function () {
+    });
+    step('followed', ['moved'], 'Status and Note followed the assignment to its new week', function () {
       var rows = findRowsByUrl_(docId, target.url);
       if (rows.length < 2) throw new Error('Expected the assignment in both tables, found ' + rows.length + '.');
       rows.forEach(function (r) {
@@ -1066,14 +1077,14 @@ function runSelfTest_(keepToken) {
         if (r.note !== testNote) throw new Error(r.table + ' Notes is "' + r.note + '"');
       });
       return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
-    }) &&
-    check('Doc: run a normal update (the real due date again)', function () {
+    });
+    step('normal', ['doc'], 'Doc: run a normal update (the real due date again)', function () {
       tabsBefore = weekTabsOf_(docsGet_(docId)).map(function (w) { return { title: w.title, id: w.tab.tabProperties.tabId }; });
       var t0 = Date.now();
       writeDocWithRecovery_(selfStudent, schedule);
       return 'took ' + Math.round((Date.now() - t0) / 1000) + ' s';
-    }) &&
-    check('Existing week tabs were rebuilt in place: same titles and order, all titles unique, no "(updating)" tab left', function () {
+    });
+    step('rebuilt', ['normal'], 'Existing week tabs were rebuilt in place: same titles and order, all titles unique, no "(updating)" tab left', function () {
       var now = docsGet_(docId);
       var after = weekTabsOf_(now).map(function (w) { return { title: w.title, id: w.tab.tabProperties.tabId }; });
       var names = function (list) { return list.map(function (w) { return w.title; }).join(' | '); };
@@ -1092,16 +1103,16 @@ function runSelfTest_(keepToken) {
       var rebuilt = after.filter(function (w, i) { return titles.indexOf(w.title) !== -1 && w.id !== tabsBefore[i].id; }).length;
       if (!rebuilt) throw new Error('no existing week tab was rebuilt');
       return rebuilt + ' existing week tab' + (rebuilt === 1 ? '' : 's') + ' rebuilt; ' + after.length + ' tabs in the same order';
-    }) &&
-    check('Status and Note came back with it', function () {
+    });
+    step('cameback', ['type', 'normal'], 'Status and Note came back with it', function () {
       var rows = findRowsByUrl_(docId, target.url);
       if (rows.length < 2) throw new Error('Expected the assignment in both tables, found ' + rows.length + '.');
       rows.forEach(function (r) {
         if (r.status !== testStatus || r.note !== testNote) throw new Error(r.table + ' lost them');
       });
       return 'week of ' + rows[0].weekKey;
-    }) &&
-    check('A Doc in the trash, or gone, is never written to (so the student gets a fresh Doc)', function () {
+    });
+    step('trashed', ['folder'], 'A Doc in the trash is never written to (so the student gets a fresh Doc)', function () {
       // A throwaway Doc in your My Drive, trashed at once; Google empties the trash after 30 days.
       var temp = DocumentApp.create('AutoPlanner selfTest: trashed-Doc check (safe to delete)');
       var file = DriveApp.getFileById(temp.getId());
@@ -1116,12 +1127,25 @@ function runSelfTest_(keepToken) {
         return false;
       };
       if (!refused(temp.getId())) throw new Error('a trashed Doc was opened for writing');
-      // A made-up ID shaped like a real one (44 characters), for a Doc that doesn't exist.
+      return 'refused before any edit; updateOneStudent_ then makes a new Doc and tells staff on the row ' +
+        '(the throwaway Doc is in your Drive trash; Google deletes it after 30 days)';
+    });
+    step('deleted', [], 'A Doc deleted for good: Drive\'s message (shown as is)', function () {
+      // A made-up ID shaped like a real one, for a Doc that doesn't exist. Drive's own words are
+      // logged so they can be checked; only these words make AutoPlanner treat a Doc as deleted.
       var missing = ('1' + Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '').substring(0, 44);
-      if (!refused(missing)) throw new Error('a missing Doc was not reported as gone');
-      return 'both refused before any edit; updateOneStudent_ then makes a new Doc and tells staff on the row';
-    }) &&
-    check("Doc reads skip Past weeks' content, so updates stay fast all year", function () {
+      var said = '';
+      try {
+        DriveApp.getFileById(missing);
+      } catch (err) {
+        said = String(err && err.message || err);
+      }
+      if (DRIVE_NOT_FOUND.test(said)) return 'recognized as deleted: "' + said + '"';
+      return { skip: 'Drive said "' + said + '", which AutoPlanner does not treat as deleted, so a Doc ' +
+        'deleted for good (not just trashed) would show "Google Drive didn\'t answer" on its row. Trashed Docs ' +
+        'are fine (check above). Send this line to the club.' };
+    });
+    step('reads', ['doc'], "Doc reads skip Past weeks' content, so updates stay fast all year", function () {
       var short = docsGet_(docId);
       if (docsGetFieldsRejected_) {
         throw new Error('Google refused the shorter read, so AutoPlanner reads everything. Updates still work but get slower as Past weeks grows.');
@@ -1143,9 +1167,10 @@ function runSelfTest_(keepToken) {
   }
   var failed = results.filter(function (r) { return !r; }).length;
   Logger.log(
-    ok && !failed
+    !failed && !skippedForDeps
       ? 'selfTest: ALL ' + results.length + ' CHECKS PASSED'
-      : 'selfTest: FAILED (' + failed + ' failed, ' + (results.length - failed) + ' passed; later checks skipped)'
+      : 'selfTest: FAILED (' + failed + ' failed, ' + (results.length - failed) + ' passed' +
+        (skippedForDeps ? ', ' + skippedForDeps + ' not run because a check they need failed' : '') + ')'
   );
 }
 

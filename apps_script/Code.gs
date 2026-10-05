@@ -268,6 +268,7 @@ function savedDocFile_(docId) {
     }
   }
   if (!file && !DRIVE_NOT_FOUND.test(String(lastErr))) {
+    console.warn('Drive error for Doc ' + docId + ' (treated as a hiccup): ' + lastErr); // Drive's own words
     throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
   }
   if (!file) throw new Error(DOC_GONE_PREFIX + ' (' + docId + '): ' + lastErr);

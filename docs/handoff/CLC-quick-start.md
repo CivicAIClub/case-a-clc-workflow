@@ -79,6 +79,7 @@ The message next to it says what happened. Most fix themselves:
 Two more messages can appear on the page:
 
 - **"Their Doc was deleted, so AutoPlanner made a new one."** on a row: someone deleted the student's Doc, so AutoPlanner started a fresh one in the shared folder. Status and Notes typed in the old Doc stay in the owner's Drive trash for 30 days. This message goes away after a week.
+- If a student's Doc is deleted and their row says "Google Drive didn't answer", contact Cayden Auyang or Luke Ryan.
 - **"Automatic updates haven't finished since …"** near **Update all students now**: the automatic updates have stopped. This usually means the account that owns AutoPlanner was closed or lost its permissions. Contact us, or follow "Moving AutoPlanner to a new owner" below.
 
 ### Moving AutoPlanner to a new owner (before Cayden's account closes)
