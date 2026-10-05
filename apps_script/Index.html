@@ -241,8 +241,8 @@
     .s-name { grid-area: name; font-weight: var(--fw-regular); line-height: 1.3; overflow-wrap: anywhere; }
     .s-name .student-label { color: var(--ink-2); font-weight: var(--fw-light); }
     .s-token { grid-area: token; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0; }
-    /* CLC teacher: a small labeled dropdown under each student's name, in the Add form, and the
-       "Show" filter above the list. Native selects with the form fields' edge. */
+    /* CLC teacher: a dropdown on each row (its own column; labeled on phones), in the Add form, and
+       the "Show" filter above the list. Native selects with the form fields' edge. */
     .teacher-select {
       font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: var(--fw-regular); color: var(--ink);
       padding: 6px 10px; min-height: 32px; border: 1px solid var(--field); border-radius: 0; background: var(--mark-text);
@@ -512,6 +512,18 @@
       nt.innerHTML = teacherOptions(keep);
     }
 
+    function shownByFilter(s) {
+      if (!state.filter) return true;
+      return state.filter === '-' ? !s.teacher : s.teacher === state.filter;
+    }
+
+    /** The Add form's teacher follows Show, so a teacher adding a student while viewing their own
+        students gets them in their own list. */
+    function newTeacherFromFilter() {
+      var nt = document.getElementById('newTeacher');
+      nt.value = state.filter && state.filter !== '-' ? state.filter : '';
+    }
+
     function studentTitle(s) {
       return esc(s.name) + (s.label ? ' <span class="student-label">· ' + esc(s.label) + '</span>' : '');
     }
@@ -519,10 +531,7 @@
     function renderStudents() {
       var root = document.getElementById('studentList');
       document.getElementById('emptyNote').hidden = state.students.length > 0;
-      var shown = state.students.filter(function (s) {
-        if (!state.filter) return true;
-        return state.filter === '-' ? !s.teacher : s.teacher === state.filter;
-      });
+      var shown = state.students.filter(shownByFilter);
       var total = state.students.length === 1 ? '1 student' : state.students.length + ' students';
       document.getElementById('studentCount').textContent =
         shown.length === state.students.length ? total : shown.length + ' of ' + total;
@@ -773,8 +782,12 @@
       call('addStudent', tokenEl.value, labelEl.value, teacherEl.value).then(function (res) {
         tokenEl.value = '';
         labelEl.value = '';
-        teacherEl.value = '';
         replaceStudent(res.student);
+        if (!shownByFilter(res.student)) {
+          state.filter = '';
+          document.getElementById('teacherFilter').value = '';
+        }
+        newTeacherFromFilter();
         render();
         if (state.run) {
           setStatus('addStatus', 'success', res.message + ' The update that’s running now doesn’t include them; click Update on their row when it finishes.');
@@ -794,6 +807,7 @@
 
     document.getElementById('teacherFilter').addEventListener('change', function (e) {
       state.filter = e.target.value;
+      newTeacherFromFilter();
       renderStudents();
     });
 
@@ -804,6 +818,7 @@
       var me = String(s.user || '').toLowerCase();
       if (state.teachers.some(function (t) { return t.email === me; })) state.filter = me;
       renderTeacherControls();
+      if (state.teachers.length) newTeacherFromFilter();
       document.getElementById('userChip').innerHTML = 'Signed in as <span class="who-v">' + esc(s.user) + '</span>';
       var note = document.getElementById('autoNote');
       if (s.automaticUpdatesOn && s.updatesStaleSince) {

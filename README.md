@@ -22,7 +22,9 @@ CLC staff open one web page, signed in with their Pomfret Google account. They a
 - The **CLC Planner** tab is a one-page summary of this week by class. On Saturday and Sunday (New York time) it summarizes the coming week.
 - Staff type **Status** (Not started, In progress or Complete, as plain text) and **Notes**. Both are kept across updates, keyed by the assignment's Canvas link, and follow an assignment whose due date moves to another week.
 - Work due earlier in the week stays in its week as **Past due** (gray) until the week ends. Then the tab moves into a **Past weeks** tab, newest first, and its Priority cells turn gray in the same step. After that AutoPlanner never edits, rebuilds or deletes past weeks, and its Doc reads leave their content out so updates stay fast all year.
-- If a student's Doc is deleted or in the trash, AutoPlanner never writes to it: it makes a fresh Doc in the shared folder and says so on the student's row.
+- At the bottom of every week tab, an **Added by staff** table (Assignment, Class, Day, Status, Notes) holds work that isn't on Canvas. AutoPlanner writes it back exactly, formatting included, on every update, and it moves into Past weeks with its week. The CLC Planner tab counts its rows.
+- **CLC teachers** (optional, the `CLC_TEACHERS` Script Property): each teacher gets a folder inside the shared folder, named with their full name. A student's CLC teacher, picked on the page, decides which folder their Doc is in. Moving it is the same Doc and link. A Doc dragged between folders in Drive changes the student's teacher at the next page load or update. The page has a **Show** filter, and a signed-in CLC teacher starts on their own students.
+- If a student's Doc is deleted or in the trash, AutoPlanner never writes to it: it makes a fresh Doc in the shared folder (or the student's teacher's folder) and says so on the student's row.
 - Each row shows when the student's Canvas token expires (Canvas reports it; Pomfret limits tokens to about 90 days), and the page warns 14 days ahead.
 - Updates run automatically every day at about 7 pm and just after midnight (New York time), or on demand from the page.
 
@@ -40,11 +42,11 @@ Time-driven triggers (7 pm, midnight) → App.gs → same path, in batches
 
 - **Web app:** executes as the owner (`USER_DEPLOYING`) and is open to **Anyone within Pomfret School** (`DOMAIN`). On top of that, every function the page can call checks the visitor's email (`Session.getActiveUser()`) against the `ALLOWED_USERS` Script Property.
 - **Storage:** the student list, tokens and run summaries live in **Script Properties**, one property per student, with writes protected by `LockService`. Tokens never leave the server: the page only ever gets the last 4 characters, and tokens are never logged or put in messages.
-- **Long runs:** Apps Script stops any run at the account's time limit (6 minutes by default; `measureTimeLimit` measures the real one and saves it in `RUNTIME_LIMIT_SECONDS`). One student's Doc takes about 2–4 minutes.
-  - A batch starts no new student after 2 minutes, nor one whose last update time wouldn't fit in what's left; it then schedules `continueRun` a minute later.
+- **Long runs:** Apps Script stops any run at the account's time limit (6 minutes by default; `measureTimeLimit` measures the real one and saves it in `RUNTIME_LIMIT_SECONDS`; the current owner's is 30 minutes). One student's Doc takes about 1.5–4 minutes, depending on how fast Google Docs is that day; reading the Doc is most of it.
+  - An automatic batch (7 pm, midnight, `continueRun`) keeps starting students until 5 minutes short of the limit (25 minutes at most). A batch started from the page stops starting students after 2 minutes, so the page hears back quickly. Either way, a batch never starts a student whose last update time (plus 25%) wouldn't fit in what's left; it schedules `continueRun` a minute later instead.
   - Inside an update, a week is rebuilt only if it fits before the limit; otherwise the update stops cleanly between weeks and the rest is done next time.
   - A safety trigger, set to fire after the limit has passed, resumes a run whose batch was cut off.
-- **Existing Docs:** when a student is added again, AutoPlanner finds their "First Last - CLC Assignments" Doc in the shared folder and reuses it.
+- **Existing Docs:** when a student is added again, AutoPlanner finds their "First Last - CLC Assignments" Doc in the shared folder or a teacher's folder inside it, and reuses it.
 
 ## Repository layout
 
@@ -90,18 +92,20 @@ Only needed for a brand-new project, for example to move AutoPlanner to a CLC st
    | Property | Required | What it is |
    |---|---|---|
    | `ALLOWED_USERS` | yes | Comma-separated Pomfret emails allowed to use the page. Nobody else gets in. |
-   | `DOCS_FOLDER_ID` | yes | The shared folder's ID or URL. New Docs are created there, and only Docs inside it can be updated. |
+   | `DOCS_FOLDER_ID` | yes | The shared folder's ID or URL. New Docs are created there, and only Docs inside it (or a teacher's folder inside it) can be updated. |
+   | `CLC_TEACHERS` | no | The CLC teachers, as `Full Name <email>` with commas between them, for example `Pat Example <pexample@pomfret.org>, Sam Sample <ssample@pomfret.org>`. Each gets a folder inside the shared folder. Empty: no teacher column, and every Doc stays in the shared folder. |
    | `CANVAS_BASE_URL` | no | Defaults to `https://pomfret.instructure.com`. |
    | `COURSE_EXCLUDE` | no | Comma-separated keywords, such as `advisory, dorm`. Classes whose name contains one are left out of the Docs entirely. Empty: every class is shown. |
    | `TEST_CANVAS_TOKEN` | only for `selfTest` | Your own Canvas token. `selfTest` deletes it when it finishes; `selfTestKeepToken` keeps it. |
 
-   Properties named `student.*`, `token.*`, `busy.*`, `run.*` and `trigger.*` are written by the app. Don't edit them by hand.
+   Properties named `student.*`, `token.*`, `busy.*`, `run.*`, `trigger.*`, `written.*`, `probe.*` and `teacherFolders` are written by the app, and so is `RUNTIME_LIMIT_SECONDS` (see `measureTimeLimit`). Don't edit them by hand.
 4. In the editor, open **App.gs** (the function menu only lists functions from the open file). Run **setupTriggers** and approve the permissions. It installs the daily updates and logs a setup check.
-5. Run **selfTest** (about 4 minutes). Don't open or edit your planner Doc while it runs. Using your own token, it:
+5. Run **selfTest** (about 5 minutes). Don't open or edit your planner Doc while it runs. Using your own token, it:
    - fetches your Canvas assignments
    - creates or reuses your Doc in the folder, and holds your student row so no other update writes it meanwhile
-   - types a test Status and Note, moves that assignment to another week and back with two updates, and checks both followed it, in both tables, in exactly one week tab
-   - checks the layout after a full update, then puts the test assignment's Status and Note back
+   - types a test Status and Note, and a row in **Added by staff**, moves that assignment to another week and back with two updates, and checks both followed it, in both tables, in exactly one week tab, and that the staff row came through exactly
+   - checks the layout after a full update, then puts the test assignment's Status and Note back and clears the staff row
+   - with at least 2 CLC teachers set, moves your Doc between teacher folders (from the page and as a Drive drag-in), checks the folder lock, and puts your row back how it was
 
    Every line of the log should say `PASS` (a `SKIP` says why it skipped).
 
@@ -128,6 +132,7 @@ node --test tests/*.test.js
   - Doc reuse
   - batching and triggers
   - the shared-folder rules and Status preservation in `Code.gs`
+  - the "Added by staff" table and CLC teacher folders (against a pretend Docs API that enforces Google's rules)
   - the Canvas client
   - a week-grouping golden file: the original Python version's output, plus this week's past-due work
 - CI runs them, plus a syntax check of every `.gs` file and of the script in `Index.html`, on every PR.
@@ -142,14 +147,14 @@ A test fails if a new public function appears.
 ## Limits
 
 Google Workspace limits that matter here:
-- the per-run time limit (6 minutes by default; measure it with `measureTimeLimit`)
+- the per-run time limit (6 minutes by default, 30 minutes for the current owner; measure it with `measureTimeLimit`)
 - 6 hours of trigger runtime per day
 - 100,000 Canvas requests per day
 - 20 triggers per user per script
 - Script Properties: 9 KB per value and 500 KB in total, so one property per student means hundreds fit
 - the Docs API's per-minute write limit (writes are batched, paced and retried)
 
-Everything belongs to the owner's account: the script, its triggers, the stored tokens and the Docs. Anyone with edit access to the script project can read the tokens, so don't share the project. Before the owner graduates, move the project, the folder and the Docs to a CLC staff account: step by step in the [quick start's "Long-term care"](docs/handoff/CLC-quick-start.md#7-long-term-care), including running `setupTriggers` again as the new owner.
+Everything belongs to the owner's account: the script, its triggers, the stored tokens and the Docs. Anyone with edit access to the script project can read the tokens, so don't share the project. Before the owner graduates, move the project, the folder and the Docs to a CLC staff account: step by step in the [quick start's "Long-term care"](docs/handoff/CLC-quick-start.md#8-long-term-care), including running `setupTriggers` again as the new owner.
 
 ## Getting a Canvas API token (for each student)
 
