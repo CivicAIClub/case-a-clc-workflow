@@ -549,6 +549,33 @@ test('selfTest runs every check after a failure (unless it needs the failed one)
   assert.match(u.sb.logs.join('\n'), /SKIP A Doc deleted for good: Drive's message \(shown as is\): Drive said "Invalid argument: id"/);
 });
 
+test("selfTest holds your row: updates skip it meanwhile, and selfTest stops early if an update is already running on it", () => {
+  const t = setup({ TEST_CANVAS_TOKEN: TOKEN_A });
+  const { student } = addAs(t, STAFF, TOKEN_A, 'Demo');
+  t.svc.setActive(OWNER);
+  let skippedDuring = null;
+  t.ctx.writeDocWithRecovery_ = () => {
+    if (skippedDuring === null) skippedDuring = toPlain(t.ctx.updateOneStudent_(student.id));
+    return 'DOC-SELF';
+  };
+  t.ctx.assertDocIsInFolder_ = () => {};
+  t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [] }] });
+  t.ctx.selfTestKeepToken();
+  assert.match(t.sb.logs.join('\n'), /PASS Your row is held for selfTest/);
+  assert.strictEqual(skippedDuring.skipped, true, 'an update during selfTest skips the row');
+  assert.ok(!t.svc.props['busy.' + student.id], 'released at the end');
+  // An update is already running on the row: selfTest stops before touching the Doc.
+  t.svc.props['busy.' + student.id] = String(Date.now());
+  const u = setup({ TEST_CANVAS_TOKEN: TOKEN_A });
+  t.sb.logs.length = 0;
+  let wrote = false;
+  t.ctx.writeDocWithRecovery_ = () => { wrote = true; return 'DOC-SELF'; };
+  t.ctx.selfTestKeepToken();
+  assert.match(t.sb.logs.join('\n'), /FAIL Your row is held for selfTest[^\n]*: Your row is being updated right now\. Run selfTest again in a few minutes\./);
+  assert.strictEqual(wrote, false);
+  void u;
+});
+
 test("selfTest's gray check: passes when a past week's Priority cells are gray, fails when one isn't", () => {
   const t = setup();
   const cell = (text, bg) => ({

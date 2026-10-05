@@ -196,7 +196,10 @@ function docsGet_(docId, opts) {
  * @returns {*} API reply (e.g. for addDocumentTab replies)
  */
 function docsBatchUpdate_(docId, requests) {
-  if (!requests || !requests.length) return null;
+  // Docs refuses an insertText with no text ("Insert text requests must specify text to insert"),
+  // and inserting nothing changes nothing, so those are left out.
+  requests = (requests || []).filter(function (r) { return !(r && r.insertText && !r.insertText.text); });
+  if (!requests.length) return null;
   if (requests.length > 500) {
     throw new Error('docsBatchUpdate_: chunk > 500 requests');
   }
@@ -249,7 +252,7 @@ function getDocsFolder_() {
 var DOC_GONE_PREFIX = 'Could not open the saved Google Doc';
 // What Drive says when a file or folder doesn't exist (or this account can't see it). Any other
 // error is a hiccup, and must never make AutoPlanner start a new Doc.
-var DRIVE_NOT_FOUND = /No item with the given ID|Unexpected error while getting the method or property get(File|Folder)ById|do not have permission|Access denied/i;
+var DRIVE_NOT_FOUND = /No item with the given ID|Invalid file or folder ID|Unexpected error while getting the method or property get(File|Folder)ById|do not have permission|Access denied/i;
 
 /**
  * The saved Doc's Drive file. Throws an error starting with DOC_GONE_PREFIX when the Doc is in the
@@ -388,7 +391,7 @@ function upsertPlannerDocument_(data) {
       );
     }
 
-    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved);
+    fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, beforeParent);
     sleepDocsChunkGap_();
   });
 
@@ -734,6 +737,38 @@ function collectSavedData_(parentTabJson, written) {
   return result;
 }
 
+/**
+ * Status and Notes typed into a week tab between two reads of it: { status: {url}, notes: {url} }
+ * with the new values. Rows that weren't in the first read don't count. If both tables changed, By
+ * Class wins.
+ */
+function changedSince_(beforeTab, nowTab) {
+  var before = {};
+  eachAssignmentCopy_(beforeTab, function (url, kind, status, note) {
+    before[kind + ' ' + url] = { status: status, note: note };
+  });
+  var now = [];
+  eachAssignmentCopy_(nowTab, function (url, kind, status, note) {
+    now.push({ url: url, kind: kind, status: status, note: note });
+  });
+  var out = { status: {}, notes: {} };
+  now.sort(function (a, b) { return (a.kind === 'day' ? 0 : 1) - (b.kind === 'day' ? 0 : 1); }).forEach(function (c) {
+    var b = before[c.kind + ' ' + c.url];
+    if (!b) return;
+    if (c.status !== b.status) out.status[c.url] = c.status;
+    if (c.note !== b.note) out.notes[c.url] = c.note;
+  });
+  return out;
+}
+
+/** Puts changes from changedSince_ into `saved`; gives back how many values changed. */
+function applyChanges_(saved, changes) {
+  var n = 0;
+  Object.keys(changes.status).forEach(function (u) { saved.status[u] = changes.status[u]; n++; });
+  Object.keys(changes.notes).forEach(function (u) { saved.notes[u] = changes.notes[u]; n++; });
+  return n;
+}
+
 /** Calls fn(url, 'class' | 'day', status, note) for every assignment row in a week tab. */
 function eachAssignmentCopy_(tabJson, fn) {
   var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
@@ -755,9 +790,10 @@ function eachAssignmentCopy_(tabJson, fn) {
 }
 
 // ---- What AutoPlanner wrote last time, per Doc (one Script Property, "written.<docId>") ----------
-// { "<assignment id>": { w: week, s: Status, n: fingerprint of Notes } }. About 30 characters per
-// assignment, so a few hundred fit; if it ever doesn't fit, it's dropped and the rules above still
-// apply without it.
+// { "<assignment id>": "<week yyyymmdd><Status><Notes fingerprint>" }, e.g. "20261005I1x9k2" for the
+// week of Oct 5, "In progress" and a note. The three usual Statuses are one letter (N, I, C); any
+// other text is kept between "|"s. About 28 characters per assignment. The record only covers the
+// current and upcoming weeks, so it doesn't grow over the year.
 
 function assignmentKey_(url) {
   var m = /\/assignments\/(\d+)/.exec(String(url || ''));
@@ -775,19 +811,78 @@ function noteFingerprint_(note) {
   return s ? h.toString(36) : '';
 }
 
-function readWritten_(docId) {
-  try {
-    return JSON.parse(PropertiesService.getScriptProperties().getProperty('written.' + docId) || '{}') || {};
-  } catch (e) {
-    return {};
-  }
+var WRITTEN_STATUS_CODES = { 'Not started': 'N', 'In progress': 'I', Complete: 'C' };
+
+/** "<week yyyymmdd><Status code><Notes fingerprint>" from { w, s, n }. */
+function encodeWritten_(record) {
+  var code = WRITTEN_STATUS_CODES[record.s] || '|' + String(record.s || '').replace(/\|/g, '') + '|';
+  return String(record.w || '').replace(/-/g, '') + code + (record.n || '');
 }
 
+/** { w, s, n } from an encoded record (or a record in the first, longer format). */
+function decodeWritten_(v) {
+  if (v && typeof v === 'object') return v;
+  var str = String(v || '');
+  var w = str.slice(0, 4) + '-' + str.slice(4, 6) + '-' + str.slice(6, 8);
+  var rest = str.slice(8);
+  if (rest.charAt(0) === '|') {
+    var end = rest.indexOf('|', 1);
+    return { w: w, s: rest.slice(1, end), n: rest.slice(end + 1) };
+  }
+  var names = { N: 'Not started', I: 'In progress', C: 'Complete' };
+  return { w: w, s: names[rest.charAt(0)] || STATUS_DEFAULT, n: rest.slice(1) };
+}
+
+// A Script Property holds 9 KB, so a big record is split over "written.<docId>", "written.<docId>.1"
+// and so on (about 290 assignments each).
+var WRITTEN_PART_CHARS = 8000;
+var WRITTEN_MAX_PARTS = 10;
+
+function writtenPartKey_(docId, i) {
+  return 'written.' + docId + (i ? '.' + i : '');
+}
+
+/** { "<assignment id>": { w, s, n } } for this Doc. */
+function readWritten_(docId) {
+  var props = PropertiesService.getScriptProperties();
+  var out = {};
+  for (var i = 0; i < WRITTEN_MAX_PARTS; i++) {
+    var json = props.getProperty(writtenPartKey_(docId, i));
+    if (!json) break;
+    var raw;
+    try {
+      raw = JSON.parse(json) || {};
+    } catch (e) {
+      raw = {};
+    }
+    Object.keys(raw).forEach(function (k) { out[k] = decodeWritten_(raw[k]); });
+  }
+  return out;
+}
+
+/** Saves { "<assignment id>": { w, s, n } } in the compact form, in as many parts as it needs. */
 function saveWritten_(docId, map) {
   var props = PropertiesService.getScriptProperties();
-  var json = JSON.stringify(map);
-  if (json.length > 8500) props.deleteProperty('written.' + docId);
-  else props.setProperty('written.' + docId, json);
+  var parts = [{}];
+  var size = 2;
+  Object.keys(map).forEach(function (k) {
+    var v = encodeWritten_(map[k]);
+    var add = k.length + v.length + 6;
+    if (size + add > WRITTEN_PART_CHARS) {
+      parts.push({});
+      size = 2;
+    }
+    parts[parts.length - 1][k] = v;
+    size += add;
+  });
+  if (parts.length > WRITTEN_MAX_PARTS) {
+    console.warn('The "last written" record for ' + docId + ' needs ' + parts.length + ' parts; not kept.');
+    parts = [];
+  }
+  for (var i = 0; i < WRITTEN_MAX_PARTS; i++) {
+    if (i < parts.length) props.setProperty(writtenPartKey_(docId, i), JSON.stringify(parts[i]));
+    else props.deleteProperty(writtenPartKey_(docId, i));
+  }
 }
 
 /** Records one value as written (selfTest uses it after putting a test value back). */
@@ -1375,11 +1470,16 @@ function tabBodyHasHeavyContent_(tabJson) {
  * Writes one week tab from scratch: a heading, the help line, one table per class, and the By Day
  * table. The tab has just been created or cleared, so it holds one empty paragraph at index 1.
  */
-function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved) {
+function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, snapshot) {
   var docProbe = docsGet_(docId);
   var tabProbe = findTabJsonById_(docProbe, tabId);
   // Status and Notes from all current and upcoming weeks (see collectSavedData_), or this tab's own.
   var savedData = saved || readExistingDataFromTab_(tabProbe);
+  // Anything typed into this tab since the update started (`snapshot` is the CLC Planner tab as it
+  // was then) wins. `saved` is shared by the whole update, so it also follows a moved assignment.
+  var before = snapshot ? findTabJsonById_({ tabs: [snapshot] }, tabId) : null;
+  if (before && tabProbe) applyChanges_(savedData, changedSince_(before, tabProbe));
+  var width = tabContentWidth_(tabProbe);
 
   var parentJson = findTabJsonById_(docProbe, parentTabId);
   var oldTabId = null;
@@ -1399,11 +1499,20 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   }
 
   var requests = buildWeekTabRequests_(
-    tabId, weekKey, weekData, courses, colorMap, savedData, tabContentWidth_(tabProbe)
+    tabId, weekKey, weekData, courses, colorMap, savedData, width
   );
   batchUpdateChunked_(docId, requests);
 
   if (oldTabId) {
+    // A last look at the old tab: if staff typed in it while the new one was being written, write
+    // the new one again with their edits (once; the window is only a few seconds).
+    var oldNow = findTabJsonById_(docsGet_(docId), oldTabId);
+    if (oldNow && applyChanges_(savedData, changedSince_(tabProbe, oldNow))) {
+      docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
+      tabId = addWeekChildTab_(docId, parentTabId, tempTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
+      sleepDocsChunkGap_();
+      batchUpdateChunked_(docId, buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, savedData, width));
+    }
     // One batch, all or nothing (checked live): the old tab goes, and the new one takes its title
     // and its place in the sidebar.
     docsBatchUpdate_(docId, [

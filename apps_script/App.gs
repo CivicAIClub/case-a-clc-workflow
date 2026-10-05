@@ -922,6 +922,13 @@ function runSelfTest_(keepToken) {
   }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
   var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo, tabsBefore, original;
+  var selfRow = null;
+  var held = false;
+  var selfTestStart = Date.now();
+  // Keeps your row held (a hold lapses after APP_STUDENT_BUSY_MS) before each update selfTest runs.
+  var keepHold = function () {
+    if (held) PropertiesService.getScriptProperties().setProperty('busy.' + selfRow.id, String(Date.now()));
+  };
   // Only the weeks AutoPlanner just wrote; tabs from earlier weeks are left as they were.
   var currentWeeks = function () {
     var titles = Object.keys(schedule.weeks || {}).map(function (k) {
@@ -960,15 +967,27 @@ function runSelfTest_(keepToken) {
       return schedule.student_full_name + ', ' + schedule.total_assignments + ' assignments in the next ' +
         APP_WEEKS_AHEAD + ' weeks, ' + schedule.courses.length + ' classes: ' + schedule.courses.join('; ');
     });
-    step('doc', ['folder', 'canvas'], 'Doc: create or update yours in the shared folder', function () {
+    step('hold', ['canvas'], 'Your row is held for selfTest, so no other update writes your Doc meanwhile', function () {
       // If you're also on the student list, test that same Doc, so selfTest never makes a second
-      // copy of your planner in the folder.
-      var row = listStudents_().filter(function (s) {
+      // copy of your planner in the folder. While selfTest runs, updates skip your row: an update
+      // writing the same Doc at the same time would undo what selfTest types.
+      selfRow = listStudents_().filter(function (s) {
         return s.canvasUserId !== null && s.canvasUserId !== undefined &&
           String(s.canvasUserId) === String(schedule.canvas_user_id);
-      })[0];
+      })[0] || null;
+      if (!selfRow) return { skip: "you're not on the student list, so selfTest uses a Doc of its own" };
+      if (!claimStudent_(selfRow.id)) {
+        selfRow = null;
+        throw new Error('Your row is being updated right now. Run selfTest again in a few minutes.');
+      }
+      held = true;
+      return 'updates skip ' + selfRow.name + ' until selfTest finishes';
+    });
+    step('doc', ['folder', 'canvas', 'hold'], 'Doc: create or update yours in the shared folder', function () {
+      var row = selfRow;
       selfStudent = { id: row ? row.id : 'selftest', docId: row && row.docId ? row.docId : findReusableDoc_(schedule.student_full_name, null) };
       var how = row && row.docId ? "used your student row's Doc" : selfStudent.docId ? 'reused' : 'created';
+      keepHold();
       var t0 = Date.now();
       docId = writeDocWithRecovery_(selfStudent, schedule);
       firstSeconds = Math.round((Date.now() - t0) / 1000);
@@ -1106,6 +1125,7 @@ function runSelfTest_(keepToken) {
       return '"' + testStatus + '" and a note on "' + target.title + '"';
     });
     step('moved', ['type'], 'Doc: run an update with that assignment moved to another week (timed)', function () {
+      keepHold();
       var from = weekKeyOfTab_(docsGet_(docId), target.tabId);
       movedTo = Object.keys(schedule.weeks || {}).sort().filter(function (k) { return k !== from; })[0] || null;
       var t0 = Date.now();
@@ -1129,6 +1149,7 @@ function runSelfTest_(keepToken) {
       return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
     });
     step('normal', ['doc'], 'Doc: run a normal update (the real due date again)', function () {
+      keepHold();
       tabsBefore = weekTabsOf_(docsGet_(docId)).map(function (w) { return { title: w.title, id: w.tab.tabProperties.tabId }; });
       var t0 = Date.now();
       writeDocWithRecovery_(selfStudent, schedule);
@@ -1162,6 +1183,27 @@ function runSelfTest_(keepToken) {
         if (r.status !== testStatus || r.note !== testNote) throw new Error(r.table + ' lost them');
       });
       return 'week of ' + rows[0].weekKey;
+    });
+    step('everyday', ['cameback'], 'A staff edit in By Class (Status and Note) survives a plain update', function () {
+      // Apps Script stops any run at 6 minutes; leave room for the clean-up after this update.
+      if (Date.now() - selfTestStart > 270 * 1000) {
+        return { skip: 'not enough time left in this run (' + Math.round((Date.now() - selfTestStart) / 1000) + ' s so far); run selfTest again' };
+      }
+      var row = rowCellsByUrl_(docId, target.url).filter(function (r) { return r.kind === 'By Class'; })[0];
+      if (!row) throw new Error('the test assignment has no By Class row');
+      var newStatus = testStatus === 'Complete' ? 'In progress' : 'Complete';
+      var newNote = testNote + ' (edited)';
+      writeStatusAndNote_(docId, row, newStatus, newNote);
+      keepHold();
+      writeDocWithRecovery_(selfStudent, schedule);
+      var rows = findRowsByUrl_(docId, target.url);
+      if (rows.length !== 2) throw new Error('Expected the assignment once in By Class and once in By Day, found ' + rows.length + ' rows.');
+      rows.forEach(function (r) {
+        if (r.status !== newStatus) throw new Error(r.table + ' Status is "' + r.status + '", expected "' + newStatus + '"');
+        if (r.note !== newNote) throw new Error(r.table + ' Notes lost the edit');
+      });
+      return '"' + testStatus + '" → "' + newStatus + '" and a changed note, kept in both tables (' +
+        Math.round((Date.now() - selfTestStart) / 1000) + ' s into selfTest)';
     });
     step('cleanup', ['type'], "Clean-up: the test assignment's Status and Note are back to what they were", function () {
       // One row at a time, reading the Doc again each time (each edit moves the text after it).
@@ -1230,6 +1272,7 @@ function runSelfTest_(keepToken) {
         (kids.length === 1 ? '' : 's') + ' left out, current weeks complete';
     });
 
+  if (held) PropertiesService.getScriptProperties().deleteProperty('busy.' + selfRow.id);
   if (!keepToken) {
     PropertiesService.getScriptProperties().deleteProperty('TEST_CANVAS_TOKEN');
     Logger.log('     TEST_CANVAS_TOKEN deleted.');
@@ -1237,7 +1280,7 @@ function runSelfTest_(keepToken) {
   var failed = results.filter(function (r) { return !r; }).length;
   Logger.log(
     !failed && !skippedForDeps
-      ? 'selfTest: ALL ' + results.length + ' CHECKS PASSED'
+      ? 'selfTest: ALL ' + results.length + ' CHECKS PASSED in ' + Math.round((Date.now() - selfTestStart) / 1000) + ' s'
       : 'selfTest: FAILED (' + failed + ' failed, ' + (results.length - failed) + ' passed' +
         (skippedForDeps ? ', ' + skippedForDeps + ' not run because a check they need failed' : '') + ')'
   );
@@ -1358,7 +1401,7 @@ function rowCellsByUrl_(docId, url) {
       (el.table.tableRows || []).forEach(function (row) {
         var cells = row.tableCells || [];
         if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
-          rows.push({ tabId: w.tab.tabProperties.tabId, status: cells[4], note: cells[5] });
+          rows.push({ tabId: w.tab.tabProperties.tabId, kind: tableKind_(el.table), status: cells[4], note: cells[5] });
         }
       });
     });
@@ -1423,7 +1466,8 @@ function writeStatusAndNote_(docId, target, status, note) {
         },
       });
     }
-    requests.push({ insertText: { text: pair[1], location: { tabId: target.tabId, index: start } } });
+    // An empty value only clears the cell (Docs refuses to insert nothing).
+    if (pair[1]) requests.push({ insertText: { text: pair[1], location: { tabId: target.tabId, index: start } } });
   });
   docsBatchUpdate_(docId, requests);
 }

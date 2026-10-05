@@ -648,6 +648,108 @@ test('notes follow assignments: the selfTest sequence twice in a row (no clean-u
   round('In progress', 'note 3 edited'); // same Status, new Note
 });
 
+// The Doc exactly as the first selfTest on #13 found it: both tables of week A still had the 10:58 PM
+// run's "In progress" and note, and there was no "last written" record yet.
+function liveStateBeforeRun1() {
+  const X = url(1);
+  const stale = 'selfTest note Oct 4 10:58 PM';
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'class', 'In progress', stale);
+  staffTypes(docs, WA, X, 'day', 'In progress', stale);
+  delete t.svc.props['written.DOC1'];
+  return { t, docs, X, stale };
+}
+
+// One selfTest, step by step, as App.gs runs it (typing goes into the By Class row).
+function selfTestRound(t, docs, X, typed) {
+  const copies = () => copiesOf(docs, X);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false)); // "Doc: create or update yours"
+  const first = copies()[0];
+  const original = /^selfTest note /.test(first.note) ? { status: 'Not started', note: '' } : { status: first.status, note: first.note };
+  const testStatus = original.status === 'In progress' ? 'Complete' : 'In progress';
+  staffTypes(docs, WA, X, 'class', testStatus, typed);
+  t.ctx.upsertPlannerDocument_(scheduleAB(true)); // moved
+  assert.deepStrictEqual(copies().map((c) => [c.week, c.status, c.note]), [[WB, testStatus, typed], [WB, testStatus, typed]], 'followed');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false)); // normal
+  assert.deepStrictEqual(copies().map((c) => [c.week, c.status, c.note]), [[WA, testStatus, typed], [WA, testStatus, typed]], 'came back, one week tab');
+  // everyday: a By Class edit survives a plain update
+  const everyday = testStatus === 'Complete' ? 'In progress' : 'Complete';
+  staffTypes(docs, WA, X, 'class', everyday, typed + ' (edited)');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copies().map((c) => [c.status, c.note]), [[everyday, typed + ' (edited)'], [everyday, typed + ' (edited)']], 'everyday');
+  // clean-up: original values back in both tables, recorded as written
+  staffTypes(docs, WA, X, 'class', original.status, original.note);
+  staffTypes(docs, WA, X, 'day', original.status, original.note);
+  t.ctx.recordWritten_('DOC1', X, '2099-01-12', original.status, original.note);
+  return original;
+}
+
+test('selfTest from the exact live state (stale values in both tables, no record): two runs in a row pass', () => {
+  const { t, docs, X } = liveStateBeforeRun1();
+  const o1 = selfTestRound(t, docs, X, 'selfTest note Oct 5 1:30 PM');
+  assert.deepStrictEqual(o1, { status: 'Not started', note: '' }, "the old test note isn't kept as the original");
+  selfTestRound(t, docs, X, 'selfTest note Oct 5 1:40 PM');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']], 'clean after both runs');
+});
+
+test('an update that read the Doc just before staff typed keeps the typed value (the race that failed the first #13 selfTest)', () => {
+  const { t, docs, X } = liveStateBeforeRun1();
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  // Staff (or selfTest) type right after the update has read the Doc, before it rebuilds the tab.
+  const realCollect = t.ctx.collectSavedData_;
+  let typed = false;
+  t.ctx.collectSavedData_ = (parent, written) => {
+    const result = realCollect(parent, written);
+    if (!typed) { typed = true; staffTypes(docs, WA, X, 'class', 'Complete', 'typed mid-update'); }
+    return result;
+  };
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Complete', 'typed mid-update'], ['Complete', 'typed mid-update']]);
+  t.ctx.collectSavedData_ = realCollect;
+  // ... and while the new tab is being written (the last look before the old tab is deleted).
+  const realChunked = t.ctx.batchUpdateChunked_;
+  let once = false;
+  t.ctx.batchUpdateChunked_ = (docId, reqs) => {
+    realChunked(docId, reqs);
+    if (!once) { once = true; staffTypes(docs, WA, X, 'class', 'In progress', 'typed during the write'); }
+  };
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['In progress', 'typed during the write'], ['In progress', 'typed during the write']]);
+  assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+});
+
+test('"last written" records are compact, split over more properties when big, and the first format still reads', () => {
+  const t = setup();
+  const map = {};
+  for (let i = 0; i < 320; i++) map[String(1000000 + i)] = { w: '2026-10-05', s: ['Not started', 'In progress', 'Complete', 'Waiting on teacher'][i % 4], n: t.ctx.noteFingerprint_(i % 2 ? 'a note ' + i : '') };
+  t.ctx.saveWritten_('DOCX', map);
+  const parts = Object.keys(t.svc.props).filter((k) => k.indexOf('written.DOCX') === 0);
+  assert.deepStrictEqual(parts.sort(), ['written.DOCX', 'written.DOCX.1'], '320 assignments: two parts');
+  parts.forEach((k) => assert.ok(t.svc.props[k].length < 8500, k + ' fits in one property'));
+  assert.deepStrictEqual(toPlain(t.ctx.readWritten_('DOCX')), map);
+  // Fewer assignments later: the extra part is removed.
+  t.ctx.saveWritten_('DOCX', { 1: { w: '2026-10-12', s: 'Complete', n: '' } });
+  assert.deepStrictEqual(Object.keys(t.svc.props).filter((k) => k.indexOf('written.DOCX') === 0), ['written.DOCX']);
+  assert.ok(t.svc.props['written.DOCX'].length < 40, 'about 28 characters per assignment: ' + t.svc.props['written.DOCX']);
+  t.svc.props['written.OLD'] = JSON.stringify({ 5: { w: '2026-10-05', s: 'In progress', n: 'abc' } });
+  assert.deepStrictEqual(toPlain(t.ctx.readWritten_('OLD')), { 5: { w: '2026-10-05', s: 'In progress', n: 'abc' } });
+});
+
+test('an empty insertText is never sent (clearing a cell only deletes), and Drive\'s "Invalid file or folder ID" means deleted', () => {
+  const t = setup();
+  const sent = [];
+  t.ctx.Docs = { Documents: { batchUpdate: (body) => { sent.push(toPlain(body.requests)); return { replies: [] }; } } };
+  t.ctx.docsBatchUpdate_('D', [{ insertText: { text: '', location: { index: 5 } } }, { deleteContentRange: { range: { startIndex: 1, endIndex: 3 } } }]);
+  t.ctx.docsBatchUpdate_('D', [{ insertText: { text: '', location: { index: 5 } } }]);
+  assert.deepStrictEqual(sent, [[{ deleteContentRange: { range: { startIndex: 1, endIndex: 3 } } }]], 'only the delete; nothing at all for an empty-only batch');
+  assert.ok(t.ctx.DRIVE_NOT_FOUND.test('Exception: Invalid file or folder ID: 1abc'));
+  t.ctx.DriveApp.getFileById = () => { throw new Error('Exception: Invalid file or folder ID: 1abc'); };
+  assert.throws(() => t.ctx.savedDocFile_('1abc'), /^Error: Could not open the saved Google Doc \(1abc\)/);
+});
+
 test('an edit in either table wins: By Day only, or changing back to "Not started" or an empty note', () => {
   const { t, docs } = rebuildSetup([]);
   withRendering(t, docs);
