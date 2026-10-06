@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { createSandbox, toPlain } = require('./helpers/gas-sandbox');
 const { fakeServices } = require('./helpers/gas-services');
-const { fakeDocs, withRendering, copiesOf, staffTypes, staffWrites, richCell } = require('./helpers/fake-docs');
+const { fakeDocs, withRendering, copiesOf, rowsOf, staffTypes, staffWrites, richCell } = require('./helpers/fake-docs');
 const { parseMask, applyFieldMask } = require('./helpers/field-mask');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -573,8 +573,9 @@ test('rebuilding an EXISTING week tab: same title and place, Status and Notes ke
   assert.strictEqual(rebuilt.tabProperties.title, W);
   assert.ok(!docs.find('t.old'), 'the old tab is gone');
   assert.ok(!docs.find('t.next') && docs.titles('t.0')[1] === W2, 'a week with nothing due now is rebuilt too (same title, same place)');
-  assert.ok(!(docs.written['t.n2'] || []).includes('later week'), "an assignment no longer due that week doesn't stay in it");
-  assert.ok((docs.written['t.n2'] || []).includes('No assignments due this week.'));
+  // That week's assignment left Canvas, but staff had typed a Status and Note on it: it stays, marked.
+  const w2 = docs.written['t.n2'] || [];
+  assert.ok(w2.includes('later week') && w2.includes('Complete') && w2.includes('Not on Canvas'), w2.join(' | '));
   assert.ok(docs.written['t.n1'].includes('In progress') && docs.written['t.n1'].includes('keep me'), 'Status and Notes written into the new tab');
   assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
   assert.ok(docs.batches.some((b) => b.join() === 'deleteTab,updateDocumentTabProperties'), 'delete and rename in one batch');
@@ -714,6 +715,75 @@ test('an update that read the Doc just before staff typed keeps the typed value 
   t.ctx.upsertPlannerDocument_(scheduleAB(false));
   assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['In progress', 'typed during the write'], ['In progress', 'typed during the write']]);
   assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+});
+
+// scheduleAB without some assignments (by url number), and with Canvas's list of where the others went.
+function scheduleWithout(nums, elsewhere, courses) {
+  const s = scheduleAB(false);
+  Object.values(s.weeks).forEach((w) => w.days.forEach((d) => { d.assignments = d.assignments.filter((a) => !nums.includes(Number(a.url.split('/').pop()))); }));
+  if (elsewhere) s.elsewhere = elsewhere;
+  if (courses) s.courses = courses;
+  return s;
+}
+
+test('scenario (b): an assignment that leaves Canvas keeps its typed Status and Note in its week, marked with why, and comes back with them', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  const X = url(1), Y = url(2);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'class', 'In progress', 'extension to Friday');
+  // Removed or unpublished: not in Canvas's list at all.
+  t.ctx.upsertPlannerDocument_(scheduleWithout([1, 2], {}));
+  const kept = (priority) => [
+    { week: WA, table: 'class', klass: 'Biology', day: 'Monday', priority, status: 'In progress', note: 'extension to Friday' },
+    { week: WA, table: 'day', klass: 'Biology', day: '', priority, status: 'In progress', note: 'extension to Friday' },
+  ];
+  assert.deepStrictEqual(rowsOf(docs, X), kept('Not on Canvas'));
+  assert.deepStrictEqual(rowsOf(docs, Y), [], 'nothing was typed on Y, so it just goes');
+  // Still in Canvas, without a due date, or due outside these weeks.
+  t.ctx.upsertPlannerDocument_(scheduleWithout([1], { [X]: '' }));
+  assert.deepStrictEqual(rowsOf(docs, X), kept('No due date'));
+  t.ctx.upsertPlannerDocument_(scheduleWithout([1], { [X]: '2099-03-02' }));
+  assert.deepStrictEqual(rowsOf(docs, X), kept('Now due Mar 2'));
+  // An edit on a kept row counts like any other.
+  staffTypes(docs, WA, X, 'day', 'Complete', 'handed in on paper');
+  t.ctx.upsertPlannerDocument_(scheduleWithout([1], { [X]: '2099-03-02' }));
+  assert.deepStrictEqual(rowsOf(docs, X).map((r) => [r.status, r.note]), [['Complete', 'handed in on paper'], ['Complete', 'handed in on paper']]);
+  // Back on Canvas in the other week: there, with its Status and Note, and only there.
+  t.ctx.upsertPlannerDocument_(scheduleAB(true));
+  assert.deepStrictEqual(rowsOf(docs, X).map((r) => [r.week, r.priority, r.status, r.note]),
+    [[WB, 'Upcoming', 'Complete', 'handed in on paper'], [WB, 'Upcoming', 'Complete', 'handed in on paper']]);
+  // Gone again, then staff clear its Status and Note: the row goes at the next update.
+  t.ctx.upsertPlannerDocument_(scheduleWithout([1], {}));
+  assert.strictEqual(rowsOf(docs, X).length, 2);
+  staffTypes(docs, WB, X, 'class', 'Not started', '');
+  staffTypes(docs, WB, X, 'day', 'Not started', '');
+  t.ctx.upsertPlannerDocument_(scheduleWithout([1], {}));
+  assert.deepStrictEqual(rowsOf(docs, X), []);
+  assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+});
+
+test('scenario (d): a dropped class keeps a table only in the week where a typed row stays; the home tab only counts what Canvas has', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  const X = url(1);
+  const withChem = scheduleAB(false);
+  withChem.courses = ['Biology', 'Chemistry'];
+  withChem.weeks['2099-01-12'].days[0].assignments.find((a) => a.url === X).course = 'Chemistry';
+  t.ctx.upsertPlannerDocument_(withChem);
+  staffTypes(docs, WA, X, 'class', 'In progress', 'lab makeup');
+  // The student drops Chemistry: Canvas no longer lists the class or its assignments.
+  t.ctx.upsertPlannerDocument_(scheduleWithout([1], {}, ['Biology']));
+  assert.deepStrictEqual(rowsOf(docs, X).map((r) => [r.week, r.klass, r.priority, r.note]),
+    [[WA, 'Chemistry', 'Not on Canvas', 'lab makeup'], [WA, 'Chemistry', 'Not on Canvas', 'lab makeup']]);
+  const classTables = (title) => docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === title)
+    .documentTab.body.content.filter((e) => e.table && e.table.columns === 6 && e.table.tableRows[1] && e.table.tableRows[1].tableCells.length === 6
+      && e.table.tableRows[1].tableCells[1].content[0].paragraph.elements[0].textRun.content === 'Day\n')
+    .map((e) => e.table.tableRows[0].tableCells[0].content[0].paragraph.elements[0].textRun.content.trim());
+  assert.deepStrictEqual(classTables(WA), ['Biology', 'Chemistry']);
+  assert.deepStrictEqual(classTables(WB), ['Biology'], 'no empty Chemistry table in other weeks');
+  const summary = toPlain(t.ctx.homeSummary_(scheduleWithout([1], {}, ['Biology']), ['Biology'], new Date('2099-01-13T15:00:00Z')));
+  assert.ok(!JSON.stringify(summary).includes('Chemistry'), 'the home tab is about what Canvas has');
 });
 
 test('"last written" records are compact, split over more properties when big, and the first format still reads', () => {

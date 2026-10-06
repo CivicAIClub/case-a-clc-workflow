@@ -36,7 +36,7 @@ The **CLC Planner** tab opens first: "One page per student: this week by class, 
 1. "The Docs live in this Drive folder, already shared with all of you, in a folder per CLC teacher. Keep them there; dragging a Doc into another teacher's folder is fine."
 2. "If you're signed in to several Google accounts, use a window with only your Pomfret account."
 3. "Need it now instead of tonight? Click Update all students now."
-4. "Canvas tokens last about 90 days. Each row shows when its token expires, and the page warns you two weeks ahead."
+4. "Canvas tokens last about 90 days. Each row shows when its token expires, and the page warns you three weeks ahead."
 
 **5:30–6:00 Hand over** (Presenter)
 Hand out the quick start and token guides. "If anything looks wrong, email Cayden or Luke a screenshot of the message." Take questions.
@@ -48,7 +48,7 @@ Hand out the quick start and token guides. "If anything looks wrong, email Cayde
 | "Not authorized" with **your** email | Your address isn't on AutoPlanner's list. | Ask the club to add you to `ALLOWED_USERS`. |
 | "Not authorized" with a **different** email, or a Google error page | You're signed in to several Google accounts. | Use a browser window or Chrome profile signed in only to your Pomfret account. |
 | **Needs attention**: "This student's Canvas token expired on …" or "Canvas didn't accept this student's token…" | The token expired, was deleted, or was pasted incompletely. | Get a new token from the student, click **Edit**, paste it, click **Save**, then **Update**. Same Doc, notes kept. |
-| "Canvas tokens expiring: …" under **Update all students now** | Those tokens expire within two weeks (Pomfret limits tokens to about 90 days). | Ask those students for new tokens before then, and renew them the same way. |
+| "Canvas tokens expiring: …" under **Update all students now** | Those tokens expire within three weeks (Pomfret limits tokens to about 90 days). | Ask those students for new tokens before then, and renew them the same way. |
 | "That token belongs to …" / "now belongs to a different Canvas user" | Someone else's token was pasted on this row. | Paste this student's own token, or use **Add student** for the other one. |
 | "Google is limiting how fast Docs can be edited" | Google's per-minute limit on Doc edits. | Nothing; it's retried at the next update. Don't click Update repeatedly. |
 | "Updated 2 of 4 weeks: Google Docs was slow…" | Google was slow, so the update stopped between weeks instead of running out of time. | Nothing; the other weeks are updated next time. |

@@ -84,7 +84,8 @@ AutoPlanner is meant to run all year without anyone touching the code. Four thin
 Pomfret's Canvas limits tokens to about 90 days (a token made on Oct 4, 2026 expires on Jan 2, 2027), so expect to renew every student's token about once a term.
 
 - Each student's row shows **Token expires** and the date.
-- Two weeks before any token expires, the page lists who needs a new one, under **Update all students now**.
+- Three weeks before any token expires, the page lists who needs a new one, under **Update all students now**.
+- **Tokens made in early October expire around Jan 2, during winter break.** Renew them in the first half of December, while students are still here.
 - Once a token has expired, the row says **Needs attention** with "This student's Canvas token expired on" and the date.
 
 To renew a token:

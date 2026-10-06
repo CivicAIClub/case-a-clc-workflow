@@ -40,7 +40,9 @@ var APP_NOTICE_DAYS = 7; // how long a one-off message (e.g. "made a new Doc") s
 // A run summary is one Script Property (9 KB at most), so it keeps this many problems in full.
 var APP_MAX_FAILURES_KEPT = 20;
 var APP_STALE_AFTER_MS = 26 * 3600 * 1000; // no finished update for this long means something is wrong
-var APP_TOKEN_WARN_DAYS = 14; // the page warns this long before a student's Canvas token expires
+// The page warns this long before a student's Canvas token expires: three weeks, so tokens that run
+// out during a two-week break (Oct 4 tokens expire Jan 2) are flagged while students are still here.
+var APP_TOKEN_WARN_DAYS = 21;
 // Drive said "Invalid argument" about a student's Doc: it's treated as gone only if an update at least
 // this much later says the same (7 pm and midnight are 5 hours apart).
 var APP_DOC_UNSURE_CONFIRM_MS = 4 * 3600 * 1000;
@@ -757,7 +759,7 @@ function updateOneStudent_(id) {
   var student = getStudent_(id);
   if (!student) return { ok: false, skipped: true, message: 'That student was removed.' };
   if (!claimStudent_(id)) {
-    return { ok: false, skipped: true, message: 'This student is already being updated. Try again in a minute.' };
+    return { ok: false, skipped: true, busy: true, name: student.name, message: 'This student is already being updated. Try again in a minute.' };
   }
   var token = getToken_(id);
   var result;
@@ -798,8 +800,18 @@ function updateOneStudent_(id) {
     } catch (e) {
       console.warn('Teacher folder not checked: ' + e);
     }
+    var teacherUsed = student.teacher || '';
     var docId = writeDocWithRecovery_(student, schedule, docInfo);
     student = getStudent_(id) || student;
+    // Staff picked another CLC teacher while this update was writing (a new Doc goes into the
+    // folder of the teacher it started with): put the Doc where the row now says.
+    if ((student.teacher || '') !== teacherUsed && (!student.teacher || teacherByEmail_(student.teacher))) {
+      try {
+        moveDocToTeacher_(docId, student.teacher || '');
+      } catch (e) {
+        console.warn('Doc not moved to the new CLC teacher: ' + e);
+      }
+    }
     applyTokenInfo(student);
     delete student.docUnsureSince;
     student.name = schedule.student_full_name || student.name;
@@ -979,7 +991,7 @@ function processRunBatch_(runId, budgetMs) {
       return;
     }
     var result = updateOneStudent_(id);
-    recordResult_(runId, result);
+    recordResult_(runId, result, id);
     if (Date.now() - batchStart > budget) {
       var run = readJson_('run.current');
       if (run && run.id === runId && run.queue.length) {
@@ -1012,12 +1024,21 @@ function takeNextStudent_(runId) {
   });
 }
 
-function recordResult_(runId, result) {
+function recordResult_(runId, result, id) {
   withLock_(function () {
     var run = readJson_('run.current');
     if (!run || run.id !== runId) return;
     run.inProgress = null;
     run.heartbeatAt = Date.now();
+    run.requeued = run.requeued || [];
+    if (result.busy && id && run.requeued.indexOf(id) === -1) {
+      // Someone is updating this student from the page right now: try them again at the end.
+      run.requeued.push(id);
+      run.queue.push(id);
+      writeJson_('run.current', run);
+      return;
+    }
+    if (result.busy) result = { name: result.name, message: 'Was being updated from the page at the same time; see their row.' };
     if (result.ok) run.updated++;
     else if (result.skipped && result.message === 'That student was removed.') run.total--;
     else if (run.failed.length < APP_MAX_FAILURES_KEPT) {

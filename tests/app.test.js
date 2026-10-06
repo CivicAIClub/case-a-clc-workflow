@@ -318,6 +318,28 @@ test('run summaries stay small (20 problems kept, the rest counted), and removed
   assert.strictEqual(JSON.parse(t.svc.props['run.current']).total, 2);
 });
 
+test('scenario (f): a student being updated from the page when the run reaches them is tried again at the end of the run', () => {
+  for (const releasedMeanwhile of [true, false]) {
+    const t = setup();
+    const a = addAs(t, STAFF, TOKEN_A, '').student;
+    addAs(t, STAFF, TOKEN_B, '');
+    t.svc.props['busy.' + a.id] = String(Date.now()); // Avery's Update button was just clicked
+    const realWrite = t.ctx.upsertPlannerDocument_;
+    t.ctx.upsertPlannerDocument_ = (p) => {
+      if (releasedMeanwhile && p.studentFullName === 'Blake Sample') delete t.svc.props['busy.' + a.id]; // that update finished
+      return realWrite(p);
+    };
+    t.ctx.startUpdateAll();
+    const last = JSON.parse(t.svc.props['run.last']);
+    if (releasedMeanwhile) {
+      assert.deepStrictEqual([last.updated, last.total, last.failed], [2, 2, []]);
+    } else {
+      assert.deepStrictEqual([last.updated, last.total], [1, 2]);
+      assert.deepStrictEqual(last.failed, [{ name: 'Avery Example', message: 'Was being updated from the page at the same time; see their row.' }]);
+    }
+  }
+});
+
 test('the page warns when no update has finished for over a day', () => {
   const t = setup();
   t.svc.setActive(OWNER);
@@ -331,9 +353,9 @@ test('the page warns when no update has finished for over a day', () => {
   assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, null);
 });
 
-test('token dates: "Token expires …" on the row, a warning 14 days ahead, and the date in the expired message', () => {
+test('token dates: "Token expires …" on the row, a warning 21 days ahead, and the date in the expired message', () => {
   const t = setup();
-  const soon = new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString();
+  const soon = new Date(Date.now() + 20 * 24 * 3600 * 1000).toISOString(); // inside the 3 weeks
   const later = '2099-01-02T05:00:00Z';
   t.ctx.fetchCanvasTokenExpiry_ = (token) => (token === TOKEN_A ? { expiresAt: later, createdAt: '2026-10-04T20:54:53Z' } : token === TOKEN_B ? { expiresAt: soon, createdAt: null } : null);
   const a = addAs(t, STAFF, TOKEN_A, '').student;
@@ -853,6 +875,22 @@ test('changing a student\'s CLC teacher moves the same Doc (same ID) into that f
   assert.throws(() => t.ctx.setStudentTeacher(student.id, 'nobody@pomfret.org'), /no longer on the list/);
   t.svc.setActive(STRANGER);
   assert.throws(() => t.ctx.setStudentTeacher(student.id, ''), /Not authorized/);
+});
+
+test("scenario (f): the CLC teacher changed while a new student's first Doc is being made: the Doc ends up in the new teacher's folder, and stays theirs", () => {
+  const t = setup({ CLC_TEACHERS: TEACHERS });
+  const { student } = toPlain((t.svc.setActive(STAFF), t.ctx.addStudent(TOKEN_A, '', 'pexample@pomfret.org')));
+  const folders = () => JSON.parse(t.svc.props.teacherFolders);
+  t.ctx.upsertPlannerDocument_ = (p) => {
+    // Staff pick Sam Sample on the row while the Doc is being made (in Pat Example's folder).
+    t.ctx.setStudentTeacher(student.id, 'ssample@pomfret.org');
+    t.svc.addFile('DOC-NEW', 'Avery Example - CLC Assignments', p.targetFolderId);
+    return { docUrl: 'https://docs/x', documentId: 'DOC-NEW' };
+  };
+  t.ctx.updateStudentNow(student.id);
+  assert.strictEqual(t.svc.files['DOC-NEW'].parent, folders()['ssample@pomfret.org']);
+  t.ctx.getAppState(); // a page load reads the folders back: still Sam Sample's
+  assert.strictEqual(JSON.parse(t.svc.props['student.' + student.id]).teacher, 'ssample@pomfret.org');
 });
 
 test('Add a student with a CLC teacher: an existing Doc moves there; a new Doc is made there and the home tab names the teacher', () => {

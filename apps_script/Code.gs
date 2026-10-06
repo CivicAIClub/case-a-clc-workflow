@@ -475,6 +475,12 @@ function upsertPlannerDocument_(data) {
   });
   weekKeys.sort();
 
+  // A row with a Status or Note whose assignment left the planner stays in its week (see
+  // keptAssignments_), so nothing staff typed disappears without a trace.
+  keptAssignments_(beforeParent, weeks, saved, data.elsewhere, today).forEach(function (k) {
+    weeks[k.week] = weekWithAssignment_(weeks[k.week], k.item);
+  });
+
   if (weekKeys.length === 0) {
     saveWritten_(docId, {});
     rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date());
@@ -885,6 +891,104 @@ function collectSavedData_(parentTabJson, written) {
       last ? last.n : noteFingerprint_(''));
   });
   return result;
+}
+
+/**
+ * Assignments that left the planner while their row had a Status or Note: removed or unpublished in
+ * Canvas, given a due date outside these weeks, or no due date any more. Each stays in its week,
+ * with its Status and Note, and its Priority cell says why ("Not on Canvas", "Now due Nov 30", "No
+ * due date"), until it comes back (then its Status and Note follow it as usual) or the week ends.
+ * Without this, a teacher unpublishing an assignment for a day would wipe the notes typed on it.
+ * Gives back [{ week, item }], item shaped like a Canvas assignment.
+ */
+function keptAssignments_(parentTabJson, weeks, saved, elsewhere, today) {
+  var onPlanner = {};
+  Object.keys(weeks).forEach(function (k) {
+    (weeks[k].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) { if (a.url) onPlanner[a.url] = true; });
+    });
+  });
+  var found = {};
+  ((parentTabJson && parentTabJson.childTabs) || []).forEach(function (t) {
+    var key = weekKeyFromTabTitle_((t.tabProperties || {}).title);
+    if (!key || key < scheduleWeekStart_(today) || !weeks[key]) return;
+    eachAssignmentRow_(t, function (row) {
+      if (onPlanner[row.url]) return;
+      var typed = (saved.status[row.url] || STATUS_DEFAULT) !== STATUS_DEFAULT || saved.notes[row.url];
+      if (!typed || (found[row.url] && found[row.url].kind === 'class')) return; // By Class knows the class
+      row.week = key;
+      found[row.url] = row;
+    });
+  });
+  return Object.keys(found).map(function (url) {
+    var r = found[url];
+    var due = (elsewhere || {})[url];
+    var day = SCHEDULE_WEEKDAY_NAMES.indexOf(r.day) >= 0 ? r.day : SCHEDULE_WEEKDAY_NAMES[0];
+    return {
+      week: r.week,
+      item: {
+        day: day,
+        assignment: r.title,
+        course: r.course || '(No Course)',
+        due_time: r.dueTime,
+        priority: due === undefined ? KEPT_NOT_ON_CANVAS : due === '' ? KEPT_NO_DUE_DATE : 'Now due ' + scheduleShortDate_(due),
+        days_until_due: null,
+        due_date: scheduleAddDays_(r.week, SCHEDULE_WEEKDAY_NAMES.indexOf(day)),
+        week_start: r.week,
+        url: url,
+      },
+    };
+  });
+}
+var KEPT_NOT_ON_CANVAS = 'Not on Canvas';
+var KEPT_NO_DUE_DATE = 'No due date';
+
+/** A copy of a week with `item` added on its day (and all seven days listed, in order). */
+function weekWithAssignment_(week, item) {
+  var days = SCHEDULE_WEEKDAY_NAMES.map(function (name) {
+    var have = (week.days || []).filter(function (d) { return d.day === name; })[0];
+    var list = have ? (have.assignments || []).slice() : [];
+    if (name === item.day) list.push(item);
+    return { day: name, assignments: list };
+  });
+  return { week_label: week.week_label, days: days };
+}
+
+/**
+ * Calls fn({ url, kind, title, course, day, dueTime }) for every assignment row in a week tab. By
+ * Class tables give the class (their first row) and the day; By Day gives the day from its day rows.
+ */
+function eachAssignmentRow_(tabJson, fn) {
+  var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
+  content.forEach(function (el) {
+    if (!el.table || (el.table.columns || 0) < 6) return;
+    var rows = el.table.tableRows || [];
+    var isDay = rows.slice(0, 2).some(function (r) {
+      var c = r.tableCells || [];
+      return c.length > 1 && getCellText_(c[1]) === 'Course';
+    });
+    var first = rows.length && rows[0].tableCells && rows[0].tableCells.length ? rows[0].tableCells[0] : null;
+    var course = !isDay && first && !getCellLinkUrl_(first) ? getCellText_(first) : '';
+    var day = '';
+    rows.forEach(function (row) {
+      var cells = row.tableCells || [];
+      if (!cells.length) return;
+      var url = getCellLinkUrl_(cells[0]);
+      if (!url) {
+        if (isDay && SCHEDULE_WEEKDAY_NAMES.indexOf(getCellText_(cells[0])) >= 0) day = getCellText_(cells[0]);
+        return;
+      }
+      if (cells.length < 6) return;
+      fn({
+        url: url,
+        kind: isDay ? 'day' : 'class',
+        title: getCellText_(cells[0]),
+        course: isDay ? getCellText_(cells[1]) : course,
+        day: isDay ? day : getCellText_(cells[1]),
+        dueTime: getCellText_(cells[2]),
+      });
+    });
+  });
 }
 
 /**

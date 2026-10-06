@@ -25,7 +25,7 @@ CLC staff open one web page, signed in with their Pomfret Google account. They a
 - At the bottom of every week tab, an **Added by staff** table (Assignment, Class, Day, Status, Notes) holds work that isn't on Canvas. AutoPlanner writes it back exactly, formatting included, on every update, and it moves into Past weeks with its week. The CLC Planner tab counts its rows.
 - **CLC teachers** (optional, the `CLC_TEACHERS` Script Property): each teacher gets a folder inside the shared folder, named with their full name. A student's CLC teacher, picked on the page, decides which folder their Doc is in. Moving it is the same Doc and link. A Doc dragged between folders in Drive changes the student's teacher at the next page load or update. The page has a **Show** filter, and a signed-in CLC teacher starts on their own students.
 - If a student's Doc is deleted or in the trash, AutoPlanner never writes to it: it makes a fresh Doc in the shared folder (or the student's teacher's folder) and says so on the student's row.
-- Each row shows when the student's Canvas token expires (Canvas reports it; Pomfret limits tokens to about 90 days), and the page warns 14 days ahead.
+- Each row shows when the student's Canvas token expires (Canvas reports it; Pomfret limits tokens to about 90 days), and the page warns three weeks ahead (so tokens that run out over winter break are flagged before it).
 - Updates run automatically every day at about 7 pm and just after midnight (New York time), or on demand from the page.
 
 ## How it works
@@ -161,7 +161,7 @@ Everything belongs to the owner's account: the script, its triggers, the stored 
 
 1. Log into Canvas → profile picture → **Settings**.
 2. Scroll to **Approved Integrations** → **+ New Access Token**.
-3. Purpose: "AutoPlanner". Expiry: the latest date Canvas allows. Pomfret limits tokens to about 90 days; AutoPlanner shows each token's expiry date and warns 14 days ahead.
+3. Purpose: "AutoPlanner". Expiry: the latest date Canvas allows. Pomfret limits tokens to about 90 days; AutoPlanner shows each token's expiry date and warns three weeks ahead.
 4. Copy the token immediately (Canvas will not show it again) and paste it into AutoPlanner's **Add a student** box.
 
 The student-facing version is [`docs/handoff/student-token-guide.md`](docs/handoff/student-token-guide.md).
