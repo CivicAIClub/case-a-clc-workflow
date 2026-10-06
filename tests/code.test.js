@@ -938,6 +938,62 @@ test('simulation bug 2: work pushed past these 4 weeks, then back in, keeps its 
     ['Week of Dec 21 – Dec 27, 2026', 'Upcoming', 'In progress', 'outline approved'], ['Week of Dec 21 – Dec 27, 2026', 'Upcoming', 'In progress', 'outline approved']]);
 });
 
+test('simulation bug 5: a Doc near Google\'s 100-tab limit: a clear message instead of a "temporary problem", and nothing is written', () => {
+  const pastKids = Array.from({ length: 97 }, (_, i) => ({ tabProperties: { tabId: 't.p' + i, title: 'Old week ' + i }, childTabs: [] }));
+  const past = { tabProperties: { tabId: 't.past', title: 'Past weeks' }, documentTab: { body: { content: [] } }, childTabs: pastKids };
+  const { t, docs } = rebuildSetup([past]);
+  withRendering(t, docs);
+  assert.strictEqual(t.ctx.countTabs_(docs.service.Documents.get()), 99, '98 would still fit: an update adds at most 2');
+  assert.throws(() => t.ctx.upsertPlannerDocument_(scheduleAB(false)),
+    /^Error: This student's Doc has 99 tabs, and Google allows 100\. Start a new Doc for them: add the year to this Doc's name, then Remove the student and add them again/);
+  assert.deepStrictEqual(docs.batches, [], 'nothing written');
+  // With room, an update says how many tabs the Doc has (the weekly email warns from 80).
+  const ok = rebuildSetup([]);
+  withRendering(ok.t, ok.docs);
+  assert.strictEqual(toPlain(ok.t.ctx.upsertPlannerDocument_(scheduleAB(false))).tabs, 1);
+  assert.strictEqual(toPlain(ok.t.ctx.upsertPlannerDocument_(scheduleAB(false))).tabs, 3);
+});
+
+test('simulation bug 6: a class keeps its color when the class list changes (the semester change)', () => {
+  const t = setup();
+  const fall = toPlain(t.ctx.buildCourseColorMap_(['Biology', 'French II', 'History', 'Math', 'English']));
+  const spring = toPlain(t.ctx.buildCourseColorMap_(['Biology', 'French II', 'Chemistry', 'Art', 'English'], fall));
+  for (const c of ['Biology', 'French II', 'English']) assert.strictEqual(spring[c], fall[c], c);
+  assert.strictEqual(new Set(Object.values(spring)).size, 5, 'still five different colors');
+  // Without the earlier colors, French II would change here (what the simulation saw).
+  const fresh = toPlain(t.ctx.buildCourseColorMap_(['Biology', 'French II', 'Chemistry', 'Art', 'English']));
+  assert.ok(['Biology', 'French II', 'English'].some((c) => fresh[c] !== fall[c]), 'this example does change without them');
+  // An update remembers the Doc's colors.
+  const { t: u, docs } = rebuildSetup([]);
+  withRendering(u, docs);
+  u.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(Object.keys(JSON.parse(u.svc.props['colors.DOC1'])), ['Biology']);
+});
+
+test('simulation bug 7: the week that crosses New Year shows both years, reads back, and an older title is brought up to date', () => {
+  const t = setup();
+  assert.strictEqual(t.ctx.buildWeekTabTitle_('2026-12-28', 'Dec 28 – Jan 3'), 'Week of Dec 28, 2026 – Jan 3, 2027');
+  assert.strictEqual(t.ctx.buildWeekTabTitle_('2026-12-21', 'Dec 21 – Dec 27'), 'Week of Dec 21 – Dec 27, 2026');
+  assert.strictEqual(t.ctx.weekKeyFromTabTitle_('Week of Dec 28, 2026 – Jan 3, 2027'), '2026-12-28');
+  assert.strictEqual(t.ctx.weekKeyFromTabTitle_('Week of Dec 28 – Jan 3, 2026'), '2026-12-28', 'the older form still reads');
+  const { docs, at, u, update } = clockSetup();
+  at('2026-12-15T15:00:00Z');
+  update([[7, 'Winter reading', '2026-12-31T16:00:00Z']]);
+  const titles = () => docs.service.Documents.get().tabs[0].childTabs.map((x) => x.tabProperties.title);
+  assert.ok(titles().includes('Week of Dec 28, 2026 – Jan 3, 2027'), titles().join(' | '));
+  // A Doc that got the older title: renamed at the next update, with its rows.
+  const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === 'Week of Dec 28, 2026 – Jan 3, 2027');
+  docs.service.Documents.batchUpdate({ requests: [{ updateDocumentTabProperties: { tabProperties: { tabId: tab.tabProperties.tabId, title: 'Week of Dec 28 – Jan 3, 2026' }, fields: 'title' } }] });
+  staffTypes(docs, 'Week of Dec 28 – Jan 3, 2026', u(7), 'class', 'In progress', 'over break');
+  update([[7, 'Winter reading', '2026-12-31T16:00:00Z']]);
+  assert.deepStrictEqual(rowsOf(docs, u(7)).map((r) => [r.week, r.note]), [['Week of Dec 28, 2026 – Jan 3, 2027', 'over break'], ['Week of Dec 28, 2026 – Jan 3, 2027', 'over break']]);
+  // Filed on Monday Jan 4, under its title.
+  at('2027-01-04T05:20:00Z');
+  update([]);
+  const pastWeeks = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === 'Past weeks');
+  assert.ok(pastWeeks.childTabs.some((x) => x.tabProperties.title === 'Week of Dec 28, 2026 – Jan 3, 2027'));
+});
+
 test('scenario (d): a dropped class keeps a table only in the week where a typed row stays; the home tab only counts what Canvas has', () => {
   const { t, docs } = rebuildSetup([]);
   withRendering(t, docs);

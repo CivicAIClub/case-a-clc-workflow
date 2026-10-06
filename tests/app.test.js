@@ -423,6 +423,15 @@ test('weekly health check: an email only when something needs attention, to HEAL
   t.svc.setActive(STAFF);
   t.ctx.updateStudentNow(a.id);
   assert.ok(!rec(a.id).failingSince);
+  // A Doc near Google's 100-tab limit is reported too.
+  const full = rec(c.id);
+  full.docTabs = 86;
+  t.svc.props['student.' + c.id] = JSON.stringify(full);
+  t.svc.setActive(OWNER);
+  weekly();
+  assert.match(t.svc.mail[t.svc.mail.length - 1].body, /Docs getting close to Google's limit of 100 tabs:\n   - Casey Test: 86 tabs/);
+  delete full.docTabs;
+  t.svc.props['student.' + c.id] = JSON.stringify(full);
   // Triggers gone and saved data near Google's limit: both reported.
   t.svc.setActive(OWNER);
   t.svc.triggers.splice(0, t.svc.triggers.length, ...t.svc.triggers.filter((x) => x.handler === 'weeklyHealthCheck'));

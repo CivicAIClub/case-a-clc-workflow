@@ -41,6 +41,7 @@ var APP_NOTICE_DAYS = 7; // how long a one-off message (e.g. "made a new Doc") s
 var APP_MAX_FAILURES_KEPT = 20;
 var APP_STALE_AFTER_MS = 26 * 3600 * 1000; // no finished update for this long means something is wrong
 var APP_CANVAS_DOWN_STOP = 5; // a run stops after this many students in a row find Canvas down
+var APP_TABS_WARN = 80; // the weekly email warns when a Doc has this many tabs (Google allows 100)
 var APP_HEALTH_HOUR = 7; // the weekly health check: Mondays at about 7 AM, New York time
 var APP_HEALTH_FAILING_MS = 20 * 3600 * 1000; // a student failing this long (two runs) goes in the email
 var APP_PROPS_LIMIT_BYTES = 500 * 1024; // Google's limit on all Script Properties together
@@ -855,6 +856,7 @@ function updateOneStudent_(id) {
     applyTokenInfo(student);
     delete student.docUnsureSince;
     delete student.failingSince;
+    if (docInfo.tabs) student.docTabs = docInfo.tabs; // the weekly email warns well before Google's 100
     student.name = schedule.student_full_name || student.name;
     student.docId = docId;
     if (docInfo.replaced) student.notice = { at: new Date().toISOString(), message: docInfo.replaced };
@@ -910,6 +912,7 @@ function writeDocWithRecovery_(student, schedule, info) {
     if (info) {
       info.weeksDone = res.weeksDone;
       info.weeksTotal = res.weeksTotal;
+      info.tabs = res.tabs;
     }
     return res.documentId;
   };
@@ -1369,6 +1372,14 @@ function healthReport_() {
       title: failing.length + ' student' + (failing.length === 1 ? "'s Doc hasn't" : "s' Docs haven't") + ' updated for over a day:',
       lines: failing.map(function (s) { return (s.name || 'Student') + ': ' + s.last.message; }),
       todo: 'Each line says what to do. The same message is on their row, next to "Needs attention".',
+    });
+  }
+  var full = students.filter(function (s) { return s.docTabs >= APP_TABS_WARN; });
+  if (full.length) {
+    items.push({
+      title: 'Docs getting close to Google\'s limit of ' + DOC_TAB_LIMIT + ' tabs:',
+      lines: full.map(function (s) { return (s.name || 'Student') + ': ' + s.docTabs + ' tabs'; }),
+      todo: 'Start new Docs for them, as in "Summer, and a new school year" in the quick start (each school year adds about 37 tabs).',
     });
   }
   var expiring = tokensExpiringSoon_().filter(function (x) { return !x.expired; });

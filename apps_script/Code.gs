@@ -324,6 +324,21 @@ function docsBatchUpdate_(docId, requests) {
   throw lastErr;
 }
 
+function readJsonProperty_(key) {
+  try {
+    return JSON.parse(PropertiesService.getScriptProperties().getProperty(key) || 'null');
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeJsonProperty_(key, value) {
+  var props = PropertiesService.getScriptProperties();
+  var json = value && Object.keys(value).length ? JSON.stringify(value) : null;
+  if (json === null) props.deleteProperty(key);
+  else if (props.getProperty(key) !== json) props.setProperty(key, json);
+}
+
 function getScriptProperty_(name) {
   var value = PropertiesService.getScriptProperties().getProperty(name);
   return value ? String(value).trim() : '';
@@ -465,6 +480,13 @@ function upsertPlannerDocument_(data) {
   // One read serves the steps below; it's read again only after a step changes the Doc.
   var current = prepared.doc || docsGet_(docId);
   if (removeUpdatingLeftovers_(docId, findTabJsonById_(current, parentTabId))) current = docsGet_(docId);
+  // Google allows 100 tabs in a Doc, and an update may need two more (a new week, and one being
+  // rewritten). About 37 are added each school year, so a Doc kept for years gets there.
+  var tabCount = countTabs_(current);
+  if (tabCount + 2 > DOC_TAB_LIMIT) {
+    throw new Error("This student's Doc has " + tabCount + ' tabs, and Google allows ' + DOC_TAB_LIMIT + '. Start a new Doc ' +
+      'for them: add the year to this Doc\'s name, then Remove the student and add them again (quick start, "Summer, and a new school year").');
+  }
 
   // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
   var today = Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
@@ -479,7 +501,8 @@ function upsertPlannerDocument_(data) {
   var weekKeys = Object.keys(weeks).sort().filter(function (k) { return k >= scheduleWeekStart_(today); });
   // Every class gets a table each week, in the same color every week.
   var courses = plannerCourseList_(data);
-  var colorMap = buildCourseColorMap_(courses);
+  var colorMap = buildCourseColorMap_(courses, readJsonProperty_('colors.' + docId));
+  writeJsonProperty_('colors.' + docId, colorMap);
 
   // A week's tab somewhere else in the Doc (someone dragged it out of CLC Planner): every title must
   // be different, so a second one can't be made. Move it back first, so its Status and Notes are
@@ -616,13 +639,31 @@ function upsertPlannerDocument_(data) {
   // The home tab last, so its "Open this week" link can point at this week's (new) tab.
   rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date(), staffCounts, stoppedEarly ? null : nextRead);
 
-  return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId, weeksDone: weeksDone.length, weeksTotal: weekKeys.length };
+  return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId, weeksDone: weeksDone.length, weeksTotal: weekKeys.length, tabs: tabCount };
+}
+
+var DOC_TAB_LIMIT = 100;
+
+/** How many tabs a Doc has, at every level (the read lists Past weeks' tabs, without their content). */
+function countTabs_(docJson) {
+  var n = 0;
+  (function walk(tabs) {
+    (tabs || []).forEach(function (t) {
+      n++;
+      walk(t.childTabs);
+    });
+  })(docJson.tabs);
+  return n;
 }
 
 function buildWeekTabTitle_(weekKey, weekLabel) {
   var y = String(weekKey).split('-')[0] || '';
   var label = weekLabel || weekKey;
   var t = 'Week of ' + label + ', ' + y;
+  // A week that crosses New Year shows both years: "Week of Dec 28, 2026 – Jan 3, 2027".
+  var m = /^([A-Z][a-z]{2} \d{1,2}) \u2013 ([A-Z][a-z]{2} \d{1,2})$/.exec(String(label));
+  var y2 = /^\d{4}-\d{2}-\d{2}$/.test(String(weekKey)) ? scheduleAddDays_(weekKey, 6).slice(0, 4) : y;
+  if (m && y2 !== y) t = 'Week of ' + m[1] + ', ' + y + ' \u2013 ' + m[2] + ', ' + y2;
   if (t.length > 95) {
     t = t.substring(0, 92) + '…';
   }
@@ -794,7 +835,8 @@ var PAST_PRIORITY_BG = '#E0E0E0';
 
 /** "Week of Oct 5 – Oct 11, 2026" gives '2026-10-05' (its Monday); any other tab title gives null. */
 function weekKeyFromTabTitle_(title) {
-  var m = /^Week of ([A-Z][a-z]{2}) (\d{1,2}) \u2013 [A-Z][a-z]{2} \d{1,2}, (\d{4})$/.exec(String(title || ''));
+  var m = /^Week of ([A-Z][a-z]{2}) (\d{1,2}) \u2013 [A-Z][a-z]{2} \d{1,2}, (\d{4})$/.exec(String(title || '')) ||
+    /^Week of ([A-Z][a-z]{2}) (\d{1,2}), (\d{4}) \u2013 [A-Z][a-z]{2} \d{1,2}, \d{4}$/.exec(String(title || ''));
   if (!m) return null;
   var month = SCHEDULE_MONTH_NAMES.indexOf(m[1]);
   if (month === -1) return null;
@@ -814,7 +856,17 @@ function renameWeekTabsBack_(docId, parentTabId, today, readDoc, knownWeeks) {
   var taken = {};
   ((parent && parent.childTabs) || []).forEach(function (t) {
     var title = (t.tabProperties || {}).title || '';
-    if (weekKeyFromTabTitle_(title) || title === PAST_WEEKS_TITLE || title.slice(-UPDATING_SUFFIX.length) === UPDATING_SUFFIX) return;
+    if (title === PAST_WEEKS_TITLE || title.slice(-UPDATING_SUFFIX.length) === UPDATING_SUFFIX) return;
+    var titled = weekKeyFromTabTitle_(title);
+    if (titled) {
+      // A week tab under an older form of its title (the year at the end of a week that crosses New Year).
+      var current = buildWeekTabTitle_(titled, scheduleShortDate_(titled) + ' \u2013 ' + scheduleShortDate_(scheduleAddDays_(titled, 6)));
+      if (current !== title && !taken[current] && !findTabByTitleAnywhere_(doc, current)) {
+        taken[current] = true;
+        reqs.push({ updateDocumentTabProperties: { tabProperties: { tabId: t.tabProperties.tabId, title: current }, fields: 'title' } });
+      }
+      return;
+    }
     var body = t.documentTab && t.documentTab.body;
     var heading = body ? tabBodyPlainText_(body).replace(/^\s+/, '').split('\n')[0] : '';
     var key = weekKeyFromHeading_(heading, today, knownWeeks);
@@ -2450,16 +2502,26 @@ function appendTable_(reqs, tabId, at, rows, widths) {
 }
 
 /** One color per class, the same in every week (classes sorted A to Z, colors never repeat). */
-function buildCourseColorMap_(courseNames) {
+function buildCourseColorMap_(courseNames, previous) {
   var names = courseNames.slice().sort(function (a, b) {
     return a.localeCompare(b);
   });
 
   var map = {};
   var usedIndex = {};
+  // A class keeps the color it had (so it doesn't change when the class list does, for example at
+  // the semester change); only new classes get one.
+  names.forEach(function (name) {
+    var idx = previous && previous[name] ? COURSE_COLORS.indexOf(previous[name]) : -1;
+    if (idx >= 0 && !usedIndex[idx]) {
+      usedIndex[idx] = true;
+      map[name] = COURSE_COLORS[idx];
+    }
+  });
 
   for (var i = 0; i < names.length; i++) {
     var name = names[i];
+    if (map[name]) continue;
     var preferred = hashString_(name) % COURSE_COLORS.length;
     var idx = preferred;
     var guard = 0;
