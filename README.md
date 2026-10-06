@@ -100,7 +100,7 @@ Only needed for a brand-new project, for example to move AutoPlanner to a CLC st
 
    Properties named `student.*`, `token.*`, `busy.*`, `run.*`, `trigger.*`, `written.*`, `probe.*` and `teacherFolders` are written by the app, and so is `RUNTIME_LIMIT_SECONDS` (see `measureTimeLimit`). Don't edit them by hand.
 4. In the editor, open **App.gs** (the function menu only lists functions from the open file). Run **setupTriggers** and approve the permissions. It installs the daily updates and logs a setup check.
-5. Run **selfTest** (about 5 minutes). Don't open or edit your planner Doc while it runs. Using your own token, it:
+5. Run **selfTest** (about 6 minutes; a Doc last written by an older version gets one extra update first). Don't open or edit your planner Doc while it runs. Using your own token, it:
    - fetches your Canvas assignments
    - creates or reuses your Doc in the folder, and holds your student row so no other update writes it meanwhile
    - types a test Status and Note, and a row in **Added by staff**, moves that assignment to another week and back with two updates, and checks both followed it, in both tables, in exactly one week tab, and that the staff row came through exactly
@@ -111,7 +111,7 @@ Only needed for a brand-new project, for example to move AutoPlanner to a CLC st
 
    Each update's line shows where its time went (Doc reads, writes, pauses, each week).
 
-   **selfTestEveryday** (about 2 minutes) checks the everyday case on its own: a Status and Note changed in By Class survive a plain update, in both tables. It keeps `TEST_CANVAS_TOKEN`.
+   **selfTestEveryday** (about 4 minutes) checks the everyday case on its own: a Status and Note changed in By Class survive a plain update, in both tables. It keeps `TEST_CANVAS_TOKEN`.
 6. **Deploy → New deployment →** ⚙ **Web app**. Set **Execute as: Me** and **Who has access: Anyone within Pomfret School**, then click **Deploy**.
 
 Other functions you can run from the editor (they only run for the owner):
