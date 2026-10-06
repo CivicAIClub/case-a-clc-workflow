@@ -57,6 +57,8 @@ Hand out the quick start and token guides. "If anything looks wrong, email Cayde
 | A student shows the wrong CLC teacher | Their Doc was dragged into another teacher's folder in Drive. | Pick the right teacher in their dropdown; the Doc moves back. |
 | No **CLC teacher** column or **Show** filter | `CLC_TEACHERS` isn't set. | Club: see "Adding or removing a CLC teacher" in the quick start. |
 | A week's tab is gone from under **CLC Planner** | The week ended. | Open **Past weeks**: it's there, with its Status and Notes (and a gray Priority column). |
+| Priority says "Not on Canvas", "No due date" or "Now due …" | The assignment left Canvas or this window after staff typed on it. | Nothing; the row keeps its Status and Notes until it comes back or the week ends. Clear them to remove it sooner. |
+| "Automatic updates are paused" | The owner paused them (for example over the summer). | Club: run `resumeAutomaticUpdates`. "Update all students now" still works meanwhile. |
 | "Their Doc was deleted, so AutoPlanner made a new one." | Someone deleted the student's Doc. | Nothing; the new Doc is in the shared folder. The old one is in the owner's Drive trash for 30 days. |
 | "Automatic updates haven't finished since …" | The automatic updates stopped, usually because the owner's account changed. | Club: see "Long-term care" in the quick start. |
 | "An update for all students is running" | An update is already going (yours or the automatic one). | Wait; the progress shows under **Update**. |
