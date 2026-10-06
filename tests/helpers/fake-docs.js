@@ -5,6 +5,8 @@
 // withRendering, each week tab's tables are laid out the way the real writer lays them out, so
 // Status and Notes round-trip through updates and staff edits. All data is made up.
 
+const { applyFieldMask } = require('./field-mask');
+
 const tcell = (text, link) => ({ content: [{ paragraph: { elements: [{ textRun: { content: text + '\n', textStyle: link ? { link: { url: link } } : {} } }] } }] });
 
 function fakeDocs(tabs) {
@@ -44,7 +46,11 @@ function fakeDocs(tabs) {
     return {};
   };
   st.service = { Documents: {
-    get: () => JSON.parse(JSON.stringify({ tabs: st.tabs })),
+    // A read with a fields mask returns only those fields, as Google's does.
+    get: (id, opts) => {
+      const json = JSON.parse(JSON.stringify({ tabs: st.tabs }));
+      return opts && opts.fields ? applyFieldMask(json, String(opts.fields)) : json;
+    },
     batchUpdate: (body) => {
       const backup = JSON.stringify(st.tabs);
       try {

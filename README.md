@@ -42,7 +42,7 @@ Time-driven triggers (7 pm, midnight) → App.gs → same path, in batches
 
 - **Web app:** executes as the owner (`USER_DEPLOYING`) and is open to **Anyone within Pomfret School** (`DOMAIN`). On top of that, every function the page can call checks the visitor's email (`Session.getActiveUser()`) against the `ALLOWED_USERS` Script Property.
 - **Storage:** the student list, tokens and run summaries live in **Script Properties**, one property per student, with writes protected by `LockService`. Tokens never leave the server: the page only ever gets the last 4 characters, and tokens are never logged or put in messages.
-- **Long runs:** Apps Script stops any run at the account's time limit (6 minutes by default; `measureTimeLimit` measures the real one and saves it in `RUNTIME_LIMIT_SECONDS`; the current owner's is 30 minutes). One student's Doc takes about 1.5–4 minutes, depending on how fast Google Docs is that day; reading the Doc is most of it.
+- **Long runs:** Apps Script stops any run at the account's time limit (6 minutes by default; `measureTimeLimit` measures the real one and saves it in `RUNTIME_LIMIT_SECONDS`; the current owner's is 30 minutes). Reading the Doc used to be most of an update (about 1.25 MB per read, 10 reads). Reads now ask only for the text, links and positions AutoPlanner uses (about a fifth of a full read), and each week reuses the previous week's final read, so an update with 4 weeks reads the Doc 5 times.
   - An automatic batch (7 pm, midnight, `continueRun`) keeps starting students until 5 minutes short of the limit (25 minutes at most). A batch started from the page stops starting students after 2 minutes, so the page hears back quickly. Either way, a batch never starts a student whose last update time (plus 25%) wouldn't fit in what's left; it schedules `continueRun` a minute later instead.
   - Inside an update, a week is rebuilt only if it fits before the limit; otherwise the update stops cleanly between weeks and the rest is done next time.
   - A safety trigger, set to fire after the limit has passed, resumes a run whose batch was cut off.
@@ -106,6 +106,7 @@ Only needed for a brand-new project, for example to move AutoPlanner to a CLC st
    - types a test Status and Note, and a row in **Added by staff**, moves that assignment to another week and back with two updates, and checks both followed it, in both tables, in exactly one week tab, and that the staff row came through exactly
    - checks the layout after a full update, then puts the test assignment's Status and Note back and clears the staff row
    - with at least 2 CLC teachers set, moves your Doc between teacher folders (from the page and as a Drive drag-in), checks the folder lock, and puts your row back how it was
+   - reads your Doc both ways (slim and full), times them, and checks they give the same Status, Notes, staff rows and widths
 
    Every line of the log should say `PASS` (a `SKIP` says why it skipped).
 
