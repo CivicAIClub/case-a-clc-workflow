@@ -908,7 +908,9 @@ test('simulation bug 1: overdue work given a new date after its week was filed c
   at('2026-11-09T05:20:00Z');
   update([[1, 'Lab report', '2026-11-06T20:00:00Z'], [2, 'Quiz', '2026-11-10T20:00:00Z']]);
   assert.ok(!weekTitle('Nov 2'), 'filed');
-  assert.deepStrictEqual(JSON.parse(t.svc.props['filed.DOC1']), { 1: '2026-11-02' });
+  // Remembered: the ID, its week and what was last written (a note's fingerprint, never the note).
+  assert.deepStrictEqual(toPlain(t.ctx.readFiled_('DOC1')), { 1: { w: '2026-11-02', s: 'In progress', n: t.ctx.noteFingerprint_('missing the graph') } });
+  assert.ok(!t.svc.props['filed.DOC1'].includes('graph'));
   // Tuesday: the teacher extends it to Wednesday.
   at('2026-11-10T23:00:00Z');
   let reads = 0;
@@ -920,6 +922,19 @@ test('simulation bug 1: overdue work given a new date after its week was filed c
   assert.strictEqual(reads, 1, 'one read with Past weeks');
   update([[1, 'Lab report', '2026-11-12T04:59:00Z'], [2, 'Quiz', '2026-11-10T20:00:00Z']]);
   assert.strictEqual(reads, 1, 'and only that once: now it has rows of its own');
+});
+
+test('simulation bug 1, edited late: an edit typed after the last update before filing (one table only) is the one that comes back', () => {
+  const { docs, at, u, update, weekTitle } = clockSetup();
+  update([[1, 'Lab report', '2026-11-06T20:00:00Z']]);
+  staffTypes(docs, weekTitle('Nov 2'), u(1), 'class', 'In progress', 'first note');
+  update([[1, 'Lab report', '2026-11-06T20:00:00Z']]); // written down: In progress, "first note"
+  staffTypes(docs, weekTitle('Nov 2'), u(1), 'day', 'Complete', 'typed Sunday night'); // By Day only
+  at('2026-11-09T05:20:00Z');
+  update([[1, 'Lab report', '2026-11-06T20:00:00Z']]); // filed, with the two tables disagreeing
+  at('2026-11-10T23:00:00Z');
+  update([[1, 'Lab report', '2026-11-12T04:59:00Z']]);
+  assert.deepStrictEqual(rowsOf(docs, u(1)).map((r) => [r.status, r.note]), [['Complete', 'typed Sunday night'], ['Complete', 'typed Sunday night']]);
 });
 
 test('simulation bug 2: work pushed past these 4 weeks, then back in, keeps its Status and Note (kept row, then Past weeks)', () => {

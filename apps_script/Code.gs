@@ -937,7 +937,7 @@ function archivePastWeeks_(docId, parentTabId, today, readDoc) {
   docsBatchUpdate_(docId, archiveMoveRequests_(ended, pastId));
   rememberFiledAssignments_(docId, ended.map(function (w) {
     return { key: w.key, tab: parent.childTabs.filter(function (t) { return t.tabProperties.tabId === w.id; })[0] };
-  }), today);
+  }), today, readWritten_(docId));
   return ended.length;
 }
 
@@ -945,36 +945,48 @@ function archivePastWeeks_(docId, parentTabId, today, readDoc) {
 // Overdue work is often given a new date after its week has been filed into Past weeks, and work
 // pushed past these weeks comes back later. Past weeks aren't read on a normal update, so the
 // assignment would come back blank. When a week is filed, the IDs of its assignments with a Status
-// or Note are kept for 10 weeks in "filed.<docId>" ({ id: week }; never the notes
-// themselves). If one comes back with no row in the current weeks, that one update also reads
-// Past weeks' content and copies its Status and Note from the filed week.
+// or Note are kept for 10 weeks in "filed.<docId>", with what AutoPlanner last wrote for them (in
+// the "last written" form: week, Status, a note's fingerprint; never the notes themselves). If one
+// comes back with no row in the current weeks, that one update also reads Past weeks' content and
+// copies its Status and Note from the filed week: the copy staff edited last, as for current weeks.
 var FILED_KEEP_DAYS = 70;
 var FILED_MAX_CHARS = 8000;
 
+/** { id: { w, s, n } } (see decodeWritten_); an entry with no record is just { w }. */
 function readFiled_(docId) {
+  var raw;
   try {
-    return JSON.parse(PropertiesService.getScriptProperties().getProperty('filed.' + docId) || '{}') || {};
+    raw = JSON.parse(PropertiesService.getScriptProperties().getProperty('filed.' + docId) || '{}') || {};
   } catch (e) {
-    return {};
+    raw = {};
   }
+  var out = {};
+  Object.keys(raw).forEach(function (id) {
+    var v = String(raw[id]);
+    out[id] = /^\d{4}-\d{2}-\d{2}$/.test(v) ? { w: v } : decodeWritten_(v);
+  });
+  return out;
 }
 
-function rememberFiledAssignments_(docId, filedWeeks, today) {
+function rememberFiledAssignments_(docId, filedWeeks, today, record) {
   var map = readFiled_(docId);
   filedWeeks.forEach(function (w) {
     eachAssignmentCopy_(w.tab, function (url, kind, status, note) {
       if (status === STATUS_DEFAULT && !note) return;
-      map[assignmentKey_(url)] = w.key;
+      var id = assignmentKey_(url);
+      var last = (record || {})[id];
+      map[id] = last && last.w === w.key ? last : { w: w.key };
     });
   });
   var oldest = scheduleAddDays_(scheduleWeekStart_(today), -FILED_KEEP_DAYS);
-  var ids = Object.keys(map).filter(function (id) { return map[id] >= oldest; });
-  ids.sort(function (a, b) { return map[a] < map[b] ? 1 : map[a] > map[b] ? -1 : 0; }); // newest first
+  var ids = Object.keys(map).filter(function (id) { return map[id].w >= oldest; });
+  ids.sort(function (a, b) { return map[a].w < map[b].w ? 1 : map[a].w > map[b].w ? -1 : 0; }); // newest first
   var kept = {};
   var size = 2;
   ids.forEach(function (id) {
-    size += id.length + 16;
-    if (size <= FILED_MAX_CHARS) kept[id] = map[id];
+    var v = map[id].s ? encodeWritten_(map[id]) : map[id].w;
+    size += id.length + v.length + 6;
+    if (size <= FILED_MAX_CHARS) kept[id] = v;
   });
   var props = PropertiesService.getScriptProperties();
   if (Object.keys(kept).length) props.setProperty('filed.' + docId, JSON.stringify(kept));
@@ -991,8 +1003,8 @@ function restoreFromPastWeeks_(docId, parentTabId, weeks, saved) {
   Object.keys(weeks).forEach(function (k) {
     (weeks[k].days || []).forEach(function (d) {
       (d.assignments || []).forEach(function (a) {
-        var week = a.url && !scheduleHasKey_(saved.status, a.url) ? filed[assignmentKey_(a.url)] : null;
-        if (week) wanted[a.url] = week;
+        var entry = a.url && !scheduleHasKey_(saved.status, a.url) ? filed[assignmentKey_(a.url)] : null;
+        if (entry) wanted[a.url] = entry;
       });
     });
   });
@@ -1005,19 +1017,16 @@ function restoreFromPastWeeks_(docId, parentTabId, weeks, saved) {
   var n = 0;
   urls.forEach(function (url) {
     var tab = ((past && past.childTabs) || []).filter(function (t) {
-      return weekKeyFromTabTitle_((t.tabProperties || {}).title) === wanted[url];
+      return weekKeyFromTabTitle_((t.tabProperties || {}).title) === wanted[url].w;
     })[0];
-    var best = null;
-    eachAssignmentCopy_(tab, function (u, kind, status, note) {
-      if (u !== url) return;
-      var typed = status !== STATUS_DEFAULT || note;
-      if (!best || (typed && !best.typed) || (typed === best.typed && kind === 'class' && best.kind !== 'class')) {
-        best = { kind: kind, status: status, note: note, typed: !!typed };
-      }
-    });
-    if (best) {
-      saved.status[url] = best.status;
-      saved.notes[url] = best.note;
+    if (!tab) return;
+    // The same choice as for current weeks: the copy that differs from what was last written wins.
+    var record = {};
+    record[assignmentKey_(url)] = wanted[url];
+    var found = collectSavedData_({ childTabs: [tab] }, record);
+    if (scheduleHasKey_(found.status, url)) {
+      saved.status[url] = found.status[url];
+      saved.notes[url] = found.notes[url];
       n++;
     }
   });
