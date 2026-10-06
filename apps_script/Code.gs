@@ -944,8 +944,8 @@ function archivePastWeeks_(docId, parentTabId, today, readDoc) {
 // ---- Assignments that come back from a filed week ---------------------------------------------
 // Overdue work is often given a new date after its week has been filed into Past weeks, and work
 // pushed past these weeks comes back later. Past weeks aren't read on a normal update, so the
-// assignment would come back blank. When a week is filed, the IDs of its unfinished assignments
-// with a Status or Note are kept for 10 weeks in "filed.<docId>" ({ id: week }; never the notes
+// assignment would come back blank. When a week is filed, the IDs of its assignments with a Status
+// or Note are kept for 10 weeks in "filed.<docId>" ({ id: week }; never the notes
 // themselves). If one comes back with no row in the current weeks, that one update also reads
 // Past weeks' content and copies its Status and Note from the filed week.
 var FILED_KEEP_DAYS = 70;
@@ -963,7 +963,7 @@ function rememberFiledAssignments_(docId, filedWeeks, today) {
   var map = readFiled_(docId);
   filedWeeks.forEach(function (w) {
     eachAssignmentCopy_(w.tab, function (url, kind, status, note) {
-      if (status === 'Complete' || (status === STATUS_DEFAULT && !note)) return;
+      if (status === STATUS_DEFAULT && !note) return;
       map[assignmentKey_(url)] = w.key;
     });
   });
