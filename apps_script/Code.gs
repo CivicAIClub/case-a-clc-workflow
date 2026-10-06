@@ -240,6 +240,9 @@ var DOCS_READ_TAB = 'documentTab(documentStyle(pageSize,marginLeft,marginRight),
   DOCS_READ_PARAGRAPH + ',' + DOCS_READ_TABLE + ',sectionBreak/sectionStyle/sectionType))';
 var DOCS_GET_FIELDS = 'tabs(tabProperties,' + DOCS_READ_TAB + ',childTabs(tabProperties,' + DOCS_READ_TAB +
   ',childTabs(tabProperties)))';
+// The same, with Past weeks' content: read only when an assignment comes back from a filed week.
+var DOCS_GET_FIELDS_WITH_PAST = 'tabs(tabProperties,' + DOCS_READ_TAB + ',childTabs(tabProperties,' + DOCS_READ_TAB +
+  ',childTabs(tabProperties,' + DOCS_READ_TAB + ')))';
 var docsGetFieldsRejected_ = false; // set if Google ever refuses DOCS_GET_FIELDS; then reads are full
 
 /** Docs.Documents.get with retries when Google returns quota / rate limit errors. */
@@ -487,6 +490,9 @@ function upsertPlannerDocument_(data) {
     lastWritten = readWritten_(data.previousDocId);
   }
   var saved = collectSavedData_(beforeParent, lastWritten);
+  // Back from a week that's been filed (an extension, or work pushed past these weeks): its Status
+  // and Note come from that week, in Past weeks.
+  restoreFromPastWeeks_(docId, parentTabId, weeks, saved);
   // An assignment with no row left in the Doc (its week tab or tables were deleted, or it moved
   // out of a week that has just been filed) gets its Status back from what was written last time.
   // Notes can't come back this way: only their fingerprints are kept outside the Doc.
@@ -595,7 +601,10 @@ function upsertPlannerDocument_(data) {
     });
   });
   saveWritten_(docId, written);
-  if (data.previousDocId && data.previousDocId !== docId) deleteWritten_(data.previousDocId);
+  if (data.previousDocId && data.previousDocId !== docId) {
+    deleteWritten_(data.previousDocId);
+    PropertiesService.getScriptProperties().deleteProperty('filed.' + data.previousDocId);
+  }
 
   // The home tab last, so its "Open this week" link can point at this week's (new) tab.
   rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date(), staffCounts, stoppedEarly ? null : nextRead);
@@ -867,7 +876,93 @@ function archivePastWeeks_(docId, parentTabId, today, readDoc) {
     console.warn('Past weeks: Priority not grayed: ' + err);
   }
   docsBatchUpdate_(docId, archiveMoveRequests_(ended, pastId));
+  rememberFiledAssignments_(docId, ended.map(function (w) {
+    return { key: w.key, tab: parent.childTabs.filter(function (t) { return t.tabProperties.tabId === w.id; })[0] };
+  }), today);
   return ended.length;
+}
+
+// ---- Assignments that come back from a filed week ---------------------------------------------
+// Overdue work is often given a new date after its week has been filed into Past weeks, and work
+// pushed past these weeks comes back later. Past weeks aren't read on a normal update, so the
+// assignment would come back blank. When a week is filed, the IDs of its unfinished assignments
+// with a Status or Note are kept for 10 weeks in "filed.<docId>" ({ id: week }; never the notes
+// themselves). If one comes back with no row in the current weeks, that one update also reads
+// Past weeks' content and copies its Status and Note from the filed week.
+var FILED_KEEP_DAYS = 70;
+var FILED_MAX_CHARS = 8000;
+
+function readFiled_(docId) {
+  try {
+    return JSON.parse(PropertiesService.getScriptProperties().getProperty('filed.' + docId) || '{}') || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function rememberFiledAssignments_(docId, filedWeeks, today) {
+  var map = readFiled_(docId);
+  filedWeeks.forEach(function (w) {
+    eachAssignmentCopy_(w.tab, function (url, kind, status, note) {
+      if (status === 'Complete' || (status === STATUS_DEFAULT && !note)) return;
+      map[assignmentKey_(url)] = w.key;
+    });
+  });
+  var oldest = scheduleAddDays_(scheduleWeekStart_(today), -FILED_KEEP_DAYS);
+  var ids = Object.keys(map).filter(function (id) { return map[id] >= oldest; });
+  ids.sort(function (a, b) { return map[a] < map[b] ? 1 : map[a] > map[b] ? -1 : 0; }); // newest first
+  var kept = {};
+  var size = 2;
+  ids.forEach(function (id) {
+    size += id.length + 16;
+    if (size <= FILED_MAX_CHARS) kept[id] = map[id];
+  });
+  var props = PropertiesService.getScriptProperties();
+  if (Object.keys(kept).length) props.setProperty('filed.' + docId, JSON.stringify(kept));
+  else props.deleteProperty('filed.' + docId);
+}
+
+/**
+ * Status and Notes for assignments that are back on the planner with no row in the current weeks,
+ * copied from the filed week they were in (see above). Gives back how many came back.
+ */
+function restoreFromPastWeeks_(docId, parentTabId, weeks, saved) {
+  var filed = readFiled_(docId);
+  var wanted = {};
+  Object.keys(weeks).forEach(function (k) {
+    (weeks[k].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) {
+        var week = a.url && !scheduleHasKey_(saved.status, a.url) ? filed[assignmentKey_(a.url)] : null;
+        if (week) wanted[a.url] = week;
+      });
+    });
+  });
+  var urls = Object.keys(wanted);
+  if (!urls.length) return 0;
+  var deep = docsGet_(docId, { includeTabsContent: true, fields: DOCS_GET_FIELDS_WITH_PAST });
+  var parent = findTabJsonById_(deep, parentTabId);
+  var pastId = parent && findChildTabIdByTitle_(parent, PAST_WEEKS_TITLE);
+  var past = pastId ? findTabJsonById_(deep, pastId) : findTabByTitleAnywhere_(deep, PAST_WEEKS_TITLE);
+  var n = 0;
+  urls.forEach(function (url) {
+    var tab = ((past && past.childTabs) || []).filter(function (t) {
+      return weekKeyFromTabTitle_((t.tabProperties || {}).title) === wanted[url];
+    })[0];
+    var best = null;
+    eachAssignmentCopy_(tab, function (u, kind, status, note) {
+      if (u !== url) return;
+      var typed = status !== STATUS_DEFAULT || note;
+      if (!best || (typed && !best.typed) || (typed === best.typed && kind === 'class' && best.kind !== 'class')) {
+        best = { kind: kind, status: status, note: note, typed: !!typed };
+      }
+    });
+    if (best) {
+      saved.status[url] = best.status;
+      saved.notes[url] = best.note;
+      n++;
+    }
+  });
+  return n;
 }
 
 /**

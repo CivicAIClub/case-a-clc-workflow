@@ -860,6 +860,68 @@ test("a new Doc replacing a deleted one gets the old Doc's Statuses back (not No
   assert.ok(t.svc.props['written.DOC2'] && !('written.DOC1' in t.svc.props), Object.keys(t.svc.props).join(' '));
 });
 
+// A simulated clock and the real Canvas.gs scheduling: `canvas` lists [id, name, due_at (UTC) or null].
+function clockSetup() {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  let now = new Date('2026-11-04T15:00:00Z').getTime();
+  const RealDate = Date;
+  t.ctx.Date = class extends RealDate {
+    constructor(...a) { if (a.length) super(...a); else super(now); }
+    static now() { return now; }
+  };
+  const at = (iso) => { now = new RealDate(iso).getTime(); };
+  const u = (id) => 'https://pomfret.instructure.com/courses/1/assignments/' + id;
+  const update = (canvas) => {
+    const pairs = canvas.map(([id, name, due]) => [{ name, due_at: due, html_url: u(id) }, 'Biology']);
+    const sched = toPlain(t.ctx.buildWeeklySchedule_(pairs, 'America/New_York', 4, new t.ctx.Date()));
+    sched.elsewhere = toPlain(t.ctx.canvasElsewhere_(pairs, sched));
+    // noDeadline: the simulated clock is weeks ahead of when this "execution" started.
+    t.ctx.upsertPlannerDocument_(Object.assign({}, base, sched, { documentId: 'DOC1', courses: ['Biology'], noDeadline: true }));
+  };
+  const weekTitle = (label) => docs.service.Documents.get().tabs[0].childTabs.map((x) => x.tabProperties.title).find((x) => x.startsWith('Week of ' + label));
+  return { t, docs, at, u, update, weekTitle };
+}
+
+test('simulation bug 1: overdue work given a new date after its week was filed comes back with its Status and Note (from Past weeks)', () => {
+  const { t, docs, at, u, update, weekTitle } = clockSetup();
+  update([[1, 'Lab report', '2026-11-06T20:00:00Z'], [2, 'Quiz', '2026-11-10T20:00:00Z']]);
+  staffTypes(docs, weekTitle('Nov 2'), u(1), 'class', 'In progress', 'missing the graph');
+  update([[1, 'Lab report', '2026-11-06T20:00:00Z'], [2, 'Quiz', '2026-11-10T20:00:00Z']]);
+  // Monday just after midnight: last week is filed; the lab report is overdue (not on the planner).
+  at('2026-11-09T05:20:00Z');
+  update([[1, 'Lab report', '2026-11-06T20:00:00Z'], [2, 'Quiz', '2026-11-10T20:00:00Z']]);
+  assert.ok(!weekTitle('Nov 2'), 'filed');
+  assert.deepStrictEqual(JSON.parse(t.svc.props['filed.DOC1']), { 1: '2026-11-02' });
+  // Tuesday: the teacher extends it to Wednesday.
+  at('2026-11-10T23:00:00Z');
+  let reads = 0;
+  const realGet = docs.service.Documents.get;
+  t.ctx.Docs = { Documents: { get: (id, o) => { if (o && o.fields === t.ctx.DOCS_GET_FIELDS_WITH_PAST) reads++; return realGet(id, o); }, batchUpdate: docs.service.Documents.batchUpdate } };
+  update([[1, 'Lab report', '2026-11-12T04:59:00Z'], [2, 'Quiz', '2026-11-10T20:00:00Z']]);
+  assert.deepStrictEqual(rowsOf(docs, u(1)).map((r) => [r.week, r.status, r.note]), [
+    ['Week of Nov 9 – Nov 15, 2026', 'In progress', 'missing the graph'], ['Week of Nov 9 – Nov 15, 2026', 'In progress', 'missing the graph']]);
+  assert.strictEqual(reads, 1, 'one read with Past weeks');
+  update([[1, 'Lab report', '2026-11-12T04:59:00Z'], [2, 'Quiz', '2026-11-10T20:00:00Z']]);
+  assert.strictEqual(reads, 1, 'and only that once: now it has rows of its own');
+});
+
+test('simulation bug 2: work pushed past these 4 weeks, then back in, keeps its Status and Note (kept row, then Past weeks)', () => {
+  const { docs, at, u, update, weekTitle } = clockSetup();
+  update([[3, 'Essay', '2026-11-13T20:00:00Z']]);
+  staffTypes(docs, weekTitle('Nov 9'), u(3), 'class', 'In progress', 'outline approved');
+  // Postponed to Dec 21: outside the 4 weeks. Its row stays in its week, marked.
+  update([[3, 'Essay', '2026-12-21T20:00:00Z']]);
+  assert.deepStrictEqual(rowsOf(docs, u(3)).map((r) => [r.week, r.priority, r.note]), [
+    ['Week of Nov 9 – Nov 15, 2026', 'Now due Dec 21', 'outline approved'], ['Week of Nov 9 – Nov 15, 2026', 'Now due Dec 21', 'outline approved']]);
+  for (const day of ['2026-11-16', '2026-11-23']) { at(day + 'T05:20:00Z'); update([[3, 'Essay', '2026-12-21T20:00:00Z']]); }
+  assert.deepStrictEqual(rowsOf(docs, u(3)), [], 'its week was filed');
+  at('2026-11-30T05:20:00Z'); // Dec 21 is now within the 4 weeks
+  update([[3, 'Essay', '2026-12-21T20:00:00Z']]);
+  assert.deepStrictEqual(rowsOf(docs, u(3)).map((r) => [r.week, r.priority, r.status, r.note]), [
+    ['Week of Dec 21 – Dec 27, 2026', 'Upcoming', 'In progress', 'outline approved'], ['Week of Dec 21 – Dec 27, 2026', 'Upcoming', 'In progress', 'outline approved']]);
+});
+
 test('scenario (d): a dropped class keeps a table only in the week where a typed row stays; the home tab only counts what Canvas has', () => {
   const { t, docs } = rebuildSetup([]);
   withRendering(t, docs);
