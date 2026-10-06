@@ -60,7 +60,7 @@ Type in the white **Status** and **Notes** cells, in either table:
 
 Use the Notes column, not comments, for anything you want to keep. Comments on week tabs can be lost when AutoPlanner updates.
 
-AutoPlanner never changes these two columns, so what you type survives every update. The same reminder is at the top of every week tab. If a teacher moves an assignment's due date to another week, its Status and Notes move with it.
+AutoPlanner never changes these two columns, so what you type survives every update. The same reminder is at the top of every week tab. If a teacher moves an assignment's due date to another week, its Status and Notes move with it, even if its old week has already gone into Past weeks (for example, overdue work given a new date). That works for up to 10 weeks.
 
 **If an assignment disappears from Canvas after you typed on it**, it stays in its week with your Status and Note, and its **Priority** cell says why:
 
