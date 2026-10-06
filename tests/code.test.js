@@ -429,12 +429,28 @@ test("Doc reads ask only for what AutoPlanner uses (no Past weeks' content, no p
   // A missing Doc is still an error, and doesn't switch reads to full.
   assert.throws(() => t.ctx.docsGet_('GONE'), /not found/);
   assert.strictEqual(t.ctx.docsGetFieldsRejected_, false);
-  // Google refuses the shorter read: the update still works, with full reads from then on.
-  refuse = true;
+  // A passing error on the shorter read: asked again, and reads stay short.
+  let hiccups = 1;
+  t.ctx.Docs = { Documents: { get: (id, opts) => {
+    asked.push(toPlain(opts));
+    if (opts.fields && hiccups-- > 0) throw new Error('Internal error encountered.');
+    return { tabs: [] };
+  } } };
   asked.length = 0;
   t.ctx.docsGet_('DOC');
   t.ctx.docsGet_('DOC');
-  assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }, { includeTabsContent: true }, { includeTabsContent: true }]);
+  assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }, { includeTabsContent: true, fields: mask }, { includeTabsContent: true, fields: mask }]);
+  assert.strictEqual(t.ctx.docsGetFieldsRejected_, false);
+  // Google refuses the shorter read (twice): the update still works, with full reads from then on.
+  t.ctx.Docs = { Documents: { get: (id, opts) => {
+    asked.push(toPlain(opts));
+    if (opts.fields) throw new Error('Invalid field selection tabs');
+    return { tabs: [] };
+  } } };
+  asked.length = 0;
+  t.ctx.docsGet_('DOC');
+  t.ctx.docsGet_('DOC');
+  assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }, { includeTabsContent: true, fields: mask }, { includeTabsContent: true }, { includeTabsContent: true }]);
   assert.strictEqual(t.ctx.docsGetFieldsRejected_, true);
 });
 

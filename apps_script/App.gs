@@ -998,11 +998,14 @@ function startRun_(reason, startedBy) {
 
 /**
  * How long an automatic batch keeps starting students: 2 minutes with the default 6-minute limit;
- * with a longer measured limit, up to 5 minutes short of it (25 minutes at most). The last student
- * must still fit (nextStudentFits_).
+ * with a longer measured limit, two thirds of it in whole minutes (20 minutes at most), so an
+ * execution ends around 70% of the limit, never close to it. The last student must still fit
+ * (nextStudentFits_).
  */
 function triggerBatchBudgetMs_() {
-  return Math.max(APP_BATCH_BUDGET_MS, Math.min(runtimeLimitMs_() - 5 * 60 * 1000, 25 * 60 * 1000));
+  var limit = runtimeLimitMs_();
+  if (limit <= DEFAULT_RUNTIME_LIMIT_SECONDS * 1000) return APP_BATCH_BUDGET_MS;
+  return Math.max(APP_BATCH_BUDGET_MS, Math.min(Math.floor(limit * 2 / 3 / 60000) * 60000, 20 * 60 * 1000));
 }
 
 /**
@@ -1013,6 +1016,13 @@ function triggerBatchBudgetMs_() {
 function processRunBatch_(runId, budgetMs) {
   var budget = budgetMs === undefined ? APP_BATCH_BUDGET_MS : budgetMs;
   var batchStart = Date.now();
+  withLock_(function () {
+    var run = readJson_('run.current');
+    if (run && run.id === runId) {
+      run.batchStartedAt = batchStart; // continueRun uses it if this batch is cut off
+      writeJson_('run.current', run);
+    }
+  });
   // The safety trigger fires only after this execution must have ended (the time limit has
   // passed), so it never runs alongside a batch that's still going.
   replaceContinueTrigger_(runtimeLimitMs_() + APP_SAFETY_GRACE_MS);
@@ -1169,8 +1179,26 @@ function continueRun(e) {
       message: "Was stopped partway by Apps Script's time limit. It will be tried again at the next update.",
     });
     PropertiesService.getScriptProperties().deleteProperty('busy.' + run.inProgress);
+    noteEarlyCutOff_(run);
   }
   processRunBatch_(run.id, triggerBatchBudgetMs_());
+}
+
+/**
+ * A batch cut off long before the time limit AutoPlanner measured (before half of it) means the
+ * real limit is now lower: for example Google changed it, or a new owner's account has the usual 6
+ * minutes. Plan for 6 minutes from now on (otherwise every batch is cut off and a run takes hours),
+ * and say so in the weekly email until measureTimeLimit measures it again.
+ */
+function noteEarlyCutOff_(run) {
+  var limit = runtimeLimitMs_();
+  if (limit <= DEFAULT_RUNTIME_LIMIT_SECONDS * 1000 || !run.batchStartedAt || !run.heartbeatAt) return;
+  var survived = run.heartbeatAt - run.batchStartedAt;
+  if (survived >= limit / 2) return;
+  PropertiesService.getScriptProperties().setProperty('RUNTIME_LIMIT_SECONDS', String(DEFAULT_RUNTIME_LIMIT_SECONDS));
+  writeJson_('limit.dropped', { at: new Date().toISOString(), was: Math.round(limit / 1000), survived: Math.round(survived / 1000) });
+  console.warn('A batch was cut off after about ' + Math.round(survived / 60000) + ' min, before the ' + Math.round(limit / 60000) +
+    ' min measured: planning for ' + Math.round(DEFAULT_RUNTIME_LIMIT_SECONDS / 60) + ' min from now on.');
 }
 
 function deleteTriggersFor_(handler) {
@@ -1323,6 +1351,15 @@ function healthReport_() {
       todo: "The owner's account may have lost access. See \"Long-term care\" in the quick start.",
     });
   }
+  var dropped = readJson_('limit.dropped');
+  if (dropped) {
+    items.push({
+      title: 'Apps Script stopped an update after about ' + Math.max(1, Math.round(dropped.survived / 60)) + ' minutes, sooner than the ' +
+        Math.round(dropped.was / 60) + ' minutes it allowed before, so AutoPlanner now plans for 6.',
+      lines: [],
+      todo: 'In the Apps Script editor, open App.gs, run measureTimeLimit and leave it (up to 31 minutes), then run checkSetup.',
+    });
+  }
   var students = listStudents_();
   var failing = students.filter(function (s) {
     return s.last && !s.last.ok && s.failingSince && now - new Date(s.failingSince).getTime() >= APP_HEALTH_FAILING_MS;
@@ -1427,6 +1464,10 @@ function checkSetup() {
   Logger.log(limitSet >= 60
     ? 'OK   Apps Script time limit: ' + limitSet + ' s per run (measured).'
     : 'NOTE Apps Script time limit: not measured; assuming ' + DEFAULT_RUNTIME_LIMIT_SECONDS + ' s. Run measureTimeLimit once to measure it.');
+  if (readJson_('limit.dropped')) {
+    Logger.log('NOTE An update was cut off long before the measured limit, so AutoPlanner now plans for ' + DEFAULT_RUNTIME_LIMIT_SECONDS +
+      ' s. Run measureTimeLimit, then checkSetup.');
+  }
   var teachers = clcTeachers_();
   if (!teachers.length) {
     Logger.log('     CLC_TEACHERS: (none: no teacher folders; every Doc stays in the shared folder)');
@@ -1505,6 +1546,7 @@ function finishTimeLimitProbe_() {
   var props = PropertiesService.getScriptProperties();
   props.setProperty('RUNTIME_LIMIT_SECONDS', String(limit));
   props.deleteProperty('probe.timeLimit');
+  props.deleteProperty('limit.dropped');
   return limit;
 }
 

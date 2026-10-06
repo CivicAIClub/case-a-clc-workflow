@@ -251,6 +251,7 @@ function docsGet_(docId, opts) {
     (docsGetFieldsRejected_ ? { includeTabsContent: true } : { includeTabsContent: true, fields: DOCS_GET_FIELDS });
   var lastErr;
   var fellBack = false;
+  var slimFailures = 0;
   for (var attempt = 0; attempt < 7; attempt++) {
     try {
       var t0 = Date.now();
@@ -266,6 +267,12 @@ function docsGet_(docId, opts) {
     } catch (e) {
       lastErr = e;
       if (options.fields && !docsApiIsQuotaError_(e)) {
+        // Once more first: a passing error ("Internal error encountered") shouldn't switch the rest
+        // of this run to full reads, about 5 times bigger (found by the year simulation).
+        if (++slimFailures < 2) {
+          Utilities.sleep(1000);
+          continue;
+        }
         // Never let the shorter read break an update: try a full read.
         fellBack = true;
         options = { includeTabsContent: true };

@@ -593,6 +593,34 @@ test('if a batch is cut off mid-student, the safety trigger records it and carri
   assert.match(last.failed[0].message, /^Was stopped partway by Apps Script's time limit\. It will be tried again at the next update\.$/);
 });
 
+test('simulation bug 4: batches cut off long before the measured limit mean it dropped: plan for 6 minutes, and say so in the weekly email', () => {
+  for (const survivedMin of [5, 22]) {
+    const t = setup({ RUNTIME_LIMIT_SECONDS: '1800' });
+    t.svc.setActive(OWNER);
+    t.ctx.setupTriggers();
+    addAs(t, STAFF, TOKEN_A, '');
+    const now = Date.now();
+    t.svc.props['run.current'] = JSON.stringify({ id: 'r1', reason: 'scheduled', startedBy: 'automatic', startedAt: now - 40 * 60000, queue: [], total: 2, updated: 1,
+      failed: [], inProgress: 'gone', batchStartedAt: now - 40 * 60000, heartbeatAt: now - (40 - survivedMin) * 60000 });
+    t.ctx.replaceContinueTrigger_(1000);
+    t.ctx.continueRun({ triggerUid: t.svc.triggers.find((x) => x.handler === 'continueRun').uid });
+    if (survivedMin === 5) {
+      assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '360');
+      t.svc.setActive(OWNER);
+      t.ctx.healthCheckNow();
+      assert.match(t.svc.mail[0].body, /Apps Script stopped an update after about 5 minutes, sooner than the 30 minutes it allowed before, so AutoPlanner now plans for 6\./);
+      // Measured again: the note goes.
+      t.svc.props['probe.timeLimit'] = JSON.stringify({ startedAt: now - 1900000, lastAt: now - 120000, seconds: 1785 });
+      t.ctx.checkSetup();
+      assert.ok(!('limit.dropped' in t.svc.props));
+      assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '1800');
+    } else {
+      assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '1800', 'cut off late in a batch: the limit is still right');
+      assert.ok(!('limit.dropped' in t.svc.props));
+    }
+  }
+});
+
 test('batches use the real time limit: the safety trigger fires after it, and a student who would not fit waits for the next batch', () => {
   const t = setup({ RUNTIME_LIMIT_SECONDS: '1800' });
   addAs(t, STAFF, TOKEN_A, '');
@@ -621,13 +649,13 @@ test('batches use the real time limit: the safety trigger fires after it, and a 
   assert.strictEqual(u.svc.triggers.find((x) => x.handler === 'continueRun').config.after, 32 * 60 * 1000);
 });
 
-test('automatic batches use the measured limit (up to 25 minutes); page-started batches stay at 2 minutes', () => {
+test('automatic batches use two thirds of the measured limit (up to 20 minutes); page-started batches stay at 2 minutes', () => {
   const t = setup();
   assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 2 * 60 * 1000, 'default 6-minute limit: 2 minutes');
   t.svc.props.RUNTIME_LIMIT_SECONDS = '1800';
-  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 25 * 60 * 1000);
+  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 20 * 60 * 1000);
   t.svc.props.RUNTIME_LIMIT_SECONDS = '600';
-  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 5 * 60 * 1000);
+  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 6 * 60 * 1000);
   t.svc.props.RUNTIME_LIMIT_SECONDS = '1800';
   const budgets = [];
   const real = t.ctx.processRunBatch_;
@@ -638,7 +666,7 @@ test('automatic batches use the measured limit (up to 25 minutes); page-started 
   t.ctx.scheduleTestRun();
   const oneOff = t.svc.triggers.find((x) => x.handler === 'scheduledRun' && x.config.at);
   t.ctx.scheduledRun({ triggerUid: oneOff.uid });
-  assert.deepStrictEqual(budgets, [2 * 60 * 1000, 25 * 60 * 1000]);
+  assert.deepStrictEqual(budgets, [2 * 60 * 1000, 20 * 60 * 1000]);
 });
 
 test('measureTimeLimit: once Apps Script has stopped it, checkSetup saves the limit (rounded down to a minute)', () => {
