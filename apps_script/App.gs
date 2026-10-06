@@ -1288,9 +1288,21 @@ function scheduleTestRun() {
 // Summer: pause the automatic updates (the triggers stay, so resuming needs no new permissions)
 // =====================================================================================
 
-/** Since when automatic updates are paused (ISO time), or null. */
+/**
+ * Since when automatic updates are paused (ISO time), or null. A backup admin with editor access
+ * (who can't run the owner's functions) pauses by adding PAUSED_SINCE by hand, for example
+ * "2027-06-12": a date alone means that day, and anything else that isn't a date still pauses.
+ */
 function pausedSince_() {
-  return getScriptProperty_('PAUSED_SINCE') || null;
+  var v = getScriptProperty_('PAUSED_SINCE');
+  if (!v) return null;
+  var d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? v + 'T12:00:00Z' : v);
+  if (isNaN(d.getTime())) {
+    // Not a date (for example "yes"): paused from now on, and remembered as now.
+    d = new Date();
+    PropertiesService.getScriptProperties().setProperty('PAUSED_SINCE', d.toISOString());
+  }
+  return d.toISOString();
 }
 
 /**
@@ -1502,7 +1514,8 @@ function checkSetup() {
       : 'FIX  Daily updates: ' + daily + ' found, expected 2. Run setupTriggers.'
   );
   if (pausedSince_()) {
-    Logger.log('NOTE Automatic updates are paused (since ' + shortDate_(pausedSince_()) + '). Run resumeAutomaticUpdates to turn them back on.');
+    Logger.log('NOTE Automatic updates are paused (since ' + shortDate_(pausedSince_()) + '). Run resumeAutomaticUpdates (or delete ' +
+      'the PAUSED_SINCE Script Property) to turn them back on.');
   }
   Logger.log(
     triggerCountFor_('weeklyHealthCheck')

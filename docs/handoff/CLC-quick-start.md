@@ -92,6 +92,16 @@ AutoPlanner never changes this table. It's kept exactly as you typed it, formatt
 
 AutoPlanner is meant to run all year without anyone touching the code. A few things need a person. A weekly email tells the club when something does (see the end of this section).
 
+### The owner and the backup admin
+
+- **The owner** (right now Cayden) owns the Apps Script project, the shared folder and the Docs. Only the owner can run AutoPlanner's functions in the editor (setupTriggers, checkSetup, selfTest, pauseAutomaticUpdates, and so on).
+- **The backup admin** is a Pomfret faculty member with editor access to the Apps Script project, in case the owner can't be reached. The backup admin can:
+  - change the settings in **Project Settings** (gear icon) → **Script Properties**, such as `ALLOWED_USERS`, `CLC_TEACHERS` and `HEALTH_EMAILS`;
+  - pause and resume the automatic updates by hand (see "Summer, and a new school year").
+
+  The backup admin can't run the owner's functions; those refuse anyone but the owner. The backup admin also gets the weekly health email, and is a natural new owner when Cayden graduates (see "Moving AutoPlanner to a new owner").
+- Anyone with edit access to the project can read the students' tokens, so keep it to these two people.
+
 ### Tokens expire, so renew them
 
 Pomfret's Canvas limits tokens to about 90 days (a token made on Oct 4, 2026 expires on Jan 2, 2027), so expect to renew every student's token about once a term.
@@ -136,7 +146,7 @@ Two more messages can appear on the page:
 
 ### Adding or removing a CLC teacher
 
-The list of CLC teachers is a setting that only AutoPlanner's owner can change (right now Cayden, so contact us):
+The list of CLC teachers is a setting that AutoPlanner's owner or backup admin can change (contact us):
 
 1. Open the Apps Script project → **Project Settings** (gear icon) → **Script Properties**.
 2. Edit `CLC_TEACHERS`: each teacher as `Full Name <email>`, with commas between teachers. Click **Save script properties**.
@@ -151,6 +161,7 @@ The list of CLC teachers is a setting that only AutoPlanner's owner can change (
 AutoPlanner's owner does these steps in the Apps Script editor: open **App.gs**, pick the function in the menu at the top, and click **Run**.
 
 - **In June, when classes end:** run **pauseAutomaticUpdates**. The 7 pm and midnight updates and the weekly email stop; the page says "Automatic updates are paused", and everything else still works. (Otherwise every student's token expires over the summer, and each nightly update just fails.)
+- **If the owner can't, the backup admin pauses by hand:** **Project Settings** → **Script Properties** → **Add script property**, name `PAUSED_SINCE`, value today's date (for example `2027-06-12`), then **Save script properties**. To turn the updates back on, delete that property (the trash can icon next to it) and save. It works exactly like the two functions.
 - **In September:**
   1. **Start each year with fresh Docs** (recommended). A Doc keeps every past week, so it grows all year. On the page, click **Remove** on every student; their Docs stay. In the shared folder (and each teacher's folder), add the year to each Doc's name, for example "Avery Example - CLC Assignments (2026–27)". AutoPlanner then makes a new Doc when a student is added again, and last year's Docs stay where they are.
   2. Add each student with a new token (and their CLC teacher).
@@ -165,7 +176,7 @@ Every Monday at about 7 AM, AutoPlanner emails the club, but only if something n
 - Canvas tokens running out in the next 3 weeks
 - AutoPlanner's saved data getting close to Google's limit
 
-When all is well, it sends nothing. The email goes to the addresses in the `HEALTH_EMAILS` Script Property (commas between them), or to AutoPlanner's owner if that's empty. The new owner should change it when AutoPlanner moves. To see the check right away, the owner can run **healthCheckNow**.
+When all is well, it sends nothing. The email goes to the addresses in the `HEALTH_EMAILS` Script Property (commas between them), or to AutoPlanner's owner if that's empty; include the backup admin. The new owner should change it when AutoPlanner moves. To see the check right away, the owner can run **healthCheckNow**.
 
 ### Moving AutoPlanner to a new owner (before Cayden's account closes)
 
@@ -180,7 +191,7 @@ Everything runs as one Google account: right now Cayden Auyang's Pomfret account
 6. **Cayden: turn off your own automatic updates.** In the project, click **Triggers** (the clock icon) and delete the triggers that list Cayden as the owner. Until you do, both accounts start an update at 7 pm and midnight. That's harmless (the second one sees an update is already running and stops), but it's tidier to have one.
 7. **Check it the next morning.** Open AutoPlanner: **Last update** should show the midnight update, with no warning above it.
 
-The saved tokens, the student list and the settings move with the project, so nobody has to add students again. Anyone with edit access to the project can read the tokens, so only the owner should have it.
+The saved tokens, the student list and the settings move with the project, so nobody has to add students again. Anyone with edit access to the project can read the tokens, so after the move keep edit access to the new owner and one backup admin. If the backup admin becomes the new owner, choose a new backup.
 
 ## 9. Who to contact
 

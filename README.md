@@ -165,7 +165,9 @@ Google Workspace limits that matter here:
 - Script Properties: 9 KB per value and 500 KB in total, so one property per student means hundreds fit
 - the Docs API's per-minute write limit (writes are batched, paced and retried)
 
-Everything belongs to the owner's account: the script, its triggers, the stored tokens and the Docs. Anyone with edit access to the script project can read the tokens, so don't share the project. Before the owner graduates, move the project, the folder and the Docs to a CLC staff account: step by step in the [quick start's "Long-term care"](docs/handoff/CLC-quick-start.md#8-long-term-care), including running `setupTriggers` again as the new owner.
+Everything belongs to the owner's account: the script, its triggers, the stored tokens and the Docs. Anyone with edit access to the script project can read the tokens, so don't share the project beyond the owner and one backup admin.
+- The backup admin can change Script Properties, including pausing by adding `PAUSED_SINCE` (a date like `2027-06-12`) and resuming by deleting it.
+- The owner-only functions refuse anyone else. Before the owner graduates, move the project, the folder and the Docs to a CLC staff account: step by step in the [quick start's "Long-term care"](docs/handoff/CLC-quick-start.md#8-long-term-care), including running `setupTriggers` again as the new owner.
 
 ## Getting a Canvas API token (for each student)
 

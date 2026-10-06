@@ -378,6 +378,26 @@ test('scenario (i): pausing the automatic updates for the summer, and turning th
   assert.strictEqual(t.docWrites.length, 2);
 });
 
+test('a backup admin (editor access, not the owner) pauses by adding PAUSED_SINCE by hand, and resumes by deleting it', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  t.ctx.setupTriggers();
+  addAs(t, STAFF, TOKEN_A, '');
+  const daily = t.svc.triggers.find((x) => x.handler === 'scheduledRun');
+  t.svc.props.PAUSED_SINCE = '2027-06-12';
+  t.ctx.scheduledRun({ triggerUid: daily.uid });
+  assert.strictEqual(t.docWrites.length, 0);
+  assert.match(t.sb.logs.join('\n'), /paused \(since Jun 12, 2027\), so this one was skipped/, 'a typed date means that day');
+  t.svc.setActive(STAFF);
+  assert.strictEqual(toPlain(t.ctx.getAppState()).pausedSince, '2027-06-12T12:00:00.000Z');
+  t.svc.props.PAUSED_SINCE = 'yes';
+  assert.ok(toPlain(t.ctx.getAppState()).pausedSince, 'anything else pauses too');
+  assert.ok(!isNaN(new Date(t.svc.props.PAUSED_SINCE).getTime()), 'and is remembered as a real time');
+  delete t.svc.props.PAUSED_SINCE;
+  t.ctx.scheduledRun({ triggerUid: daily.uid });
+  assert.strictEqual(t.docWrites.length, 1, 'deleted: back on');
+});
+
 test('weekly health check: an email only when something needs attention, to HEALTH_EMAILS or else the owner; never a token', () => {
   const t = setup();
   t.svc.setActive(OWNER);
