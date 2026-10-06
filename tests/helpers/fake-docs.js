@@ -139,6 +139,26 @@ function copiesOf(docs, u) {
   });
   return out;
 }
+/** Like copiesOf, with the middle cell (Day or Course), the Priority cell and the class table's title. */
+function rowsOf(docs, u) {
+  const out = [];
+  const txt = (cell) => cell.content[0].paragraph.elements[0].textRun.content.replace(/\n$/, '');
+  docs.service.Documents.get().tabs[0].childTabs.forEach((tab) => {
+    (tab.documentTab.body.content || []).filter((e) => e.table && e.table.columns === 6).forEach((e) => {
+      const rows = e.table.tableRows;
+      const isDay = rows[0].tableCells[1] && txt(rows[0].tableCells[1]) === 'Course';
+      rows.forEach((r) => {
+        const c = r.tableCells;
+        const link = c[0].content[0].paragraph.elements[0].textRun.textStyle;
+        if (c.length === 6 && link && link.link && link.link.url === u) {
+          out.push({ week: tab.tabProperties.title, table: isDay ? 'day' : 'class', klass: isDay ? txt(c[1]) : txt(rows[0].tableCells[0]),
+            day: isDay ? '' : txt(c[1]), priority: txt(c[3]), status: txt(c[4]), note: txt(c[5]) });
+        }
+      });
+    });
+  });
+  return out;
+}
 function staffTypes(docs, weekTitle, u, kind, status, note) {
   const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === weekTitle);
   const live = docs.find(tab.tabProperties.tabId);
@@ -153,4 +173,4 @@ function staffTypes(docs, weekTitle, u, kind, status, note) {
 }
 
 
-module.exports = { fakeDocs, withRendering, copiesOf, staffTypes, staffWrites, richCell, tcell };
+module.exports = { fakeDocs, withRendering, copiesOf, rowsOf, staffTypes, staffWrites, richCell, tcell };

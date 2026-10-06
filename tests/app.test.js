@@ -76,9 +76,9 @@ test('only the intended functions are callable from the page (no trailing unders
     for (const m of src.matchAll(/^function (\w+)\(/gm)) if (!m[1].endsWith('_')) publicNames.push(m[1]);
   }
   assert.deepStrictEqual(publicNames.sort(), [
-    'addStudent', 'checkSetup', 'continueRun', 'doGet', 'editStudent', 'getAppState', 'getRunStatus', 'measureTimeLimit',
-    'removeStudent', 'scheduleTestRun', 'scheduledRun', 'selfTest', 'selfTestEveryday', 'selfTestKeepToken', 'setStudentTeacher', 'setupTriggers',
-    'startUpdateAll', 'updateStudentNow',
+    'addStudent', 'checkSetup', 'continueRun', 'doGet', 'editStudent', 'getAppState', 'getRunStatus', 'healthCheckNow', 'measureTimeLimit',
+    'pauseAutomaticUpdates', 'removeStudent', 'resumeAutomaticUpdates', 'scheduleTestRun', 'scheduledRun', 'selfTest', 'selfTestEveryday',
+    'selfTestKeepToken', 'setStudentTeacher', 'setupTriggers', 'startUpdateAll', 'updateStudentNow', 'weeklyHealthCheck',
   ].sort());
 });
 
@@ -117,7 +117,7 @@ test('every page function refuses people who are not in ALLOWED_USERS', () => {
 test('editor-only functions refuse staff calling them from the page', () => {
   const t = setup();
   t.svc.setActive(STAFF);
-  for (const fn of ['setupTriggers', 'scheduleTestRun', 'checkSetup', 'selfTest', 'selfTestKeepToken']) {
+  for (const fn of ['setupTriggers', 'scheduleTestRun', 'checkSetup', 'selfTest', 'selfTestKeepToken', 'healthCheckNow', 'pauseAutomaticUpdates', 'resumeAutomaticUpdates']) {
     assert.throws(() => t.ctx[fn](), /Only the script owner/, fn);
   }
 });
@@ -125,7 +125,7 @@ test('editor-only functions refuse staff calling them from the page', () => {
 test('trigger functions only run from a real trigger of this project', () => {
   const t = setup();
   t.svc.setActive(STAFF);
-  for (const fn of ['scheduledRun', 'continueRun']) {
+  for (const fn of ['scheduledRun', 'continueRun', 'weeklyHealthCheck']) {
     assert.throws(() => t.ctx[fn](), /only runs from its own trigger/, fn);
     assert.throws(() => t.ctx[fn]({ triggerUid: 'made-up' }), /only runs from its own trigger/, fn);
   }
@@ -154,6 +154,11 @@ test('addStudent refuses a bad token (nothing saved) and a student who is alread
   assert.strictEqual(Object.keys(t.svc.props).filter((k) => k.startsWith('token.')).length, 0);
   addAs(t, STAFF, TOKEN_A, 'Table 4');
   assert.throws(() => t.ctx.addStudent(TOKEN_A, ''), /Avery Example is already on the list \(as "Table 4"\)/);
+  // Scenario (g): the same student again with a second token of their own (the same Canvas user).
+  const realProfile = t.ctx.fetchCanvasProfile_;
+  t.ctx.fetchCanvasProfile_ = (token) => (token === 'TOKEN-AAAA-SECOND' ? realProfile(TOKEN_A) : realProfile(token));
+  assert.throws(() => t.ctx.addStudent('TOKEN-AAAA-SECOND', 'Desk 2'), /Avery Example is already on the list \(as "Table 4"\)\. To give them a new token, click Edit on their row\./);
+  assert.strictEqual(Object.keys(t.svc.props).filter((k) => k.startsWith('student.')).length, 1);
 });
 
 test('a re-added student gets their existing Doc from the shared folder, not a duplicate', () => {
@@ -318,6 +323,183 @@ test('run summaries stay small (20 problems kept, the rest counted), and removed
   assert.strictEqual(JSON.parse(t.svc.props['run.current']).total, 2);
 });
 
+test('scenario (f): a student being updated from the page when the run reaches them is tried again at the end of the run', () => {
+  for (const releasedMeanwhile of [true, false]) {
+    const t = setup();
+    const a = addAs(t, STAFF, TOKEN_A, '').student;
+    addAs(t, STAFF, TOKEN_B, '');
+    t.svc.props['busy.' + a.id] = String(Date.now()); // Avery's Update button was just clicked
+    const realWrite = t.ctx.upsertPlannerDocument_;
+    t.ctx.upsertPlannerDocument_ = (p) => {
+      if (releasedMeanwhile && p.studentFullName === 'Blake Sample') delete t.svc.props['busy.' + a.id]; // that update finished
+      return realWrite(p);
+    };
+    t.ctx.startUpdateAll();
+    const last = JSON.parse(t.svc.props['run.last']);
+    if (releasedMeanwhile) {
+      assert.deepStrictEqual([last.updated, last.total, last.failed], [2, 2, []]);
+    } else {
+      assert.deepStrictEqual([last.updated, last.total], [1, 2]);
+      assert.deepStrictEqual(last.failed, [{ name: 'Avery Example', message: 'Was already being updated at the same time; see their row.' }]);
+    }
+  }
+});
+
+test('scenario (i): pausing the automatic updates for the summer, and turning them back on', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  t.ctx.setupTriggers();
+  const daily = t.svc.triggers.filter((x) => x.handler === 'scheduledRun');
+  assert.strictEqual(daily.length, 2);
+  const weekly = t.svc.triggers.filter((x) => x.handler === 'weeklyHealthCheck');
+  assert.deepStrictEqual(weekly.map((x) => x.config), [{ weekDay: 'MONDAY', atHour: 7, nearMinute: 0, timeZone: 'America/New_York' }]);
+  addAs(t, STAFF, TOKEN_A, '');
+  t.svc.setActive(OWNER);
+  t.ctx.pauseAutomaticUpdates();
+  assert.ok(t.svc.props.PAUSED_SINCE);
+  t.ctx.scheduledRun({ triggerUid: daily[0].uid });
+  assert.strictEqual(t.docWrites.length, 0, 'no automatic update while paused');
+  assert.match(t.sb.logs.join('\n'), /Automatic updates are paused \(since [A-Z][a-z]{2} \d{1,2}, \d{4}\), so this one was skipped\./);
+  t.svc.setActive(STAFF);
+  t.svc.props['run.last'] = JSON.stringify({ finishedAt: new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString(), total: 1, updated: 1, failed: [] });
+  const state = toPlain(t.ctx.getAppState());
+  assert.ok(state.pausedSince);
+  assert.strictEqual(state.updatesStaleSince, null, 'no "updates stopped" warning while paused');
+  t.ctx.startUpdateAll(); // still works by hand
+  assert.strictEqual(t.docWrites.length, 1);
+  // Resume: the triggers were removed meanwhile, so they're put back.
+  t.svc.setActive(OWNER);
+  t.svc.triggers.length = 0;
+  t.ctx.resumeAutomaticUpdates();
+  assert.ok(!('PAUSED_SINCE' in t.svc.props));
+  assert.strictEqual(t.svc.triggers.filter((x) => x.handler === 'scheduledRun').length, 2);
+  assert.strictEqual(t.svc.triggers.filter((x) => x.handler === 'weeklyHealthCheck').length, 1);
+  t.ctx.scheduledRun({ triggerUid: t.svc.triggers.find((x) => x.handler === 'scheduledRun').uid });
+  assert.strictEqual(t.docWrites.length, 2);
+});
+
+test('a backup admin (editor access, not the owner) pauses by adding PAUSED_SINCE by hand, and resumes by deleting it', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  t.ctx.setupTriggers();
+  addAs(t, STAFF, TOKEN_A, '');
+  const daily = t.svc.triggers.find((x) => x.handler === 'scheduledRun');
+  t.svc.props.PAUSED_SINCE = '2027-06-12';
+  t.ctx.scheduledRun({ triggerUid: daily.uid });
+  assert.strictEqual(t.docWrites.length, 0);
+  assert.match(t.sb.logs.join('\n'), /paused \(since Jun 12, 2027\), so this one was skipped/, 'a typed date means that day');
+  t.svc.setActive(STAFF);
+  assert.strictEqual(toPlain(t.ctx.getAppState()).pausedSince, '2027-06-12T12:00:00.000Z');
+  t.svc.props.PAUSED_SINCE = 'yes';
+  assert.ok(toPlain(t.ctx.getAppState()).pausedSince, 'anything else pauses too');
+  assert.ok(!isNaN(new Date(t.svc.props.PAUSED_SINCE).getTime()), 'and is remembered as a real time');
+  delete t.svc.props.PAUSED_SINCE;
+  t.ctx.scheduledRun({ triggerUid: daily.uid });
+  assert.strictEqual(t.docWrites.length, 1, 'deleted: back on');
+});
+
+test('weekly health check: an email only when something needs attention, to HEALTH_EMAILS or else the owner; never a token', () => {
+  const t = setup();
+  t.svc.setActive(OWNER);
+  t.ctx.setupTriggers();
+  const weekly = () => t.ctx.weeklyHealthCheck({ triggerUid: t.svc.triggers.find((x) => x.handler === 'weeklyHealthCheck').uid });
+  weekly();
+  t.ctx.healthCheckNow();
+  assert.strictEqual(t.svc.mail.length, 0);
+  assert.match(t.sb.logs.join('\n'), /Nothing needs attention, so no email was sent\./);
+  const a = addAs(t, STAFF, TOKEN_A, '').student;
+  const b = addAs(t, STAFF, TOKEN_B, '').student;
+  const c = addAs(t, STAFF, TOKEN_C, '').student;
+  // A student whose updates fail: once is not enough to email about; over a day is.
+  t.badTokens.add(TOKEN_A);
+  t.ctx.updateStudentNow(a.id);
+  const rec = (id) => JSON.parse(t.svc.props['student.' + id]);
+  assert.ok(rec(a.id).failingSince);
+  t.svc.setActive(OWNER);
+  t.ctx.healthCheckNow();
+  assert.strictEqual(t.svc.mail.length, 0, 'failing for minutes only');
+  const old = rec(a.id);
+  old.failingSince = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+  t.svc.props['student.' + a.id] = JSON.stringify(old);
+  const soon = rec(b.id);
+  soon.tokenExpiresAt = new Date(Date.now() + 10 * 24 * 3600 * 1000).toISOString();
+  t.svc.props['student.' + b.id] = JSON.stringify(soon);
+  weekly();
+  assert.strictEqual(t.svc.mail.length, 1);
+  const m = t.svc.mail[0];
+  assert.strictEqual(m.to, OWNER, 'HEALTH_EMAILS not set: the owner');
+  assert.strictEqual(m.subject, 'AutoPlanner: 2 things need attention');
+  assert.match(m.body, /1\. 1 student's Doc hasn't updated for over a day:\n   - Avery Example: Canvas didn't accept this student's token/);
+  assert.match(m.body, /2\. Canvas tokens running out in the next 3 weeks:\n   - Blake Sample: [A-Z][a-z]{2} \d{1,2}, \d{4}\n   What to do: Ask each student for a new token/);
+  assert.match(m.body, /Open AutoPlanner: https:\/\/script\.google\.com\//);
+  assert.ok(!m.body.includes('Casey'), 'nothing wrong with Casey');
+  for (const tok of [TOKEN_A, TOKEN_B, TOKEN_C]) assert.ok(!m.body.includes(tok), 'no token in the email');
+  // HEALTH_EMAILS: commas between; anything that isn't an email is left out.
+  t.svc.props.HEALTH_EMAILS = ' club-one@pomfret.org, club-two@pomfret.org ,not an email';
+  weekly();
+  assert.strictEqual(t.svc.mail[1].to, 'club-one@pomfret.org,club-two@pomfret.org');
+  // Fixed: no more email about it. A success clears the "failing since".
+  t.badTokens.delete(TOKEN_A);
+  t.svc.setActive(STAFF);
+  t.ctx.updateStudentNow(a.id);
+  assert.ok(!rec(a.id).failingSince);
+  // A Doc near Google's 100-tab limit is reported too.
+  const full = rec(c.id);
+  full.docTabs = 86;
+  t.svc.props['student.' + c.id] = JSON.stringify(full);
+  t.svc.setActive(OWNER);
+  weekly();
+  assert.match(t.svc.mail[t.svc.mail.length - 1].body, /Docs getting close to Google's limit of 100 tabs:\n   - Casey Test: 86 tabs/);
+  delete full.docTabs;
+  t.svc.props['student.' + c.id] = JSON.stringify(full);
+  // Triggers gone and saved data near Google's limit: both reported.
+  t.svc.setActive(OWNER);
+  t.svc.triggers.splice(0, t.svc.triggers.length, ...t.svc.triggers.filter((x) => x.handler === 'weeklyHealthCheck'));
+  t.svc.props['probe.big'] = 'x'.repeat(380 * 1024);
+  weekly();
+  const last = t.svc.mail[t.svc.mail.length - 1];
+  assert.match(last.body, /The 7 pm and midnight updates aren't set up\./);
+  assert.match(last.body, /saved data is \d+ KB, close to Google's limit of 500 KB/);
+  t.ctx.checkSetup();
+  assert.match(t.sb.logs.join('\n'), /OK   Weekly health check: Mondays at about 7 AM, emailed only when something needs attention, to HEALTH_EMAILS: club-one@pomfret\.org, club-two@pomfret\.org/);
+  // Paused: no email at all.
+  t.ctx.pauseAutomaticUpdates();
+  const before = t.svc.mail.length;
+  weekly();
+  assert.strictEqual(t.svc.mail.length, before);
+});
+
+test('scenario (k): Canvas down for a whole run: after 5 students in a row it stops asking, and the summary says who was not tried', () => {
+  const t = setup();
+  for (let i = 0; i < 9; i++) {
+    t.svc.props['student.s' + i] = JSON.stringify({ id: 's' + i, name: 'Student ' + i, label: '', canvasUserId: 900 + i, last: { at: '2026-10-05T04:00:00Z', ok: true, message: 'Updated: 3 assignments in the next 4 weeks.' } });
+    t.svc.props['token.s' + i] = 'TOKEN-S-' + i;
+  }
+  let asked = 0;
+  t.ctx.fetchStudentSchedule_ = () => {
+    asked++;
+    const err = new Error('Canvas is busy or down right now (HTTP 503). AutoPlanner will try again at the next update.');
+    err.canvasKind = 'unavailable';
+    throw err;
+  };
+  t.svc.setActive(OWNER);
+  t.ctx.startUpdateAll();
+  const last = JSON.parse(t.svc.props['run.last']);
+  assert.strictEqual(asked, 5);
+  assert.deepStrictEqual(last.failed.map((f) => f.name), ['Student 0', 'Student 1', 'Student 2', 'Student 3', 'Student 4', '4 more students']);
+  assert.match(last.failed[5].message, /^Not tried: Canvas wasn't answering for 5 students in a row\. The next update tries again\.$/);
+  assert.strictEqual(JSON.parse(t.svc.props['student.s8']).last.ok, true, 'their row still shows their last good update');
+  // A token problem isn't Canvas being down: those don't stop the run.
+  const u = setup();
+  for (let i = 0; i < 7; i++) {
+    u.svc.props['student.s' + i] = JSON.stringify({ id: 's' + i, name: 'Student ' + i, label: '', canvasUserId: 900 + i });
+    u.svc.props['token.s' + i] = 'TOKEN-BAD-' + i;
+  }
+  u.svc.setActive(OWNER);
+  u.ctx.startUpdateAll();
+  assert.strictEqual(JSON.parse(u.svc.props['run.last']).failed.length, 7);
+});
+
 test('the page warns when no update has finished for over a day', () => {
   const t = setup();
   t.svc.setActive(OWNER);
@@ -331,9 +513,9 @@ test('the page warns when no update has finished for over a day', () => {
   assert.strictEqual(toPlain(t.ctx.getAppState()).updatesStaleSince, null);
 });
 
-test('token dates: "Token expires …" on the row, a warning 14 days ahead, and the date in the expired message', () => {
+test('token dates: "Token expires …" on the row, a warning 21 days ahead, and the date in the expired message', () => {
   const t = setup();
-  const soon = new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString();
+  const soon = new Date(Date.now() + 20 * 24 * 3600 * 1000).toISOString(); // inside the 3 weeks
   const later = '2099-01-02T05:00:00Z';
   t.ctx.fetchCanvasTokenExpiry_ = (token) => (token === TOKEN_A ? { expiresAt: later, createdAt: '2026-10-04T20:54:53Z' } : token === TOKEN_B ? { expiresAt: soon, createdAt: null } : null);
   const a = addAs(t, STAFF, TOKEN_A, '').student;
@@ -440,6 +622,34 @@ test('if a batch is cut off mid-student, the safety trigger records it and carri
   assert.match(last.failed[0].message, /^Was stopped partway by Apps Script's time limit\. It will be tried again at the next update\.$/);
 });
 
+test('simulation bug 4: batches cut off long before the measured limit mean it dropped: plan for 6 minutes, and say so in the weekly email', () => {
+  for (const survivedMin of [5, 22]) {
+    const t = setup({ RUNTIME_LIMIT_SECONDS: '1800' });
+    t.svc.setActive(OWNER);
+    t.ctx.setupTriggers();
+    addAs(t, STAFF, TOKEN_A, '');
+    const now = Date.now();
+    t.svc.props['run.current'] = JSON.stringify({ id: 'r1', reason: 'scheduled', startedBy: 'automatic', startedAt: now - 40 * 60000, queue: [], total: 2, updated: 1,
+      failed: [], inProgress: 'gone', batchStartedAt: now - 40 * 60000, heartbeatAt: now - (40 - survivedMin) * 60000 });
+    t.ctx.replaceContinueTrigger_(1000);
+    t.ctx.continueRun({ triggerUid: t.svc.triggers.find((x) => x.handler === 'continueRun').uid });
+    if (survivedMin === 5) {
+      assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '360');
+      t.svc.setActive(OWNER);
+      t.ctx.healthCheckNow();
+      assert.match(t.svc.mail[0].body, /Apps Script stopped an update after about 5 minutes, sooner than the 30 minutes it allowed before, so AutoPlanner now plans for 6\./);
+      // Measured again: the note goes.
+      t.svc.props['probe.timeLimit'] = JSON.stringify({ startedAt: now - 1900000, lastAt: now - 120000, seconds: 1785 });
+      t.ctx.checkSetup();
+      assert.ok(!('limit.dropped' in t.svc.props));
+      assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '1800');
+    } else {
+      assert.strictEqual(t.svc.props.RUNTIME_LIMIT_SECONDS, '1800', 'cut off late in a batch: the limit is still right');
+      assert.ok(!('limit.dropped' in t.svc.props));
+    }
+  }
+});
+
 test('batches use the real time limit: the safety trigger fires after it, and a student who would not fit waits for the next batch', () => {
   const t = setup({ RUNTIME_LIMIT_SECONDS: '1800' });
   addAs(t, STAFF, TOKEN_A, '');
@@ -468,13 +678,13 @@ test('batches use the real time limit: the safety trigger fires after it, and a 
   assert.strictEqual(u.svc.triggers.find((x) => x.handler === 'continueRun').config.after, 32 * 60 * 1000);
 });
 
-test('automatic batches use the measured limit (up to 25 minutes); page-started batches stay at 2 minutes', () => {
+test('automatic batches use 60% of the measured limit (up to 18 minutes); page-started batches stay at 2 minutes', () => {
   const t = setup();
   assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 2 * 60 * 1000, 'default 6-minute limit: 2 minutes');
   t.svc.props.RUNTIME_LIMIT_SECONDS = '1800';
-  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 25 * 60 * 1000);
+  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 18 * 60 * 1000);
   t.svc.props.RUNTIME_LIMIT_SECONDS = '600';
-  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 5 * 60 * 1000);
+  assert.strictEqual(t.ctx.triggerBatchBudgetMs_(), 6 * 60 * 1000);
   t.svc.props.RUNTIME_LIMIT_SECONDS = '1800';
   const budgets = [];
   const real = t.ctx.processRunBatch_;
@@ -485,7 +695,7 @@ test('automatic batches use the measured limit (up to 25 minutes); page-started 
   t.ctx.scheduleTestRun();
   const oneOff = t.svc.triggers.find((x) => x.handler === 'scheduledRun' && x.config.at);
   t.ctx.scheduledRun({ triggerUid: oneOff.uid });
-  assert.deepStrictEqual(budgets, [2 * 60 * 1000, 25 * 60 * 1000]);
+  assert.deepStrictEqual(budgets, [2 * 60 * 1000, 18 * 60 * 1000]);
 });
 
 test('measureTimeLimit: once Apps Script has stopped it, checkSetup saves the limit (rounded down to a minute)', () => {
@@ -716,7 +926,8 @@ test('selfTest (real code, fake Docs API): two runs in a row pass the type, move
     ctx.selfTestKeepToken();
     const log = sb.logs.join('\n');
     for (const name of ['Your row is held for selfTest', 'Doc: create or update yours in the shared folder', 'Doc: type a test Status and Note',
-      'Doc: type a row into "Added by staff" in that week', 'Status and Note followed the assignment to its new week', 'Doc: run a normal update',
+      'Doc: type a row into "Added by staff" in that week', 'Status and Note followed the assignment to its new week',
+      'An assignment removed from Canvas keeps its Status and Note in its week, marked "Not on Canvas"', 'Doc: run a normal update',
       'Existing week tabs were rebuilt in place', 'Status and Note came back with it, in exactly one week tab',
       'The "Added by staff" row came through both updates exactly', 'Clean-up']) {
       assert.match(log, new RegExp('PASS ' + name.replace(/[()]/g, '\\$&')), 'run ' + run + ': ' + name + '\n' + log);
@@ -853,6 +1064,44 @@ test('changing a student\'s CLC teacher moves the same Doc (same ID) into that f
   assert.throws(() => t.ctx.setStudentTeacher(student.id, 'nobody@pomfret.org'), /no longer on the list/);
   t.svc.setActive(STRANGER);
   assert.throws(() => t.ctx.setStudentTeacher(student.id, ''), /Not authorized/);
+});
+
+test("scenario (f): the CLC teacher changed while a new student's first Doc is being made: the Doc ends up in the new teacher's folder, and stays theirs", () => {
+  const t = setup({ CLC_TEACHERS: TEACHERS });
+  const { student } = toPlain((t.svc.setActive(STAFF), t.ctx.addStudent(TOKEN_A, '', 'pexample@pomfret.org')));
+  const folders = () => JSON.parse(t.svc.props.teacherFolders);
+  t.ctx.upsertPlannerDocument_ = (p) => {
+    // Staff pick Sam Sample on the row while the Doc is being made (in Pat Example's folder).
+    t.ctx.setStudentTeacher(student.id, 'ssample@pomfret.org');
+    t.svc.addFile('DOC-NEW', 'Avery Example - CLC Assignments', p.targetFolderId);
+    return { docUrl: 'https://docs/x', documentId: 'DOC-NEW' };
+  };
+  t.ctx.updateStudentNow(student.id);
+  assert.strictEqual(t.svc.files['DOC-NEW'].parent, folders()['ssample@pomfret.org']);
+  t.ctx.getAppState(); // a page load reads the folders back: still Sam Sample's
+  assert.strictEqual(JSON.parse(t.svc.props['student.' + student.id]).teacher, 'ssample@pomfret.org');
+});
+
+test("scenario (j): a teacher's folder trashed, or moved out of the shared folder: a new folder is made and their students' Docs move into it (same Docs, nothing lost)", () => {
+  for (const what of ['trashed', 'moved out']) {
+    const t = setup({ CLC_TEACHERS: TEACHERS });
+    t.svc.addFile('DOC-A', 'Avery Example - CLC Assignments', 'FOLDER123');
+    const { student } = addAs(t, STAFF, TOKEN_A, '');
+    t.ctx.setStudentTeacher(student.id, 'pexample@pomfret.org');
+    const oldId = JSON.parse(t.svc.props.teacherFolders)['pexample@pomfret.org'];
+    assert.strictEqual(t.svc.files['DOC-A'].parent, oldId);
+    if (what === 'trashed') t.svc.folders[oldId].trashed = true;
+    else t.svc.folders[oldId].parent = 'ROOT';
+    t.ctx.teacherFolderCache_ = null;
+    t.ctx.updateStudentNow(student.id);
+    const newId = JSON.parse(t.svc.props.teacherFolders)['pexample@pomfret.org'];
+    assert.notStrictEqual(newId, oldId, what);
+    assert.strictEqual(t.svc.folders[newId].parent, 'FOLDER123');
+    assert.strictEqual(t.svc.files['DOC-A'].parent, newId, what + ': the Doc moved into the new folder');
+    assert.ok(!t.svc.globals.DriveApp.getFileById('DOC-A').isTrashed(), what + ': and is out of the trash');
+    const row = JSON.parse(t.svc.props['student.' + student.id]);
+    assert.deepStrictEqual([row.docId, row.teacher, row.last.ok, row.notice], ['DOC-A', 'pexample@pomfret.org', true, undefined], what + ': same Doc, no "made a new one"');
+  }
 });
 
 test('Add a student with a CLC teacher: an existing Doc moves there; a new Doc is made there and the home tab names the teacher', () => {

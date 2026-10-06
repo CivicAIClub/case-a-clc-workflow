@@ -49,7 +49,7 @@ Each student can have a CLC teacher. The **CLC teacher** column on the page has 
 - **You can also do it in Drive.** Drag a Doc into a teacher's folder, or back to the main folder, and AutoPlanner picks up the change the next time anyone opens the page or the student is updated.
 - **Show**, above the list, chooses whose students you see: **All students**, one teacher's, or **Unassigned**. If you're one of the CLC teachers, the page starts on your own students. Choose **All students** to see everyone. **Add a student** starts on the teacher that Show is set to, so a student you add while looking at your own students is yours; you can pick someone else there.
 - After the next update, the student's **CLC Planner** tab says "CLC teacher:" with the teacher's name.
-- **Renaming a teacher's folder is fine.** Don't delete it or move it out of the main folder, because their students' Docs are inside it. If that happens, contact us.
+- **Renaming a teacher's folder is fine.** Don't delete it or move it out of the main folder, because their students' Docs are inside it. If that happens by mistake, the next update makes a new folder for that teacher and moves the Docs into it, unless the folder was also emptied from the trash.
 
 ## 6. Status and Notes
 
@@ -60,9 +60,22 @@ Type in the white **Status** and **Notes** cells, in either table:
 
 Use the Notes column, not comments, for anything you want to keep. Comments on week tabs can be lost when AutoPlanner updates.
 
-AutoPlanner never changes these two columns, so what you type survives every update. The same reminder is at the top of every week tab. If a teacher moves an assignment's due date to another week, its Status and Notes move with it.
+AutoPlanner never changes these two columns, so what you type survives every update. The same reminder is at the top of every week tab. If a teacher moves an assignment's due date to another week, its Status and Notes move with it, even if its old week has already gone into Past weeks (for example, overdue work given a new date). That works for up to 10 weeks.
+
+**If an assignment disappears from Canvas after you typed on it**, it stays in its week with your Status and Note, and its **Priority** cell says why:
+
+- **Not on Canvas:** the teacher removed or unpublished it, or the student dropped the class.
+- **No due date:** it's still on Canvas, without a due date.
+- **Now due Nov 30** (for example): its due date moved outside the next 4 weeks.
+
+If it comes back, your Status and Note go with it. It stays until its week ends, or until you clear its Status (back to Not started) and its Notes. Rows with nothing typed in them just disappear.
+
+Assignments that have no due date in Canvas aren't listed at all. If one matters, add it to **Added by staff**.
 
 **Everything else is rewritten on each update, including the CLC Planner tab** (except the Added by staff table below). For notes about the student in general, add your own tab with **+** at the top of the **Document tabs** sidebar. AutoPlanner leaves tabs it didn't make alone.
+
+- **Renamed a week tab?** AutoPlanner puts its name back at the next update, with everything in it.
+- **Deleted a week tab by mistake?** The next update makes it again, with its Statuses but not its Notes. To get the Notes back, open **File → Version history → See version history** and pick a version from before the tab was deleted. Then copy the Notes you need back into the Doc. **Restore this version** also works, but it undoes every change made to the whole Doc since then, so only use it right after the mistake.
 
 ### Added by staff
 
@@ -77,14 +90,25 @@ AutoPlanner never changes this table. It's kept exactly as you typed it, formatt
 
 ## 8. Long-term care
 
-AutoPlanner is meant to run all year without anyone touching the code. Four things need a person.
+AutoPlanner is meant to run all year without anyone touching the code. A few things need a person. A weekly email tells the club when something does (see the end of this section).
+
+### The owner and the backup admin
+
+- **The owner** (right now Cayden) owns the Apps Script project, the shared folder and the Docs. Only the owner can run AutoPlanner's functions in the editor (setupTriggers, checkSetup, selfTest, pauseAutomaticUpdates, and so on).
+- **The backup admin** is a Pomfret faculty member with editor access to the Apps Script project, in case the owner can't be reached. The backup admin can:
+  - change the settings in **Project Settings** (gear icon) → **Script Properties**, such as `ALLOWED_USERS`, `CLC_TEACHERS` and `HEALTH_EMAILS`;
+  - pause and resume the automatic updates by hand (see "Summer, and a new school year").
+
+  The backup admin can't run the owner's functions; those refuse anyone but the owner. The backup admin also gets the weekly health email, and is a natural new owner when Cayden graduates (see "Moving AutoPlanner to a new owner").
+- Anyone with edit access to the project can read the students' tokens, so keep it to these two people.
 
 ### Tokens expire, so renew them
 
 Pomfret's Canvas limits tokens to about 90 days (a token made on Oct 4, 2026 expires on Jan 2, 2027), so expect to renew every student's token about once a term.
 
 - Each student's row shows **Token expires** and the date.
-- Two weeks before any token expires, the page lists who needs a new one, under **Update all students now**.
+- Three weeks before any token expires, the page lists who needs a new one, under **Update all students now**.
+- **Tokens made in early October expire around Jan 2, during winter break.** Renew them in the first half of December, while students are still here.
 - Once a token has expired, the row says **Needs attention** with "This student's Canvas token expired on" and the date.
 
 To renew a token:
@@ -107,8 +131,11 @@ The message next to it says what happened. Most fix themselves:
 | "Google Drive couldn't find this student's Doc just now" | Nothing. If the Doc is really gone, the next scheduled update makes a new one and says so on the row. |
 | "AutoPlanner only updates Docs in the … folder" | Someone moved the Doc. Move it back into **AutoPlanner – CLC Student Planners** (or its CLC teacher's folder there), then click **Update**. |
 | "That CLC teacher's folder isn't available" or "That CLC teacher is no longer on the list" | Reload the page and try again. If it keeps happening, contact us. |
+| "This student's Doc has … tabs, and Google allows 100" | Start a new Doc for that student, as in step 1 of "Summer, and a new school year" below (rename the Doc, then **Remove** and add the student again). |
 | "Updated 2 of 4 weeks: Google Docs was slow…" | Nothing. The other weeks (with their Status and Notes) are updated at the next update. |
 | "Was stopped partway by Apps Script's time limit" | Nothing; it's tried again at the next update. Contact us if it keeps happening. |
+| "Not tried: Canvas wasn't answering…" (in **Last update**) | Nothing. Canvas was down, so AutoPlanner stopped asking. The next update tries everyone again, and their Docs keep the last update until then. |
+| "Was already being updated at the same time" (in **Last update**) | Nothing. That student was being updated another way (the **Update** button on their row, or selfTest); that update counts. |
 | "…shared folder … is in the Drive trash" or "cannot open that Drive folder" | The shared folder was deleted or unshared. Its owner can restore it from the Drive trash; otherwise contact us. |
 
 Two more messages can appear on the page:
@@ -119,7 +146,7 @@ Two more messages can appear on the page:
 
 ### Adding or removing a CLC teacher
 
-The list of CLC teachers is a setting that only AutoPlanner's owner can change (right now Cayden, so contact us):
+The list of CLC teachers is a setting that AutoPlanner's owner or backup admin can change (contact us):
 
 1. Open the Apps Script project → **Project Settings** (gear icon) → **Script Properties**.
 2. Edit `CLC_TEACHERS`: each teacher as `Full Name <email>`, with commas between teachers. Click **Save script properties**.
@@ -128,6 +155,28 @@ The list of CLC teachers is a setting that only AutoPlanner's owner can change (
 - **Removing a teacher:** the next time the page is opened, their students become **Unassigned** and their Docs move back to the main folder. Nothing is deleted. Their empty folder stays, and you can delete it by hand.
 - **Changing a teacher's name** doesn't rename their folder; rename it in Drive. Changing their **email** counts as removing them and adding a new teacher, so their students become Unassigned.
 - A teacher who will use the page also needs to be in `ALLOWED_USERS`.
+
+### Summer, and a new school year
+
+AutoPlanner's owner does these steps in the Apps Script editor: open **App.gs**, pick the function in the menu at the top, and click **Run**.
+
+- **In June, when classes end:** run **pauseAutomaticUpdates**. The 7 pm and midnight updates and the weekly email stop; the page says "Automatic updates are paused", and everything else still works. (Otherwise every student's token expires over the summer, and each nightly update just fails.)
+- **If the owner can't, the backup admin pauses by hand:** **Project Settings** → **Script Properties** → **Add script property**, name `PAUSED_SINCE`, value today's date (for example `2027-06-12`), then **Save script properties**. To turn the updates back on, delete that property (the trash can icon next to it) and save. It works exactly like the two functions.
+- **In September:**
+  1. **Start each year with fresh Docs** (recommended). A Doc keeps every past week, so it grows all year. On the page, click **Remove** on every student; their Docs stay. In the shared folder (and each teacher's folder), add the year to each Doc's name, for example "Avery Example - CLC Assignments (2026–27)". AutoPlanner then makes a new Doc when a student is added again, and last year's Docs stay where they are.
+  2. Add each student with a new token (and their CLC teacher).
+  3. Run **resumeAutomaticUpdates**.
+
+### The weekly health email
+
+Every Monday at about 7 AM, AutoPlanner emails the club, but only if something needs attention. It reports:
+
+- the automatic updates not set up or not finishing
+- students whose updates have failed for over a day, with the same message as on their row
+- Canvas tokens running out in the next 3 weeks
+- AutoPlanner's saved data getting close to Google's limit
+
+When all is well, it sends nothing. The email goes to the addresses in the `HEALTH_EMAILS` Script Property (commas between them), or to AutoPlanner's owner if that's empty; include the backup admin. The new owner should change it when AutoPlanner moves. To see the check right away, the owner can run **healthCheckNow**.
 
 ### Moving AutoPlanner to a new owner (before Cayden's account closes)
 
@@ -138,11 +187,11 @@ Everything runs as one Google account: right now Cayden Auyang's Pomfret account
 3. **Give them the folder and the Docs.** Cayden: open the folder **AutoPlanner – CLC Student Planners**, select everything in it (Cmd+A on a Mac, Ctrl+A on Windows), click **Share**, and transfer ownership to the new owner the same way. Then open each CLC teacher's folder inside it and do the same for the Docs there. Last, do the same for the folder itself (right-click it → **Share**). The new owner accepts again.
    - If **Transfer ownership** isn't offered (Pomfret may block it for student accounts), ask Pomfret's Google Workspace admin to transfer the AutoPlanner project, the folder and the Docs in it from Cayden's account to the new owner.
 4. **New owner: publish the web page as yourself.** Open the project at [script.google.com](https://script.google.com). Click **Deploy → Manage deployments**, click the pencil icon, and check that **Execute as** says **Me** with *your* email. Set **Version** to **New version** and click **Deploy**. Allow the permissions Google asks for. The web address stays the same, so bookmarks keep working.
-5. **New owner: turn on the automatic updates as yourself.** In the editor, pick **setupTriggers** in the function menu at the top and click **Run**. Allow the permissions again if asked. Then run **checkSetup**: every line should start with **OK**.
+5. **New owner: turn on the automatic updates as yourself.** In the editor, pick **setupTriggers** in the function menu at the top and click **Run**. Allow the permissions again if asked. Then run **checkSetup**: every line should start with **OK**. In **Script Properties**, set `HEALTH_EMAILS` to the people who should get the weekly email. Last, run **measureTimeLimit** and leave it: your account's time limit may differ from Cayden's. It stops on its own within 31 minutes; then run **checkSetup** once more.
 6. **Cayden: turn off your own automatic updates.** In the project, click **Triggers** (the clock icon) and delete the triggers that list Cayden as the owner. Until you do, both accounts start an update at 7 pm and midnight. That's harmless (the second one sees an update is already running and stops), but it's tidier to have one.
 7. **Check it the next morning.** Open AutoPlanner: **Last update** should show the midnight update, with no warning above it.
 
-The saved tokens, the student list and the settings move with the project, so nobody has to add students again. Anyone with edit access to the project can read the tokens, so only the owner should have it.
+The saved tokens, the student list and the settings move with the project, so nobody has to add students again. Anyone with edit access to the project can read the tokens, so after the move keep edit access to the new owner and one backup admin. If the backup admin becomes the new owner, choose a new backup.
 
 ## 9. Who to contact
 

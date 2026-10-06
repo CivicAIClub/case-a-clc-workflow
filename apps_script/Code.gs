@@ -154,6 +154,25 @@ function sleepDocsChunkGap_() {
   if (updateStats_) updateStats_.pauseMs += DOCS_CHUNK_GAP_MS;
 }
 
+// Google allows 60 Docs writes a minute per account. Now that reads are fast, back-to-back updates
+// in a run could get close, so each execution keeps to 40 a minute: at most a short wait, never a
+// refused write.
+var DOCS_WRITES_PER_MINUTE = 40;
+var docsWriteTimes_ = [];
+
+function paceDocsWrites_() {
+  var now = Date.now();
+  docsWriteTimes_ = docsWriteTimes_.filter(function (t) { return now - t < 60000; });
+  if (docsWriteTimes_.length >= DOCS_WRITES_PER_MINUTE) {
+    var wait = 60000 - (now - docsWriteTimes_[0]) + 50;
+    Utilities.sleep(wait);
+    if (updateStats_) updateStats_.pauseMs += wait;
+    now = Date.now();
+    docsWriteTimes_ = docsWriteTimes_.filter(function (t) { return now - t < 60000; });
+  }
+  docsWriteTimes_.push(now);
+}
+
 // ---- Time: every execution's start, Apps Script's limit, and timing for selfTest -------------------
 // Global code runs at the start of every execution, so this is when the current one began.
 var EXECUTION_STARTED_AT_ = Date.now();
@@ -221,6 +240,9 @@ var DOCS_READ_TAB = 'documentTab(documentStyle(pageSize,marginLeft,marginRight),
   DOCS_READ_PARAGRAPH + ',' + DOCS_READ_TABLE + ',sectionBreak/sectionStyle/sectionType))';
 var DOCS_GET_FIELDS = 'tabs(tabProperties,' + DOCS_READ_TAB + ',childTabs(tabProperties,' + DOCS_READ_TAB +
   ',childTabs(tabProperties)))';
+// The same, with Past weeks' content: read only when an assignment comes back from a filed week.
+var DOCS_GET_FIELDS_WITH_PAST = 'tabs(tabProperties,' + DOCS_READ_TAB + ',childTabs(tabProperties,' + DOCS_READ_TAB +
+  ',childTabs(tabProperties,' + DOCS_READ_TAB + ')))';
 var docsGetFieldsRejected_ = false; // set if Google ever refuses DOCS_GET_FIELDS; then reads are full
 
 /** Docs.Documents.get with retries when Google returns quota / rate limit errors. */
@@ -229,6 +251,7 @@ function docsGet_(docId, opts) {
     (docsGetFieldsRejected_ ? { includeTabsContent: true } : { includeTabsContent: true, fields: DOCS_GET_FIELDS });
   var lastErr;
   var fellBack = false;
+  var slimFailures = 0;
   for (var attempt = 0; attempt < 7; attempt++) {
     try {
       var t0 = Date.now();
@@ -244,6 +267,12 @@ function docsGet_(docId, opts) {
     } catch (e) {
       lastErr = e;
       if (options.fields && !docsApiIsQuotaError_(e)) {
+        // Once more first: a passing error ("Internal error encountered") shouldn't switch the rest
+        // of this run to full reads, about 5 times bigger (found by the year simulation).
+        if (++slimFailures < 2) {
+          Utilities.sleep(1000);
+          continue;
+        }
         // Never let the shorter read break an update: try a full read.
         fellBack = true;
         options = { includeTabsContent: true };
@@ -274,6 +303,7 @@ function docsBatchUpdate_(docId, requests) {
   var lastErr;
   for (var attempt = 0; attempt < 7; attempt++) {
     try {
+      paceDocsWrites_();
       var t0 = Date.now();
       var reply = Docs.Documents.batchUpdate({ requests: requests }, docId);
       if (updateStats_) {
@@ -292,6 +322,21 @@ function docsBatchUpdate_(docId, requests) {
     }
   }
   throw lastErr;
+}
+
+function readJsonProperty_(key) {
+  try {
+    return JSON.parse(PropertiesService.getScriptProperties().getProperty(key) || 'null');
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeJsonProperty_(key, value) {
+  var props = PropertiesService.getScriptProperties();
+  var json = value && Object.keys(value).length ? JSON.stringify(value) : null;
+  if (json === null) props.deleteProperty(key);
+  else if (props.getProperty(key) !== json) props.setProperty(key, json);
 }
 
 function getScriptProperty_(name) {
@@ -435,9 +480,18 @@ function upsertPlannerDocument_(data) {
   // One read serves the steps below; it's read again only after a step changes the Doc.
   var current = prepared.doc || docsGet_(docId);
   if (removeUpdatingLeftovers_(docId, findTabJsonById_(current, parentTabId))) current = docsGet_(docId);
+  // Google allows 100 tabs in a Doc, and an update may need two more (a new week, and one being
+  // rewritten). About 37 are added each school year, so a Doc kept for years gets there.
+  var tabCount = countTabs_(current);
+  if (tabCount + 2 > DOC_TAB_LIMIT) {
+    throw new Error("This student's Doc has " + tabCount + ' tabs, and Google allows ' + DOC_TAB_LIMIT + '. Start a new Doc ' +
+      'for them: add the year to this Doc\'s name, then Remove the student and add them again (quick start, "Summer, and a new school year").');
+  }
 
   // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
   var today = Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
+  // A week tab staff renamed gets its title back first, so it's read, rebuilt and filed as usual.
+  if (renameWeekTabsBack_(docId, parentTabId, today, current, Object.keys(data.weeks || {}))) current = docsGet_(docId);
   if (archivePastWeeks_(docId, parentTabId, today, current)) current = docsGet_(docId);
 
   var weeks = {};
@@ -447,7 +501,8 @@ function upsertPlannerDocument_(data) {
   var weekKeys = Object.keys(weeks).sort().filter(function (k) { return k >= scheduleWeekStart_(today); });
   // Every class gets a table each week, in the same color every week.
   var courses = plannerCourseList_(data);
-  var colorMap = buildCourseColorMap_(courses);
+  var colorMap = buildCourseColorMap_(courses, readJsonProperty_('colors.' + docId));
+  writeJsonProperty_('colors.' + docId, colorMap);
 
   // A week's tab somewhere else in the Doc (someone dragged it out of CLC Planner): every title must
   // be different, so a second one can't be made. Move it back first, so its Status and Notes are
@@ -460,7 +515,25 @@ function upsertPlannerDocument_(data) {
   // follow an assignment that moved to another week.
   var beforeParent = findTabJsonById_(current, parentTabId);
   var lastWritten = readWritten_(docId);
+  // A new Doc replacing a deleted one: the old Doc's record brings its Statuses back (see below).
+  if (data.previousDocId && data.previousDocId !== docId && !Object.keys(lastWritten).length) {
+    lastWritten = readWritten_(data.previousDocId);
+  }
   var saved = collectSavedData_(beforeParent, lastWritten);
+  // Back from a week that's been filed (an extension, or work pushed past these weeks): its Status
+  // and Note come from that week, in Past weeks.
+  restoreFromPastWeeks_(docId, parentTabId, weeks, saved);
+  // An assignment with no row left in the Doc (its week tab or tables were deleted, or it moved
+  // out of a week that has just been filed) gets its Status back from what was written last time.
+  // Notes can't come back this way: only their fingerprints are kept outside the Doc.
+  Object.keys(weeks).forEach(function (k) {
+    (weeks[k].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) {
+        var last = a.url && !scheduleHasKey_(saved.status, a.url) ? lastWritten[assignmentKey_(a.url)] : null;
+        if (last && last.s) saved.status[a.url] = last.s;
+      });
+    });
+  });
 
   // Every current and upcoming week tab is rebuilt from fresh data, including a week where nothing
   // is due any more, so an assignment is only ever in one week tab.
@@ -474,6 +547,12 @@ function upsertPlannerDocument_(data) {
     weekKeys.push(key);
   });
   weekKeys.sort();
+
+  // A row with a Status or Note whose assignment left the planner stays in its week (see
+  // keptAssignments_), so nothing staff typed disappears without a trace.
+  keptAssignments_(beforeParent, weeks, saved, data.elsewhere, today).forEach(function (k) {
+    weeks[k.week] = weekWithAssignment_(weeks[k.week], k.item);
+  });
 
   if (weekKeys.length === 0) {
     saveWritten_(docId, {});
@@ -552,17 +631,39 @@ function upsertPlannerDocument_(data) {
     });
   });
   saveWritten_(docId, written);
+  if (data.previousDocId && data.previousDocId !== docId) {
+    deleteWritten_(data.previousDocId);
+    PropertiesService.getScriptProperties().deleteProperty('filed.' + data.previousDocId);
+  }
 
   // The home tab last, so its "Open this week" link can point at this week's (new) tab.
   rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date(), staffCounts, stoppedEarly ? null : nextRead);
 
-  return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId, weeksDone: weeksDone.length, weeksTotal: weekKeys.length };
+  return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId, weeksDone: weeksDone.length, weeksTotal: weekKeys.length, tabs: tabCount };
+}
+
+var DOC_TAB_LIMIT = 100;
+
+/** How many tabs a Doc has, at every level (the read lists Past weeks' tabs, without their content). */
+function countTabs_(docJson) {
+  var n = 0;
+  (function walk(tabs) {
+    (tabs || []).forEach(function (t) {
+      n++;
+      walk(t.childTabs);
+    });
+  })(docJson.tabs);
+  return n;
 }
 
 function buildWeekTabTitle_(weekKey, weekLabel) {
   var y = String(weekKey).split('-')[0] || '';
   var label = weekLabel || weekKey;
   var t = 'Week of ' + label + ', ' + y;
+  // A week that crosses New Year shows both years: "Week of Dec 28, 2026 – Jan 3, 2027".
+  var m = /^([A-Z][a-z]{2} \d{1,2}) \u2013 ([A-Z][a-z]{2} \d{1,2})$/.exec(String(label));
+  var y2 = /^\d{4}-\d{2}-\d{2}$/.test(String(weekKey)) ? scheduleAddDays_(weekKey, 6).slice(0, 4) : y;
+  if (m && y2 !== y) t = 'Week of ' + m[1] + ', ' + y + ' \u2013 ' + m[2] + ', ' + y2;
   if (t.length > 95) {
     t = t.substring(0, 92) + '…';
   }
@@ -734,11 +835,70 @@ var PAST_PRIORITY_BG = '#E0E0E0';
 
 /** "Week of Oct 5 – Oct 11, 2026" gives '2026-10-05' (its Monday); any other tab title gives null. */
 function weekKeyFromTabTitle_(title) {
-  var m = /^Week of ([A-Z][a-z]{2}) (\d{1,2}) \u2013 [A-Z][a-z]{2} \d{1,2}, (\d{4})$/.exec(String(title || ''));
+  var m = /^Week of ([A-Z][a-z]{2}) (\d{1,2}) \u2013 [A-Z][a-z]{2} \d{1,2}, (\d{4})$/.exec(String(title || '')) ||
+    /^Week of ([A-Z][a-z]{2}) (\d{1,2}), (\d{4}) \u2013 [A-Z][a-z]{2} \d{1,2}, \d{4}$/.exec(String(title || ''));
   if (!m) return null;
   var month = SCHEDULE_MONTH_NAMES.indexOf(m[1]);
   if (month === -1) return null;
   return m[3] + '-' + ('0' + (month + 1)).slice(-2) + '-' + ('0' + m[2]).slice(-2);
+}
+
+/**
+ * Week tabs staff renamed (their title isn't "Week of …, yyyy" any more) get their title back, found
+ * from the heading AutoPlanner wrote at the top of the tab ("Week of Oct 5 – Oct 11"). Otherwise
+ * the week would be made again under its own title, with its Status and Notes left behind in the
+ * renamed tab, which would never be filed into Past weeks. Returns how many were renamed.
+ */
+function renameWeekTabsBack_(docId, parentTabId, today, readDoc, knownWeeks) {
+  var doc = readDoc || docsGet_(docId);
+  var parent = findTabJsonById_(doc, parentTabId);
+  var reqs = [];
+  var taken = {};
+  ((parent && parent.childTabs) || []).forEach(function (t) {
+    var title = (t.tabProperties || {}).title || '';
+    if (title === PAST_WEEKS_TITLE || title.slice(-UPDATING_SUFFIX.length) === UPDATING_SUFFIX) return;
+    var titled = weekKeyFromTabTitle_(title);
+    if (titled) {
+      // A week tab under an older form of its title (the year at the end of a week that crosses New Year).
+      var current = buildWeekTabTitle_(titled, scheduleShortDate_(titled) + ' \u2013 ' + scheduleShortDate_(scheduleAddDays_(titled, 6)));
+      if (current !== title && !taken[current] && !findTabByTitleAnywhere_(doc, current)) {
+        taken[current] = true;
+        reqs.push({ updateDocumentTabProperties: { tabProperties: { tabId: t.tabProperties.tabId, title: current }, fields: 'title' } });
+      }
+      return;
+    }
+    var body = t.documentTab && t.documentTab.body;
+    var heading = body ? tabBodyPlainText_(body).replace(/^\s+/, '').split('\n')[0] : '';
+    var key = weekKeyFromHeading_(heading, today, knownWeeks);
+    if (!key) return;
+    var proper = buildWeekTabTitle_(key, heading.replace(/^Week of /, ''));
+    if (taken[proper] || findTabByTitleAnywhere_(doc, proper)) return;
+    taken[proper] = true;
+    reqs.push({ updateDocumentTabProperties: { tabProperties: { tabId: t.tabProperties.tabId, title: proper }, fields: 'title' } });
+  });
+  if (reqs.length) docsBatchUpdate_(docId, reqs);
+  return reqs.length;
+}
+
+/**
+ * "Week of Oct 5 – Oct 11" (a week tab's heading, which has no year) gives its Monday: one of
+ * `knownWeeks` (this update's weeks) if it matches, else the year nearest `today`.
+ */
+function weekKeyFromHeading_(heading, today, knownWeeks) {
+  var m = /^Week of ([A-Z][a-z]{2} \d{1,2}) \u2013 ([A-Z][a-z]{2} \d{1,2})$/.exec(String(heading || ''));
+  if (!m) return null;
+  var known = (knownWeeks || []).filter(function (k) {
+    return scheduleShortDate_(k) === m[1] && scheduleShortDate_(scheduleAddDays_(k, 6)) === m[2];
+  })[0];
+  if (known) return known;
+  var year = Number(String(today).slice(0, 4));
+  var best = null;
+  [year - 1, year, year + 1].forEach(function (y) {
+    var key = weekKeyFromTabTitle_('Week of ' + m[1] + ' \u2013 ' + m[2] + ', ' + y);
+    if (!key || scheduleWeekdayIndex_(key) !== 0 || scheduleShortDate_(scheduleAddDays_(key, 6)) !== m[2]) return;
+    if (!best || Math.abs(scheduleDaysBetween_(today, key)) < Math.abs(scheduleDaysBetween_(today, best))) best = key;
+  });
+  return best;
 }
 
 /**
@@ -775,7 +935,102 @@ function archivePastWeeks_(docId, parentTabId, today, readDoc) {
     console.warn('Past weeks: Priority not grayed: ' + err);
   }
   docsBatchUpdate_(docId, archiveMoveRequests_(ended, pastId));
+  rememberFiledAssignments_(docId, ended.map(function (w) {
+    return { key: w.key, tab: parent.childTabs.filter(function (t) { return t.tabProperties.tabId === w.id; })[0] };
+  }), today, readWritten_(docId));
   return ended.length;
+}
+
+// ---- Assignments that come back from a filed week ---------------------------------------------
+// Overdue work is often given a new date after its week has been filed into Past weeks, and work
+// pushed past these weeks comes back later. Past weeks aren't read on a normal update, so the
+// assignment would come back blank. When a week is filed, the IDs of its assignments with a Status
+// or Note are kept for 10 weeks in "filed.<docId>", with what AutoPlanner last wrote for them (in
+// the "last written" form: week, Status, a note's fingerprint; never the notes themselves). If one
+// comes back with no row in the current weeks, that one update also reads Past weeks' content and
+// copies its Status and Note from the filed week: the copy staff edited last, as for current weeks.
+var FILED_KEEP_DAYS = 70;
+var FILED_MAX_CHARS = 8000;
+
+/** { id: { w, s, n } } (see decodeWritten_); an entry with no record is just { w }. */
+function readFiled_(docId) {
+  var raw;
+  try {
+    raw = JSON.parse(PropertiesService.getScriptProperties().getProperty('filed.' + docId) || '{}') || {};
+  } catch (e) {
+    raw = {};
+  }
+  var out = {};
+  Object.keys(raw).forEach(function (id) {
+    var v = String(raw[id]);
+    out[id] = /^\d{4}-\d{2}-\d{2}$/.test(v) ? { w: v } : decodeWritten_(v);
+  });
+  return out;
+}
+
+function rememberFiledAssignments_(docId, filedWeeks, today, record) {
+  var map = readFiled_(docId);
+  filedWeeks.forEach(function (w) {
+    eachAssignmentCopy_(w.tab, function (url, kind, status, note) {
+      if (status === STATUS_DEFAULT && !note) return;
+      var id = assignmentKey_(url);
+      var last = (record || {})[id];
+      map[id] = last && last.w === w.key ? last : { w: w.key };
+    });
+  });
+  var oldest = scheduleAddDays_(scheduleWeekStart_(today), -FILED_KEEP_DAYS);
+  var ids = Object.keys(map).filter(function (id) { return map[id].w >= oldest; });
+  ids.sort(function (a, b) { return map[a].w < map[b].w ? 1 : map[a].w > map[b].w ? -1 : 0; }); // newest first
+  var kept = {};
+  var size = 2;
+  ids.forEach(function (id) {
+    var v = map[id].s ? encodeWritten_(map[id]) : map[id].w;
+    size += id.length + v.length + 6;
+    if (size <= FILED_MAX_CHARS) kept[id] = v;
+  });
+  var props = PropertiesService.getScriptProperties();
+  if (Object.keys(kept).length) props.setProperty('filed.' + docId, JSON.stringify(kept));
+  else props.deleteProperty('filed.' + docId);
+}
+
+/**
+ * Status and Notes for assignments that are back on the planner with no row in the current weeks,
+ * copied from the filed week they were in (see above). Gives back how many came back.
+ */
+function restoreFromPastWeeks_(docId, parentTabId, weeks, saved) {
+  var filed = readFiled_(docId);
+  var wanted = {};
+  Object.keys(weeks).forEach(function (k) {
+    (weeks[k].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) {
+        var entry = a.url && !scheduleHasKey_(saved.status, a.url) ? filed[assignmentKey_(a.url)] : null;
+        if (entry) wanted[a.url] = entry;
+      });
+    });
+  });
+  var urls = Object.keys(wanted);
+  if (!urls.length) return 0;
+  var deep = docsGet_(docId, { includeTabsContent: true, fields: DOCS_GET_FIELDS_WITH_PAST });
+  var parent = findTabJsonById_(deep, parentTabId);
+  var pastId = parent && findChildTabIdByTitle_(parent, PAST_WEEKS_TITLE);
+  var past = pastId ? findTabJsonById_(deep, pastId) : findTabByTitleAnywhere_(deep, PAST_WEEKS_TITLE);
+  var n = 0;
+  urls.forEach(function (url) {
+    var tab = ((past && past.childTabs) || []).filter(function (t) {
+      return weekKeyFromTabTitle_((t.tabProperties || {}).title) === wanted[url].w;
+    })[0];
+    if (!tab) return;
+    // The same choice as for current weeks: the copy that differs from what was last written wins.
+    var record = {};
+    record[assignmentKey_(url)] = wanted[url];
+    var found = collectSavedData_({ childTabs: [tab] }, record);
+    if (scheduleHasKey_(found.status, url)) {
+      saved.status[url] = found.status[url];
+      saved.notes[url] = found.notes[url];
+      n++;
+    }
+  });
+  return n;
 }
 
 /**
@@ -885,6 +1140,104 @@ function collectSavedData_(parentTabJson, written) {
       last ? last.n : noteFingerprint_(''));
   });
   return result;
+}
+
+/**
+ * Assignments that left the planner while their row had a Status or Note: removed or unpublished in
+ * Canvas, given a due date outside these weeks, or no due date any more. Each stays in its week,
+ * with its Status and Note, and its Priority cell says why ("Not on Canvas", "Now due Nov 30", "No
+ * due date"), until it comes back (then its Status and Note follow it as usual) or the week ends.
+ * Without this, a teacher unpublishing an assignment for a day would wipe the notes typed on it.
+ * Gives back [{ week, item }], item shaped like a Canvas assignment.
+ */
+function keptAssignments_(parentTabJson, weeks, saved, elsewhere, today) {
+  var onPlanner = {};
+  Object.keys(weeks).forEach(function (k) {
+    (weeks[k].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) { if (a.url) onPlanner[a.url] = true; });
+    });
+  });
+  var found = {};
+  ((parentTabJson && parentTabJson.childTabs) || []).forEach(function (t) {
+    var key = weekKeyFromTabTitle_((t.tabProperties || {}).title);
+    if (!key || key < scheduleWeekStart_(today) || !weeks[key]) return;
+    eachAssignmentRow_(t, function (row) {
+      if (onPlanner[row.url]) return;
+      var typed = (saved.status[row.url] || STATUS_DEFAULT) !== STATUS_DEFAULT || saved.notes[row.url];
+      if (!typed || (found[row.url] && found[row.url].kind === 'class')) return; // By Class knows the class
+      row.week = key;
+      found[row.url] = row;
+    });
+  });
+  return Object.keys(found).map(function (url) {
+    var r = found[url];
+    var due = (elsewhere || {})[url];
+    var day = SCHEDULE_WEEKDAY_NAMES.indexOf(r.day) >= 0 ? r.day : SCHEDULE_WEEKDAY_NAMES[0];
+    return {
+      week: r.week,
+      item: {
+        day: day,
+        assignment: r.title,
+        course: r.course || '(No Course)',
+        due_time: r.dueTime,
+        priority: due === undefined ? KEPT_NOT_ON_CANVAS : due === '' ? KEPT_NO_DUE_DATE : 'Now due ' + scheduleShortDate_(due),
+        days_until_due: null,
+        due_date: scheduleAddDays_(r.week, SCHEDULE_WEEKDAY_NAMES.indexOf(day)),
+        week_start: r.week,
+        url: url,
+      },
+    };
+  });
+}
+var KEPT_NOT_ON_CANVAS = 'Not on Canvas';
+var KEPT_NO_DUE_DATE = 'No due date';
+
+/** A copy of a week with `item` added on its day (and all seven days listed, in order). */
+function weekWithAssignment_(week, item) {
+  var days = SCHEDULE_WEEKDAY_NAMES.map(function (name) {
+    var have = (week.days || []).filter(function (d) { return d.day === name; })[0];
+    var list = have ? (have.assignments || []).slice() : [];
+    if (name === item.day) list.push(item);
+    return { day: name, assignments: list };
+  });
+  return { week_label: week.week_label, days: days };
+}
+
+/**
+ * Calls fn({ url, kind, title, course, day, dueTime }) for every assignment row in a week tab. By
+ * Class tables give the class (their first row) and the day; By Day gives the day from its day rows.
+ */
+function eachAssignmentRow_(tabJson, fn) {
+  var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
+  content.forEach(function (el) {
+    if (!el.table || (el.table.columns || 0) < 6) return;
+    var rows = el.table.tableRows || [];
+    var isDay = rows.slice(0, 2).some(function (r) {
+      var c = r.tableCells || [];
+      return c.length > 1 && getCellText_(c[1]) === 'Course';
+    });
+    var first = rows.length && rows[0].tableCells && rows[0].tableCells.length ? rows[0].tableCells[0] : null;
+    var course = !isDay && first && !getCellLinkUrl_(first) ? getCellText_(first) : '';
+    var day = '';
+    rows.forEach(function (row) {
+      var cells = row.tableCells || [];
+      if (!cells.length) return;
+      var url = getCellLinkUrl_(cells[0]);
+      if (!url) {
+        if (isDay && SCHEDULE_WEEKDAY_NAMES.indexOf(getCellText_(cells[0])) >= 0) day = getCellText_(cells[0]);
+        return;
+      }
+      if (cells.length < 6) return;
+      fn({
+        url: url,
+        kind: isDay ? 'day' : 'class',
+        title: getCellText_(cells[0]),
+        course: isDay ? getCellText_(cells[1]) : course,
+        day: isDay ? day : getCellText_(cells[1]),
+        dueTime: getCellText_(cells[2]),
+      });
+    });
+  });
 }
 
 /**
@@ -1033,6 +1386,12 @@ function saveWritten_(docId, map) {
     if (i < parts.length) props.setProperty(writtenPartKey_(docId, i), JSON.stringify(parts[i]));
     else props.deleteProperty(writtenPartKey_(docId, i));
   }
+}
+
+/** Removes a Doc's record (every part). */
+function deleteWritten_(docId) {
+  var props = PropertiesService.getScriptProperties();
+  for (var i = 0; i < WRITTEN_MAX_PARTS; i++) props.deleteProperty(writtenPartKey_(docId, i));
 }
 
 /** Records one value as written (selfTest uses it after putting a test value back). */
@@ -2152,16 +2511,26 @@ function appendTable_(reqs, tabId, at, rows, widths) {
 }
 
 /** One color per class, the same in every week (classes sorted A to Z, colors never repeat). */
-function buildCourseColorMap_(courseNames) {
+function buildCourseColorMap_(courseNames, previous) {
   var names = courseNames.slice().sort(function (a, b) {
     return a.localeCompare(b);
   });
 
   var map = {};
   var usedIndex = {};
+  // A class keeps the color it had (so it doesn't change when the class list does, for example at
+  // the semester change); only new classes get one.
+  names.forEach(function (name) {
+    var idx = previous && previous[name] ? COURSE_COLORS.indexOf(previous[name]) : -1;
+    if (idx >= 0 && !usedIndex[idx]) {
+      usedIndex[idx] = true;
+      map[name] = COURSE_COLORS[idx];
+    }
+  });
 
   for (var i = 0; i < names.length; i++) {
     var name = names[i];
+    if (map[name]) continue;
     var preferred = hashString_(name) % COURSE_COLORS.length;
     var idx = preferred;
     var guard = 0;
