@@ -124,7 +124,7 @@ The message next to it says what happened. Most fix themselves:
 | "Updated 2 of 4 weeks: Google Docs was slow…" | Nothing. The other weeks (with their Status and Notes) are updated at the next update. |
 | "Was stopped partway by Apps Script's time limit" | Nothing; it's tried again at the next update. Contact us if it keeps happening. |
 | "Not tried: Canvas wasn't answering…" (in **Last update**) | Nothing. Canvas was down, so AutoPlanner stopped asking. The next update tries everyone again, and their Docs keep the last update until then. |
-| "Was being updated from the page at the same time" (in **Last update**) | Nothing. Someone clicked **Update** on that row while all students were being updated; that update counts. |
+| "Was already being updated at the same time" (in **Last update**) | Nothing. That student was being updated another way (the **Update** button on their row, or selfTest); that update counts. |
 | "…shared folder … is in the Drive trash" or "cannot open that Drive folder" | The shared folder was deleted or unshared. Its owner can restore it from the Drive trash; otherwise contact us. |
 
 Two more messages can appear on the page:

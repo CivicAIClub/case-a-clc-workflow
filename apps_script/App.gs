@@ -1082,7 +1082,7 @@ function recordResult_(runId, result, id) {
       writeJson_('run.current', run);
       return;
     }
-    if (result.busy) result = { name: result.name, message: 'Was being updated from the page at the same time; see their row.' };
+    if (result.busy) result = { name: result.name, message: 'Was already being updated at the same time; see their row.' };
     if (result.ok) run.updated++;
     else if (result.skipped && result.message === 'That student was removed.') run.total--;
     else if (run.failed.length < APP_MAX_FAILURES_KEPT) {
@@ -1224,13 +1224,16 @@ function setupTriggers() {
       .create();
   });
   deleteTriggersFor_('weeklyHealthCheck');
-  ScriptApp.newTrigger('weeklyHealthCheck')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(APP_HEALTH_HOUR)
-    .nearMinute(0)
-    .inTimezone(APP_TIME_ZONE)
-    .create();
+  var weekly = function (near) {
+    var b = ScriptApp.newTrigger('weeklyHealthCheck').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(APP_HEALTH_HOUR);
+    if (near) b = b.nearMinute(0);
+    return b.inTimezone(APP_TIME_ZONE).create();
+  };
+  try {
+    weekly(true);
+  } catch (e) {
+    weekly(false); // some accounts only take the hour for a weekly trigger
+  }
   PropertiesService.getScriptProperties().deleteProperty('APPS_SCRIPT_SECRET');
   Logger.log('Daily updates installed: about 7 pm and about midnight (New York time). Weekly health check: Mondays at about 7 AM.');
   checkSetup();

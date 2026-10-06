@@ -340,7 +340,7 @@ test('scenario (f): a student being updated from the page when the run reaches t
       assert.deepStrictEqual([last.updated, last.total, last.failed], [2, 2, []]);
     } else {
       assert.deepStrictEqual([last.updated, last.total], [1, 2]);
-      assert.deepStrictEqual(last.failed, [{ name: 'Avery Example', message: 'Was being updated from the page at the same time; see their row.' }]);
+      assert.deepStrictEqual(last.failed, [{ name: 'Avery Example', message: 'Was already being updated at the same time; see their row.' }]);
     }
   }
 });
