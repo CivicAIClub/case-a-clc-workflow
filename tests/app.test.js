@@ -154,6 +154,11 @@ test('addStudent refuses a bad token (nothing saved) and a student who is alread
   assert.strictEqual(Object.keys(t.svc.props).filter((k) => k.startsWith('token.')).length, 0);
   addAs(t, STAFF, TOKEN_A, 'Table 4');
   assert.throws(() => t.ctx.addStudent(TOKEN_A, ''), /Avery Example is already on the list \(as "Table 4"\)/);
+  // Scenario (g): the same student again with a second token of their own (the same Canvas user).
+  const realProfile = t.ctx.fetchCanvasProfile_;
+  t.ctx.fetchCanvasProfile_ = (token) => (token === 'TOKEN-AAAA-SECOND' ? realProfile(TOKEN_A) : realProfile(token));
+  assert.throws(() => t.ctx.addStudent('TOKEN-AAAA-SECOND', 'Desk 2'), /Avery Example is already on the list \(as "Table 4"\)\. To give them a new token, click Edit on their row\./);
+  assert.strictEqual(Object.keys(t.svc.props).filter((k) => k.startsWith('student.')).length, 1);
 });
 
 test('a re-added student gets their existing Doc from the shared folder, not a duplicate', () => {

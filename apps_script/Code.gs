@@ -438,6 +438,8 @@ function upsertPlannerDocument_(data) {
 
   // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
   var today = Utilities.formatDate(new Date(), SCHEDULE_TIME_ZONE, 'yyyy-MM-dd');
+  // A week tab staff renamed gets its title back first, so it's read, rebuilt and filed as usual.
+  if (renameWeekTabsBack_(docId, parentTabId, today, current, Object.keys(data.weeks || {}))) current = docsGet_(docId);
   if (archivePastWeeks_(docId, parentTabId, today, current)) current = docsGet_(docId);
 
   var weeks = {};
@@ -460,7 +462,22 @@ function upsertPlannerDocument_(data) {
   // follow an assignment that moved to another week.
   var beforeParent = findTabJsonById_(current, parentTabId);
   var lastWritten = readWritten_(docId);
+  // A new Doc replacing a deleted one: the old Doc's record brings its Statuses back (see below).
+  if (data.previousDocId && data.previousDocId !== docId && !Object.keys(lastWritten).length) {
+    lastWritten = readWritten_(data.previousDocId);
+  }
   var saved = collectSavedData_(beforeParent, lastWritten);
+  // An assignment with no row left in the Doc (its week tab or tables were deleted, or it moved
+  // out of a week that has just been filed) gets its Status back from what was written last time.
+  // Notes can't come back this way: only their fingerprints are kept outside the Doc.
+  Object.keys(weeks).forEach(function (k) {
+    (weeks[k].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) {
+        var last = a.url && !scheduleHasKey_(saved.status, a.url) ? lastWritten[assignmentKey_(a.url)] : null;
+        if (last && last.s) saved.status[a.url] = last.s;
+      });
+    });
+  });
 
   // Every current and upcoming week tab is rebuilt from fresh data, including a week where nothing
   // is due any more, so an assignment is only ever in one week tab.
@@ -558,6 +575,7 @@ function upsertPlannerDocument_(data) {
     });
   });
   saveWritten_(docId, written);
+  if (data.previousDocId && data.previousDocId !== docId) deleteWritten_(data.previousDocId);
 
   // The home tab last, so its "Open this week" link can point at this week's (new) tab.
   rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date(), staffCounts, stoppedEarly ? null : nextRead);
@@ -745,6 +763,54 @@ function weekKeyFromTabTitle_(title) {
   var month = SCHEDULE_MONTH_NAMES.indexOf(m[1]);
   if (month === -1) return null;
   return m[3] + '-' + ('0' + (month + 1)).slice(-2) + '-' + ('0' + m[2]).slice(-2);
+}
+
+/**
+ * Week tabs staff renamed (their title isn't "Week of …, yyyy" any more) get their title back, found
+ * from the heading AutoPlanner wrote at the top of the tab ("Week of Oct 5 – Oct 11"). Otherwise
+ * the week would be made again under its own title, with its Status and Notes left behind in the
+ * renamed tab, which would never be filed into Past weeks. Returns how many were renamed.
+ */
+function renameWeekTabsBack_(docId, parentTabId, today, readDoc, knownWeeks) {
+  var doc = readDoc || docsGet_(docId);
+  var parent = findTabJsonById_(doc, parentTabId);
+  var reqs = [];
+  var taken = {};
+  ((parent && parent.childTabs) || []).forEach(function (t) {
+    var title = (t.tabProperties || {}).title || '';
+    if (weekKeyFromTabTitle_(title) || title === PAST_WEEKS_TITLE || title.slice(-UPDATING_SUFFIX.length) === UPDATING_SUFFIX) return;
+    var body = t.documentTab && t.documentTab.body;
+    var heading = body ? tabBodyPlainText_(body).replace(/^\s+/, '').split('\n')[0] : '';
+    var key = weekKeyFromHeading_(heading, today, knownWeeks);
+    if (!key) return;
+    var proper = buildWeekTabTitle_(key, heading.replace(/^Week of /, ''));
+    if (taken[proper] || findTabByTitleAnywhere_(doc, proper)) return;
+    taken[proper] = true;
+    reqs.push({ updateDocumentTabProperties: { tabProperties: { tabId: t.tabProperties.tabId, title: proper }, fields: 'title' } });
+  });
+  if (reqs.length) docsBatchUpdate_(docId, reqs);
+  return reqs.length;
+}
+
+/**
+ * "Week of Oct 5 – Oct 11" (a week tab's heading, which has no year) gives its Monday: one of
+ * `knownWeeks` (this update's weeks) if it matches, else the year nearest `today`.
+ */
+function weekKeyFromHeading_(heading, today, knownWeeks) {
+  var m = /^Week of ([A-Z][a-z]{2} \d{1,2}) \u2013 ([A-Z][a-z]{2} \d{1,2})$/.exec(String(heading || ''));
+  if (!m) return null;
+  var known = (knownWeeks || []).filter(function (k) {
+    return scheduleShortDate_(k) === m[1] && scheduleShortDate_(scheduleAddDays_(k, 6)) === m[2];
+  })[0];
+  if (known) return known;
+  var year = Number(String(today).slice(0, 4));
+  var best = null;
+  [year - 1, year, year + 1].forEach(function (y) {
+    var key = weekKeyFromTabTitle_('Week of ' + m[1] + ' \u2013 ' + m[2] + ', ' + y);
+    if (!key || scheduleWeekdayIndex_(key) !== 0 || scheduleShortDate_(scheduleAddDays_(key, 6)) !== m[2]) return;
+    if (!best || Math.abs(scheduleDaysBetween_(today, key)) < Math.abs(scheduleDaysBetween_(today, best))) best = key;
+  });
+  return best;
 }
 
 /**
@@ -1137,6 +1203,12 @@ function saveWritten_(docId, map) {
     if (i < parts.length) props.setProperty(writtenPartKey_(docId, i), JSON.stringify(parts[i]));
     else props.deleteProperty(writtenPartKey_(docId, i));
   }
+}
+
+/** Removes a Doc's record (every part). */
+function deleteWritten_(docId) {
+  var props = PropertiesService.getScriptProperties();
+  for (var i = 0; i < WRITTEN_MAX_PARTS; i++) props.deleteProperty(writtenPartKey_(docId, i));
 }
 
 /** Records one value as written (selfTest uses it after putting a test value back). */

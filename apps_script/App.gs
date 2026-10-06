@@ -893,6 +893,7 @@ function writeDocWithRecovery_(student, schedule, info) {
       throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
     }
     if (other) payload.documentId = other;
+    payload.previousDocId = docId; // its record of Statuses comes along
     var newId = done(upsertPlannerDocument_(payload));
     if (info) {
       info.replaced = payload.documentId

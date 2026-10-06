@@ -763,6 +763,86 @@ test('scenario (b): an assignment that leaves Canvas keeps its typed Status and 
   assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
 });
 
+test('scenario (c): an assignment renamed, or its class renamed, keeps its Status and Note (they go by the Canvas link)', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  const X = url(1);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'class', 'In progress', 'draft 1 done');
+  const renamed = scheduleAB(false);
+  renamed.courses = ['Biology (Semester 2)'];
+  Object.values(renamed.weeks).forEach((w) => w.days.forEach((d) => d.assignments.forEach((a) => {
+    a.course = 'Biology (Semester 2)';
+    if (a.url === X) a.assignment = 'X (revised)';
+  })));
+  t.ctx.upsertPlannerDocument_(renamed);
+  assert.deepStrictEqual(rowsOf(docs, X).map((r) => [r.week, r.klass, r.priority, r.status, r.note]), [
+    [WA, 'Biology (Semester 2)', 'Upcoming', 'In progress', 'draft 1 done'], [WA, 'Biology (Semester 2)', 'Upcoming', 'In progress', 'draft 1 done']]);
+  assert.ok(docs.written[docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === WA).tabProperties.tabId].includes('X (revised)'));
+});
+
+test('scenario (h): a renamed week tab gets its title back (found from its heading) and keeps its Status and Notes; nothing is duplicated', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  const X = url(1);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'class', 'In progress', 'keep me');
+  const tabA = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === WA);
+  docs.service.Documents.batchUpdate({ requests: [{ updateDocumentTabProperties: { tabProperties: { tabId: tabA.tabProperties.tabId, title: 'Mid-January (Avery)' }, fields: 'title' } }] });
+  // The fake lays out tables only, so give the renamed tab the heading the real writer puts first.
+  docs.find(tabA.tabProperties.tabId).documentTab.body.content.unshift({ paragraph: { elements: [{ textRun: { content: 'Week of Jan 12 – Jan 18\n' } }] } });
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(docs.titles('t.0'), [WB, WA]);
+  assert.deepStrictEqual(rowsOf(docs, X).map((r) => [r.week, r.status, r.note]), [[WA, 'In progress', 'keep me'], [WA, 'In progress', 'keep me']]);
+  // The heading's year is the one nearest today: the Dec 28 – Jan 3 week, from either side of New Year.
+  assert.strictEqual(t.ctx.weekKeyFromHeading_('Week of Dec 28 – Jan 3', '2027-01-02'), '2026-12-28');
+  assert.strictEqual(t.ctx.weekKeyFromHeading_('Week of Dec 28 – Jan 3', '2026-12-20'), '2026-12-28');
+  assert.strictEqual(t.ctx.weekKeyFromHeading_('Week of Oct 7 – Oct 13', '2026-10-06'), null, 'Oct 7 is not a Monday in 2025, 2026 or 2027');
+  assert.strictEqual(t.ctx.weekKeyFromHeading_('My notes', '2026-10-06'), null);
+});
+
+test('scenario (h): a deleted week tab comes back with its Statuses (not its Notes); a deleted By Class table loses nothing', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  const X = url(1), Y = url(2);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'class', 'In progress', 'gone with the tab');
+  staffTypes(docs, WA, Y, 'day', 'Complete', 'in By Day too');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false)); // written down: X In progress, Y Complete
+  // Staff delete the By Class table that has X and Y: the By Day copies still hold everything.
+  const live = () => docs.find(docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === WA).tabProperties.tabId);
+  const content = live().documentTab.body.content;
+  live().documentTab.body.content = content.filter((e) => !(e.table && e.table.tableRows[0].tableCells.length === 1 && /Biology/.test(e.table.tableRows[0].tableCells[0].content[0].paragraph.elements[0].textRun.content)));
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(rowsOf(docs, X).map((r) => [r.table, r.status, r.note]), [['class', 'In progress', 'gone with the tab'], ['day', 'In progress', 'gone with the tab']]);
+  // Staff delete the whole week tab.
+  docs.service.Documents.batchUpdate({ requests: [{ deleteTab: { tabId: live().tabProperties.tabId } }] });
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.deepStrictEqual(docs.titles('t.0'), [WB, WA]);
+  assert.deepStrictEqual(rowsOf(docs, X).map((r) => [r.status, r.note]), [['In progress', ''], ['In progress', '']]);
+  assert.deepStrictEqual(rowsOf(docs, Y).map((r) => [r.status, r.note]), [['Complete', ''], ['Complete', '']]);
+});
+
+test("a new Doc replacing a deleted one gets the old Doc's Statuses back (not Notes), and the old record is removed", () => {
+  const { t, docs } = rebuildSetup([]);
+  const realBuild = t.ctx.buildWeekTabRequests_;
+  withRendering(t, docs);
+  const X = url(1);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  staffTypes(docs, WA, X, 'class', 'In progress', 'lost with the Doc');
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.ok(t.svc.props['written.DOC1']);
+  // The Doc is deleted; AutoPlanner writes a new, empty one.
+  const fresh = fakeDocs([homeTab([])]);
+  t.ctx.Docs = fresh.service;
+  t.ctx.buildWeekTabRequests_ = realBuild;
+  withRendering(t, fresh);
+  t.svc.addFile('DOC2', 'Test Student - CLC Assignments', null);
+  t.ctx.upsertPlannerDocument_(Object.assign(scheduleAB(false), { documentId: 'DOC2', previousDocId: 'DOC1' }));
+  assert.deepStrictEqual(rowsOf(fresh, X).map((r) => [r.status, r.note]), [['In progress', ''], ['In progress', '']]);
+  assert.ok(t.svc.props['written.DOC2'] && !('written.DOC1' in t.svc.props), Object.keys(t.svc.props).join(' '));
+});
+
 test('scenario (d): a dropped class keeps a table only in the week where a typed row stays; the home tab only counts what Canvas has', () => {
   const { t, docs } = rebuildSetup([]);
   withRendering(t, docs);
