@@ -31,3 +31,6 @@ _publish/
 # clasp (Apps Script CLI): project link and login credentials
 .clasp.json
 .clasprc.json
+
+# Year simulation results (tools/year-simulation)
+tools/year-simulation/out/
