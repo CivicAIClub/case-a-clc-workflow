@@ -40,6 +40,10 @@ var APP_NOTICE_DAYS = 7; // how long a one-off message (e.g. "made a new Doc") s
 // A run summary is one Script Property (9 KB at most), so it keeps this many problems in full.
 var APP_MAX_FAILURES_KEPT = 20;
 var APP_STALE_AFTER_MS = 26 * 3600 * 1000; // no finished update for this long means something is wrong
+var APP_CANVAS_DOWN_STOP = 5; // a run stops after this many students in a row find Canvas down
+var APP_HEALTH_HOUR = 7; // the weekly health check: Mondays at about 7 AM, New York time
+var APP_HEALTH_FAILING_MS = 20 * 3600 * 1000; // a student failing this long (two runs) goes in the email
+var APP_PROPS_LIMIT_BYTES = 500 * 1024; // Google's limit on all Script Properties together
 // The page warns this long before a student's Canvas token expires: three weeks, so tokens that run
 // out during a two-week break (Oct 4 tokens expire Jan 2) are flagged while students are still here.
 var APP_TOKEN_WARN_DAYS = 21;
@@ -134,6 +138,7 @@ function getAppState() {
     run: publicRun_(readJson_('run.current')),
     lastRun: readJson_('run.last'),
     automaticUpdatesOn: dailyTriggerCount_() === APP_DAILY_HOURS.length,
+    pausedSince: pausedSince_(),
     updatesStaleSince: updatesStaleSince_(),
     tokensExpiring: tokensExpiringSoon_(),
     contact: APP_CONTACT,
@@ -147,7 +152,7 @@ function getAppState() {
  */
 function updatesStaleSince_() {
   var last = readJson_('run.last');
-  if (!last || !last.finishedAt || activeRun_()) return null;
+  if (!last || !last.finishedAt || activeRun_() || pausedSince_()) return null;
   return Date.now() - new Date(last.finishedAt).getTime() > APP_STALE_AFTER_MS ? last.finishedAt : null;
 }
 
@@ -574,6 +579,8 @@ function teacherFolders_() {
           }
         }
         if (!f) f = shared.createFolder(t.name);
+        // The old folder was trashed or moved out of the shared folder: its Docs come along.
+        if (stored[t.email] && stored[t.email] !== f.getId()) rescueTeacherFolder_(stored[t.email], f);
         stored[t.email] = f.getId();
         map[t.email] = f;
       });
@@ -581,6 +588,39 @@ function teacherFolders_() {
     });
   }
   return (teacherFolderCache_ = map);
+}
+
+/**
+ * Moves every file from a teacher's old folder (trashed, or moved out of the shared folder) into
+ * their new one, out of the trash, so their students keep the same Docs, Status and Notes. A
+ * folder deleted for good can't be helped: those Docs are gone, and new ones are made.
+ */
+function rescueTeacherFolder_(oldId, dest) {
+  var old;
+  try {
+    old = DriveApp.getFolderById(oldId);
+  } catch (e) {
+    return 0;
+  }
+  var moved = 0;
+  var files = old.getFiles();
+  while (files.hasNext()) {
+    var file = files.next();
+    try {
+      try {
+        file.moveTo(dest);
+      } catch (e) {
+        file.setTrashed(false); // Drive may not move a file that's in the trash
+        file.moveTo(dest);
+      }
+      if (file.isTrashed()) file.setTrashed(false);
+      moved++;
+    } catch (err) {
+      console.warn('Could not move a file out of an old teacher folder: ' + err);
+    }
+  }
+  if (moved) console.log('Moved ' + moved + ' Doc(s) from a trashed or moved teacher folder into "' + dest.getName() + '".');
+  return moved;
 }
 
 /** Who a Drive folder belongs to: a teacher's email, '' for the shared folder itself, else null. */
@@ -814,6 +854,7 @@ function updateOneStudent_(id) {
     }
     applyTokenInfo(student);
     delete student.docUnsureSince;
+    delete student.failingSince;
     student.name = schedule.student_full_name || student.name;
     student.docId = docId;
     if (docInfo.replaced) student.notice = { at: new Date().toISOString(), message: docInfo.replaced };
@@ -838,7 +879,9 @@ function updateOneStudent_(id) {
         'new token, then click Edit on their row, paste it and click Save.';
     }
     student.last = { at: new Date().toISOString(), ok: false, message: message };
+    student.failingSince = student.failingSince || student.last.at; // for the weekly health check
     result = { ok: false, name: student.name, message: student.last.message };
+    if (err && (err.canvasKind === 'unavailable' || err.canvasKind === 'network')) result.canvasDown = true;
   } finally {
     PropertiesService.getScriptProperties().deleteProperty('busy.' + id);
   }
@@ -1047,6 +1090,15 @@ function recordResult_(runId, result, id) {
     } else {
       run.moreFailed = (run.moreFailed || 0) + 1;
     }
+    // Canvas down or refusing for several students in a row: stop, rather than keep asking it.
+    run.canvasDownStreak = result.canvasDown ? (run.canvasDownStreak || 0) + 1 : 0;
+    if (run.canvasDownStreak >= APP_CANVAS_DOWN_STOP && run.queue.length) {
+      run.failed.push({
+        name: run.queue.length + ' more student' + (run.queue.length === 1 ? '' : 's'),
+        message: "Not tried: Canvas wasn't answering for " + APP_CANVAS_DOWN_STOP + ' students in a row. The next update tries again.',
+      });
+      run.queue = [];
+    }
     writeJson_('run.current', run);
   });
 }
@@ -1095,6 +1147,10 @@ function scheduledRun(e) {
   var uid = requireTrigger_(e);
   var oneOff = (readJson_('trigger.oneoff') || []).indexOf(uid) !== -1;
   if (oneOff) deleteTriggerByUid_(uid);
+  if (!oneOff && pausedSince_()) {
+    Logger.log('Automatic updates are paused (since ' + shortDate_(pausedSince_()) + '), so this one was skipped.');
+    return;
+  }
   startRun_(oneOff ? 'test' : 'scheduled', 'automatic');
 }
 
@@ -1167,8 +1223,16 @@ function setupTriggers() {
       .inTimezone(APP_TIME_ZONE)
       .create();
   });
+  deleteTriggersFor_('weeklyHealthCheck');
+  ScriptApp.newTrigger('weeklyHealthCheck')
+    .timeBased()
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(APP_HEALTH_HOUR)
+    .nearMinute(0)
+    .inTimezone(APP_TIME_ZONE)
+    .create();
   PropertiesService.getScriptProperties().deleteProperty('APPS_SCRIPT_SECRET');
-  Logger.log('Daily updates installed: about 7 pm and about midnight (New York time).');
+  Logger.log('Daily updates installed: about 7 pm and about midnight (New York time). Weekly health check: Mondays at about 7 AM.');
   checkSetup();
 }
 
@@ -1184,6 +1248,158 @@ function scheduleTestRun() {
     'Test update scheduled for about ' + Utilities.formatDate(at, APP_TIME_ZONE, 'h:mm a') +
       '. The daily 7 pm and midnight updates are unchanged.'
   );
+}
+
+// =====================================================================================
+// Summer: pause the automatic updates (the triggers stay, so resuming needs no new permissions)
+// =====================================================================================
+
+/** Since when automatic updates are paused (ISO time), or null. */
+function pausedSince_() {
+  return getScriptProperty_('PAUSED_SINCE') || null;
+}
+
+/**
+ * Pauses the 7 pm and midnight updates and the weekly health email, for example over the summer.
+ * The page still works, including "Update all students now". Run resumeAutomaticUpdates to undo.
+ */
+function pauseAutomaticUpdates() {
+  requireOwner_();
+  if (!pausedSince_()) PropertiesService.getScriptProperties().setProperty('PAUSED_SINCE', new Date().toISOString());
+  Logger.log('Automatic updates are paused (since ' + shortDate_(pausedSince_()) + '). The page still works, and ' +
+    '"Update all students now" still updates everyone. Run resumeAutomaticUpdates to turn them back on.');
+}
+
+/** Turns the automatic updates and the weekly health email back on. */
+function resumeAutomaticUpdates() {
+  requireOwner_();
+  PropertiesService.getScriptProperties().deleteProperty('PAUSED_SINCE');
+  if (dailyTriggerCount_() !== APP_DAILY_HOURS.length || !triggerCountFor_('weeklyHealthCheck')) {
+    setupTriggers(); // they were removed meanwhile: put them back (it logs a setup check)
+  } else {
+    Logger.log('Automatic updates are back on: about 7 pm and about midnight. The next one runs tonight.');
+  }
+}
+
+function triggerCountFor_(handler) {
+  return ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === handler; }).length;
+}
+
+// =====================================================================================
+// Weekly health check: an email on Mondays, only when something needs attention
+// =====================================================================================
+
+/** Who gets the health email: HEALTH_EMAILS (commas between), or else AutoPlanner's owner. */
+function healthRecipients_() {
+  var list = String(getScriptProperty_('HEALTH_EMAILS') || '').split(',').map(function (e) {
+    return e.trim();
+  }).filter(function (e) { return /^[^@\s]+@[^@\s]+$/.test(e); });
+  if (!list.length) list = [String(Session.getEffectiveUser().getEmail() || '')].filter(Boolean);
+  return list;
+}
+
+/**
+ * What needs attention, as [{ title, lines, todo }]: the daily updates not set up or not
+ * finishing, students whose updates have failed for over a day, tokens running out in the next
+ * three weeks, and Script Properties close to Google's limit. Empty while updates are paused.
+ */
+function healthReport_() {
+  if (pausedSince_()) return [];
+  var items = [];
+  var now = Date.now();
+  if (dailyTriggerCount_() !== APP_DAILY_HOURS.length) {
+    items.push({
+      title: "The 7 pm and midnight updates aren't set up.",
+      lines: [],
+      todo: 'In the Apps Script editor, open App.gs and run setupTriggers.',
+    });
+  } else if (updatesStaleSince_()) {
+    items.push({
+      title: 'No update for all students has finished since ' + shortDate_(updatesStaleSince_()) + '.',
+      lines: [],
+      todo: "The owner's account may have lost access. See \"Long-term care\" in the quick start.",
+    });
+  }
+  var students = listStudents_();
+  var failing = students.filter(function (s) {
+    return s.last && !s.last.ok && s.failingSince && now - new Date(s.failingSince).getTime() >= APP_HEALTH_FAILING_MS;
+  });
+  if (failing.length) {
+    items.push({
+      title: failing.length + ' student' + (failing.length === 1 ? "'s Doc hasn't" : "s' Docs haven't") + ' updated for over a day:',
+      lines: failing.map(function (s) { return (s.name || 'Student') + ': ' + s.last.message; }),
+      todo: 'Each line says what to do. The same message is on their row, next to "Needs attention".',
+    });
+  }
+  var expiring = tokensExpiringSoon_().filter(function (x) { return !x.expired; });
+  if (expiring.length) {
+    items.push({
+      title: 'Canvas tokens running out in the next 3 weeks:',
+      lines: expiring.map(function (x) { return x.name + ': ' + x.date; }),
+      todo: 'Ask each student for a new token (the student token guide shows how), then click Edit on their row, paste it and click Save.',
+    });
+  }
+  var bytes = scriptPropertiesBytes_();
+  if (bytes > APP_PROPS_LIMIT_BYTES * 0.7) {
+    items.push({
+      title: "AutoPlanner's saved data is " + Math.round(bytes / 1024) + ' KB, close to Google\'s limit of 500 KB.',
+      lines: [],
+      todo: 'Contact the Civic AI Club.',
+    });
+  }
+  return items;
+}
+
+/** Everything in Script Properties, in bytes (keys and values). */
+function scriptPropertiesBytes_() {
+  var all = PropertiesService.getScriptProperties().getProperties();
+  return Object.keys(all).reduce(function (n, k) { return n + k.length + String(all[k]).length; }, 0);
+}
+
+/** The email for a health report (plain text, never a token). */
+function healthEmail_(items) {
+  var n = items.length;
+  var body = ['AutoPlanner weekly check, ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'EEE MMM d') + ': ' +
+    n + (n === 1 ? ' thing needs' : ' things need') + ' attention.', ''];
+  items.forEach(function (item, i) {
+    body.push((i + 1) + '. ' + item.title);
+    item.lines.forEach(function (l) { body.push('   - ' + l); });
+    body.push('   What to do: ' + item.todo, '');
+  });
+  var url = '';
+  try {
+    url = ScriptApp.getService().getUrl();
+  } catch (e) {
+    url = '';
+  }
+  if (url) body.push('Open AutoPlanner: ' + url);
+  body.push('This email comes on Mondays only when something needs attention. To change who gets it, edit ' +
+    'HEALTH_EMAILS in the Apps Script project\'s Script Properties.');
+  return { subject: 'AutoPlanner: ' + n + (n === 1 ? ' thing needs' : ' things need') + ' attention', body: body.join('\n') };
+}
+
+/** Mondays at about 7 AM: emails HEALTH_EMAILS if something needs attention. */
+function weeklyHealthCheck(e) {
+  requireTrigger_(e);
+  sendHealthEmail_();
+}
+
+/** Run from the editor: the same check right now. It emails only if something needs attention. */
+function healthCheckNow() {
+  requireOwner_();
+  var sent = sendHealthEmail_();
+  Logger.log(sent ? 'Sent to ' + sent.to + ':\n\n' + sent.body :
+    pausedSince_() ? 'Automatic updates are paused, so there is no health email.' : 'Nothing needs attention, so no email was sent.');
+}
+
+function sendHealthEmail_() {
+  var items = healthReport_();
+  if (!items.length) return null;
+  var mail = healthEmail_(items);
+  var to = healthRecipients_().join(',');
+  if (!to) return null;
+  MailApp.sendEmail({ to: to, subject: mail.subject, body: mail.body, name: 'AutoPlanner' });
+  return { to: to, body: mail.body };
 }
 
 /** Logs whether everything is set up. Never logs tokens. */
@@ -1230,6 +1446,16 @@ function checkSetup() {
       ? 'OK   Daily updates: about 7 pm and about midnight.'
       : 'FIX  Daily updates: ' + daily + ' found, expected 2. Run setupTriggers.'
   );
+  if (pausedSince_()) {
+    Logger.log('NOTE Automatic updates are paused (since ' + shortDate_(pausedSince_()) + '). Run resumeAutomaticUpdates to turn them back on.');
+  }
+  Logger.log(
+    triggerCountFor_('weeklyHealthCheck')
+      ? 'OK   Weekly health check: Mondays at about 7 AM, emailed only when something needs attention, to ' +
+        (getScriptProperty_('HEALTH_EMAILS') ? 'HEALTH_EMAILS: ' : 'the owner (HEALTH_EMAILS is not set): ') + healthRecipients_().join(', ')
+      : 'FIX  Weekly health check: not set up. Run setupTriggers.'
+  );
+  Logger.log('     Saved data (Script Properties): ' + Math.round(scriptPropertiesBytes_() / 1024) + ' KB of 500 KB');
   Logger.log('     Students on the list: ' + listStudents_().length);
   if (getScriptProperty_('APPS_SCRIPT_SECRET')) {
     Logger.log('FIX  APPS_SCRIPT_SECRET is still set; setupTriggers removes it.');
@@ -1472,6 +1698,16 @@ function runSelfTest_(keepToken) {
       if (/<script|google\.script\.run/.test(html)) throw new Error('the page has a script');
       return 'shows "' + want + '"';
     });
+    step('health', [], 'Weekly health check: set up (nothing is sent now)', function () {
+      if (!triggerCountFor_('weeklyHealthCheck')) throw new Error('Its trigger is missing. Run setupTriggers.');
+      var to = healthRecipients_();
+      if (!to.length) throw new Error('Nobody to send it to: set HEALTH_EMAILS.');
+      var items = healthReport_();
+      if (pausedSince_()) return 'automatic updates are paused, so there is no email';
+      return items.length
+        ? 'today it would email ' + to.join(', ') + ' about: ' + items.map(function (i) { return i.title; }).join(' / ')
+        : 'nothing needs attention today, so no email; it goes to ' + to.join(', ');
+    });
     step('canvas', ['token'], 'Canvas: fetch your assignments and classes', function () {
       try {
         schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD, undefined, courseExcludeKeywords_());
@@ -1575,6 +1811,21 @@ function runSelfTest_(keepToken) {
         if (r.note !== testNote) throw new Error(r.table + ' Notes is "' + r.note + '"');
       });
       return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
+    });
+    step('kept', ['followed'], 'An assignment removed from Canvas keeps its Status and Note in its week, marked "Not on Canvas" (timed)', function () {
+      keepHold();
+      startUpdateStats_();
+      writeDocWithRecovery_(selfStudent, scheduleWithoutAssignment_(schedule, target.url), { noDeadline: true });
+      var timing = updateStatsText_();
+      updateStats_ = null;
+      var rows = findRowsByUrl_(docId, target.url);
+      if (rows.length !== 2) throw new Error('Expected it in both tables, found ' + rows.length + '.');
+      rows.forEach(function (r) {
+        if (movedTo && r.weekKey !== movedTo) throw new Error('found in the week of ' + r.weekKey + ', expected ' + movedTo);
+        if (r.priority !== KEPT_NOT_ON_CANVAS) throw new Error(r.table + ' Priority says "' + r.priority + '"');
+        if (r.status !== testStatus || r.note !== testNote) throw new Error(r.table + ' lost the Status or Note');
+      });
+      return 'kept in By Class and By Day, with its Status and Note; ' + timing;
     });
     step('normal', ['doc'], 'Doc: run a normal update (the real due date again)', function () {
       keepHold();
@@ -1969,7 +2220,7 @@ function findRowsByUrl_(docId, url) {
       (el.table.tableRows || []).forEach(function (row) {
         var cells = row.tableCells || [];
         if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
-          rows.push({ table: kind, weekKey: key, status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
+          rows.push({ table: kind, weekKey: key, priority: getCellText_(cells[3]), status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
         }
       });
     });
@@ -2000,6 +2251,18 @@ function rowCellsByUrl_(docId, url) {
 function weekKeyOfTab_(docJson, tabId) {
   var w = weekTabsOf_(docJson).filter(function (x) { return x.tab.tabProperties.tabId === tabId; })[0];
   return w ? weekKeyFromTabTitle_(w.title) : null;
+}
+
+/** A copy of the schedule without one assignment, as if it were removed or unpublished in Canvas. */
+function scheduleWithoutAssignment_(schedule, url) {
+  var copy = JSON.parse(JSON.stringify(schedule));
+  Object.keys(copy.weeks).forEach(function (k) {
+    (copy.weeks[k].days || []).forEach(function (d) {
+      d.assignments = (d.assignments || []).filter(function (a) { return a.url !== url; });
+    });
+  });
+  if (copy.elsewhere) delete copy.elsewhere[url];
+  return copy;
 }
 
 /** A copy of the schedule with one assignment moved to the same weekday of another week. */
