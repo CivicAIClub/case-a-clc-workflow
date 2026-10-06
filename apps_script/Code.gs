@@ -206,11 +206,21 @@ function docsApiIsQuotaError_(err) {
 }
 
 /**
- * Reads leave out the content of the week tabs inside "Past weeks" (the third tab level): nothing
- * reads them, and they grow all year, so a full read would get slower and bigger every week. Their
- * titles and IDs are still there. Pass opts (e.g. { includeTabsContent: true }) for a full read.
+ * Reads ask only for what AutoPlanner uses: every tab's title and ID; each tab's page size and
+ * margins (for column widths); and the text, positions and links in it, with the text styles that
+ * "Added by staff" keeps. Paragraph and cell styles, about 80% of a full read, are left out, and so
+ * is the content of the week tabs inside "Past weeks" (the third tab level), which grow all year.
+ * A read is about 5 times smaller (checked on a live Doc, 2026-10-06), and reads were most of
+ * every update's time. Pass opts (e.g. { includeTabsContent: true }) for a full read.
  */
-var DOCS_GET_FIELDS = 'tabs(tabProperties,documentTab,childTabs(tabProperties,documentTab,childTabs(tabProperties)))';
+var DOCS_READ_TEXT_RUN = 'textRun(content,textStyle(bold,italic,underline,strikethrough,link,foregroundColor,backgroundColor))';
+var DOCS_READ_PARAGRAPH = 'paragraph(elements(startIndex,endIndex,' + DOCS_READ_TEXT_RUN + '))';
+var DOCS_READ_TABLE = 'table(rows,columns,tableRows(startIndex,endIndex,tableCells(startIndex,endIndex,' +
+  'content(startIndex,endIndex,' + DOCS_READ_PARAGRAPH + '))))';
+var DOCS_READ_TAB = 'documentTab(documentStyle(pageSize,marginLeft,marginRight),body/content(startIndex,endIndex,' +
+  DOCS_READ_PARAGRAPH + ',' + DOCS_READ_TABLE + ',sectionBreak/sectionStyle/sectionType))';
+var DOCS_GET_FIELDS = 'tabs(tabProperties,' + DOCS_READ_TAB + ',childTabs(tabProperties,' + DOCS_READ_TAB +
+  ',childTabs(tabProperties)))';
 var docsGetFieldsRejected_ = false; // set if Google ever refuses DOCS_GET_FIELDS; then reads are full
 
 /** Docs.Documents.get with retries when Google returns quota / rate limit errors. */
@@ -420,9 +430,10 @@ function upsertPlannerDocument_(data) {
     }
   }
 
-  var parentTabId = prepareParentTab_(docId, isNew);
+  var prepared = {};
+  var parentTabId = prepareParentTab_(docId, isNew, prepared);
   // One read serves the steps below; it's read again only after a step changes the Doc.
-  var current = docsGet_(docId);
+  var current = prepared.doc || docsGet_(docId);
   if (removeUpdatingLeftovers_(docId, findTabJsonById_(current, parentTabId))) current = docsGet_(docId);
 
   // Weeks that have ended move into "Past weeks" first; they are never rebuilt or read again.
@@ -471,6 +482,7 @@ function upsertPlannerDocument_(data) {
   }
 
   var staffCounts = {};
+  var nextRead = null; // the Doc as the last week left it, when that week's last look can be reused
   var weeksDone = [];
   var slowestWeekMs = 60 * 1000;
   var stoppedEarly = false;
@@ -486,8 +498,10 @@ function upsertPlannerDocument_(data) {
     var weekData = weeks[weekKey];
     var tabTitle = buildWeekTabTitle_(weekKey, weekData.week_label);
 
-    // The first week can use the read above (nothing has changed since); later weeks read again.
-    var resource = i === 0 ? current : docsGet_(docId);
+    // The first week can use the read above (nothing has changed since); later weeks use the last
+    // week's final read, or read again.
+    var resource = i === 0 ? current : nextRead || docsGet_(docId);
+    nextRead = null;
     var parentJson = findTabJsonById_(resource, parentTabId);
     var existingWeekTabId =
       parentJson && findChildTabIdByTitle_(parentJson, tabTitle);
@@ -506,7 +520,9 @@ function upsertPlannerDocument_(data) {
       probe = null;
     }
 
-    staffCounts[weekKey] = fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, beforeParent, probe);
+    var after = {};
+    staffCounts[weekKey] = fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, beforeParent, probe, after);
+    nextRead = after.doc;
     sleepDocsChunkGap_();
     weeksDone.push(weekKey);
     var took = Date.now() - weekStartedAt;
@@ -538,7 +554,7 @@ function upsertPlannerDocument_(data) {
   saveWritten_(docId, written);
 
   // The home tab last, so its "Open this week" link can point at this week's (new) tab.
-  rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date(), staffCounts);
+  rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, new Date(), staffCounts, stoppedEarly ? null : nextRead);
 
   return { docUrl: DocumentApp.openById(docId).getUrl(), documentId: docId, weeksDone: weeksDone.length, weeksTotal: weekKeys.length };
 }
@@ -561,9 +577,13 @@ function countAssignmentsInWeek_(days) {
   return n;
 }
 
-/** Rename default root tab on first create; otherwise locate CLC Planner or first root tab. */
-function prepareParentTab_(docId, isNew) {
+/**
+ * Rename default root tab on first create; otherwise locate CLC Planner or first root tab. If `out`
+ * is given and nothing was changed, out.doc is the read it made, so the update can use it.
+ */
+function prepareParentTab_(docId, isNew, out) {
   var resource = docsGet_(docId);
+  if (out) out.doc = null;
   var tabs = resource.tabs || [];
   if (!tabs.length) {
     throw new Error('Document has no tabs (unexpected for this account).');
@@ -583,7 +603,10 @@ function prepareParentTab_(docId, isNew) {
   }
 
   var named = findRootTabIdByTitle_(resource, PARENT_TAB_TITLE);
-  if (named) return named;
+  if (named) {
+    if (out) out.doc = resource;
+    return named;
+  }
 
   if (tabs.length === 1 && tabs[0].tabProperties) {
     var onlyId = tabs[0].tabProperties.tabId;
@@ -1274,9 +1297,24 @@ var HOME_CLASS_WIDTHS = [288, 80, 100];
 var HOME_RULE_FG = '#BFBFBF'; // thin gray rules (the text color at about 25% on white)
 var HOME_SWATCH = '   '; // three no-break spaces, shaded with the priority color
 
-/** Rebuilds the home tab. Runs after the week tabs, so "Open this week" can link to its tab. */
-function rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, now, staffCounts) {
-  var doc = docsGet_(docId);
+/**
+ * Rebuilds the home tab. Runs after the week tabs, so "Open this week" can link to its tab. Uses
+ * `readDoc` (the last week's final read) when given; if Docs refuses the edit because someone
+ * changed the home tab since that read, it reads the Doc again and tries once more.
+ */
+function rebuildHomeTab_(docId, parentTabId, data, courses, colorMap, now, staffCounts, readDoc) {
+  if (readDoc) {
+    try {
+      return rebuildHomeTabFrom_(readDoc, docId, parentTabId, data, courses, colorMap, now, staffCounts);
+    } catch (err) {
+      if (docsApiIsQuotaError_(err)) throw err;
+      console.warn('Home tab: rebuilding from a fresh read (' + err + ')');
+    }
+  }
+  return rebuildHomeTabFrom_(docsGet_(docId), docId, parentTabId, data, courses, colorMap, now, staffCounts);
+}
+
+function rebuildHomeTabFrom_(doc, docId, parentTabId, data, courses, colorMap, now, staffCounts) {
   var tab = findTabJsonById_(doc, parentTabId);
   if (!tab || !tab.documentTab || !tab.documentTab.body) return;
   var summary = homeSummary_(data, courses, now || new Date());
@@ -1606,8 +1644,11 @@ function tabBodyHasHeavyContent_(tabJson) {
 /**
  * Writes one week tab from scratch: a heading, the help line, one table per class, and the By Day
  * table. The tab has just been created or cleared, so it holds one empty paragraph at index 1.
+ * If `out` is given, out.doc is a read of the Doc as it is afterwards (or null), so the next week
+ * doesn't have to read it again.
  */
-function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, snapshot, readDoc) {
+function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, snapshot, readDoc, out) {
+  if (out) out.doc = null;
   var docProbe = readDoc || docsGet_(docId);
   var tabProbe = findTabJsonById_(docProbe, tabId);
   // Status and Notes from all current and upcoming weeks (see collectSavedData_), or this tab's own.
@@ -1646,11 +1687,13 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
     // A last look at the old tab: if staff typed in it while the new one was being written (in
     // Status, Notes or the "Added by staff" table), write the new one again with their edits
     // (once; the window is only a few seconds).
-    var oldNow = findTabJsonById_(docsGet_(docId), oldTabId);
+    var lastRead = docsGet_(docId);
+    var oldNow = findTabJsonById_(lastRead, oldTabId);
     var staffNow = oldNow ? readStaffRows_(oldNow) : staffRows;
     var staffChanged = JSON.stringify(staffNow) !== JSON.stringify(staffRows);
     if (staffChanged) staffRows = staffNow;
     if (oldNow && (applyChanges_(savedData, changedSince_(tabProbe, oldNow)) || staffChanged)) {
+      lastRead = null; // the tab is written again below, so this read is out of date
       docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
       tabId = addWeekChildTab_(docId, parentTabId, tempTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
       sleepDocsChunkGap_();
@@ -1662,8 +1705,29 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
       { deleteTab: { tabId: oldTabId } },
       { updateDocumentTabProperties: { tabProperties: { tabId: tabId, title: tabTitle }, fields: 'title' } },
     ]);
+    if (out && lastRead) out.doc = swapInRead_(lastRead, parentTabId, oldTabId, tabId, tabTitle);
   }
   return countStaffRows_(staffRows);
+}
+
+/**
+ * A read taken just before a week's swap, changed the way the swap changed the Doc: the old tab
+ * gone and the new one renamed (positions come from the order of the tabs, so nothing else moves).
+ * Anything staff type after this read is caught by the next week's own last look, as before.
+ */
+function swapInRead_(docJson, parentTabId, oldTabId, newTabId, title) {
+  var parent = findTabJsonById_(docJson, parentTabId);
+  var kids = (parent && parent.childTabs) || [];
+  var oldAt = -1;
+  var fresh = null;
+  kids.forEach(function (t, i) {
+    if (t.tabProperties.tabId === oldTabId) oldAt = i;
+    if (t.tabProperties.tabId === newTabId) fresh = t;
+  });
+  if (oldAt < 0 || !fresh) return null;
+  kids.splice(oldAt, 1);
+  fresh.tabProperties.title = title;
+  return docJson;
 }
 
 /** Usable page width in points (page width minus margins); 468 on US Letter with 1" margins. */
