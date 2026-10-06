@@ -124,8 +124,10 @@ function notAuthorizedPage_(email) {
 /** Everything the page needs to draw itself. */
 function getAppState() {
   var email = requireAllowedUser_();
+  syncTeachersFromDrive_();
   return {
     user: email,
+    teachers: clcTeachers_().map(function (t) { return { name: t.name, email: t.email }; }),
     students: listStudents_().map(publicStudent_),
     run: publicRun_(readJson_('run.current')),
     lastRun: readJson_('run.last'),
@@ -147,12 +149,24 @@ function updatesStaleSince_() {
   return Date.now() - new Date(last.finishedAt).getTime() > APP_STALE_AFTER_MS ? last.finishedAt : null;
 }
 
-/** Add a student from their Canvas token. Checks the token with Canvas before saving it. */
-function addStudent(token, label) {
+/**
+ * Add a student from their Canvas token. Checks the token with Canvas before saving it. `teacher`
+ * (optional) is a CLC teacher's email; their Doc then lives in that teacher's folder.
+ */
+function addStudent(token, label, teacher) {
   var email = requireAllowedUser_();
   token = cleanToken_(token);
   if (!token) throw new Error("Paste the student's Canvas token first.");
+  var teacherEmail = String(teacher || '').trim().toLowerCase();
+  if (teacherEmail && !teacherByEmail_(teacherEmail)) throw new Error('That CLC teacher is no longer on the list. Reload the page.');
   var profile = canvasProfileOrFriendlyError_(token);
+  // Teacher folders are looked up (and made if needed) before the lock below: making one takes
+  // the same lock.
+  try {
+    teacherFolders_();
+  } catch (err) {
+    if (teacherEmail) throw new Error(friendlyError_(err));
+  }
 
   return withLock_(function () {
     var students = listStudents_();
@@ -172,10 +186,17 @@ function addStudent(token, label) {
       name: profile.name,
       canvasUserId: profile.id,
       docId: docId,
+      teacher: teacherEmail,
       addedAt: new Date().toISOString(),
       addedBy: email,
       last: null,
     };
+    // An existing Doc goes into the chosen teacher's folder; with no teacher chosen, it keeps the
+    // teacher whose folder it's already in.
+    if (docId) {
+      if (teacherEmail) moveDocToTeacher_(docId, teacherEmail);
+      else syncStudentTeacher_(student);
+    }
     setTokenDates_(student, token);
     saveStudent_(student);
     PropertiesService.getScriptProperties().setProperty('token.' + student.id, token);
@@ -411,6 +432,7 @@ function publicStudent_(s) {
     docUrl: s.docId ? 'https://docs.google.com/document/d/' + s.docId + '/edit' : '',
     last: s.last || null,
     notice: recentNotice_(s.notice),
+    teacher: s.teacher && teacherByEmail_(s.teacher) ? s.teacher : '',
     tokenDate: s.tokenExpiresAt
       ? (new Date(s.tokenExpiresAt).getTime() <= Date.now() ? 'Token expired ' : 'Token expires ') + shortDate_(s.tokenExpiresAt)
       : s.tokenAddedAt ? 'Token added ' + shortDate_(s.tokenAddedAt) : '',
@@ -482,6 +504,209 @@ function escapeHtml_(s) {
 }
 
 // =====================================================================================
+// CLC teachers: one folder each, inside the shared folder
+// =====================================================================================
+
+/**
+ * The CLC teachers, from the CLC_TEACHERS Script Property ("Name <email>, Name <email>"), in that
+ * order: [{ name, email }]. Adding a teacher later is just editing that property.
+ */
+function clcTeachers_() {
+  var raw = getScriptProperty_('CLC_TEACHERS');
+  var re = /([^<>,]+?)\s*<\s*([^<>\s,]+@[^<>\s,]+)\s*>/g;
+  var out = [];
+  var seen = {};
+  var m;
+  while ((m = re.exec(raw))) {
+    var email = m[2].toLowerCase();
+    if (seen[email]) continue;
+    seen[email] = true;
+    out.push({ name: m[1].trim(), email: email });
+  }
+  return out;
+}
+
+function teacherByEmail_(email) {
+  var e = String(email || '').trim().toLowerCase();
+  return clcTeachers_().filter(function (t) { return t.email === e; })[0] || null;
+}
+
+var teacherFolderCache_ = null;
+
+/**
+ * { email: Folder } with every CLC teacher's folder, inside the shared folder and named with their
+ * full name. A folder is made the first time it's needed, and again if it's trashed, deleted or
+ * moved out of the shared folder (its ID is kept in the "teacherFolders" Script Property).
+ * Folders made inside the shared folder share it with the same people; sharing is never changed.
+ */
+function teacherFolders_() {
+  if (teacherFolderCache_) return teacherFolderCache_;
+  var shared = getDocsFolder_();
+  var teachers = clcTeachers_();
+  var map = {};
+  if (!shared || !teachers.length) return (teacherFolderCache_ = map);
+  var stored = readJson_('teacherFolders') || {};
+  var usable = function (id) {
+    try {
+      var f = DriveApp.getFolderById(id);
+      return !f.isTrashed() && isInsideFolder_(f, shared.getId(), 0) ? f : null;
+    } catch (e) {
+      return null;
+    }
+  };
+  var missing = teachers.filter(function (t) {
+    var f = stored[t.email] ? usable(stored[t.email]) : null;
+    if (f) map[t.email] = f;
+    return !f;
+  });
+  if (missing.length) {
+    withLock_(function () {
+      stored = readJson_('teacherFolders') || {};
+      missing.forEach(function (t) {
+        var f = stored[t.email] ? usable(stored[t.email]) : null;
+        if (!f) {
+          var byName = shared.getFoldersByName(t.name);
+          while (!f && byName.hasNext()) {
+            var c = byName.next();
+            if (!c.isTrashed()) f = c;
+          }
+        }
+        if (!f) f = shared.createFolder(t.name);
+        stored[t.email] = f.getId();
+        map[t.email] = f;
+      });
+      writeJson_('teacherFolders', stored);
+    });
+  }
+  return (teacherFolderCache_ = map);
+}
+
+/** Who a Drive folder belongs to: a teacher's email, '' for the shared folder itself, else null. */
+function teacherOfFolderId_(folderId) {
+  var shared = getDocsFolder_();
+  if (shared && folderId === shared.getId()) return '';
+  var folders = teacherFolders_();
+  var found = null;
+  Object.keys(folders).forEach(function (email) {
+    if (folders[email].getId() === folderId) found = email;
+  });
+  return found;
+}
+
+/** The IDs of the folders a Doc is in. */
+function docFolderIds_(docId) {
+  var ids = [];
+  var parents = DriveApp.getFileById(docId).getParents();
+  while (parents.hasNext()) ids.push(parents.next().getId());
+  return ids;
+}
+
+/** Moves a Doc into the teacher's folder ('' = the shared folder itself). Same Doc, same link. */
+function moveDocToTeacher_(docId, email) {
+  var dest = email ? teacherFolders_()[email] : getDocsFolder_();
+  if (!dest) throw new Error("That CLC teacher's folder isn't available. Contact " + APP_CONTACT + '.');
+  if (docFolderIds_(docId).indexOf(dest.getId()) === -1) DriveApp.getFileById(docId).moveTo(dest);
+}
+
+/**
+ * Brings a student's teacher in line with where their Doc is (staff can drag a Doc between teacher
+ * folders in Drive): a Doc in a teacher's folder takes that teacher, a Doc in the shared folder
+ * itself is Unassigned. A teacher removed from CLC_TEACHERS: their students become Unassigned and
+ * their Docs move back to the shared folder; nothing is deleted. Gives back true if it changed.
+ */
+function syncStudentTeacher_(student, folderIds) {
+  var before = student.teacher || '';
+  if (!before && !clcTeachers_().length) return false; // no CLC teachers set up: nothing to do
+  if (student.teacher && !teacherByEmail_(student.teacher)) {
+    student.teacher = '';
+    if (student.docId) {
+      try {
+        moveDocToTeacher_(student.docId, '');
+      } catch (e) {
+        console.warn('Could not move a removed teacher\'s student Doc back: ' + e);
+      }
+    }
+    return before !== '';
+  }
+  if (!student.docId) return false;
+  var ids = folderIds || docFolderIds_(student.docId);
+  for (var i = 0; i < ids.length; i++) {
+    var owner = teacherOfFolderId_(ids[i]);
+    if (owner !== null) {
+      student.teacher = owner;
+      break;
+    }
+  }
+  return (student.teacher || '') !== before;
+}
+
+/**
+ * Page load: one listing of each teacher's folder and the shared folder, so Docs dragged between
+ * folders in Drive show the right teacher straight away. Never stops the page from loading.
+ */
+function syncTeachersFromDrive_() {
+  try {
+    var shared = getDocsFolder_();
+    if (!shared) return;
+    if (!clcTeachers_().length && !listStudents_().some(function (s) { return s.teacher; })) return;
+    var where = {};
+    var list = function (folder, email) {
+      var files = folder.getFilesByType(MimeType.GOOGLE_DOCS);
+      while (files.hasNext()) where[files.next().getId()] = email;
+    };
+    list(shared, '');
+    var folders = teacherFolders_();
+    Object.keys(folders).forEach(function (email) { list(folders[email], email); });
+    listStudents_().forEach(function (s) {
+      var removed = s.teacher && !teacherByEmail_(s.teacher);
+      var here = s.docId && Object.prototype.hasOwnProperty.call(where, s.docId) ? where[s.docId] : null;
+      if (!removed && (here === null || here === (s.teacher || ''))) return;
+      withLock_(function () {
+        var fresh = getStudent_(s.id);
+        if (!fresh) return;
+        if (removed) syncStudentTeacher_(fresh);
+        else fresh.teacher = here;
+        saveStudent_(fresh);
+      });
+    });
+  } catch (err) {
+    console.warn('Teacher folders not checked on page load: ' + err);
+  }
+}
+
+/** Set a student's CLC teacher ('' = Unassigned). Moves their Doc (the same Doc) right away. */
+function setStudentTeacher(id, email) {
+  requireAllowedUser_();
+  var e = String(email || '').trim().toLowerCase();
+  var teacher = e ? teacherByEmail_(e) : null;
+  if (e && !teacher) throw new Error('That CLC teacher is no longer on the list. Reload the page.');
+  var student = getStudent_(id);
+  if (!student) throw new Error('That student is no longer on the list. Reload the page.');
+  var moved = false;
+  if (student.docId) {
+    try {
+      moveDocToTeacher_(student.docId, e);
+      moved = true;
+    } catch (err) {
+      throw new Error(friendlyError_(err));
+    }
+  }
+  student = withLock_(function () {
+    var fresh = getStudent_(id) || student;
+    fresh.teacher = e;
+    saveStudent_(fresh);
+    return fresh;
+  });
+  var name = student.name || 'This student';
+  var message = !moved
+    ? 'Saved. ' + name + '\'s Doc will be made in ' + (teacher ? teacher.name + '\'s folder.' : 'the shared folder.')
+    : teacher
+      ? 'Moved ' + name + '\'s Doc into ' + teacher.name + '\'s folder. Same Doc and link, with all its notes.'
+      : 'Moved ' + name + '\'s Doc back to the shared folder (no CLC teacher). Same Doc and link, with all its notes.';
+  return { student: publicStudent_(student), message: message };
+}
+
+// =====================================================================================
 // Finding an existing Doc (so a re-added student keeps their old Doc)
 // =====================================================================================
 
@@ -500,13 +725,23 @@ function findReusableDoc_(name, forStudentId) {
   var query =
     "title = '" + title.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'" +
     " and mimeType = 'application/vnd.google-apps.document' and trashed = false";
-  var files = folder.searchFiles(query);
-  var best = null;
-  while (files.hasNext()) {
-    var f = files.next();
-    if (taken[f.getId()]) continue;
-    if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
+  // The shared folder and every CLC teacher's folder inside it.
+  var places = [folder];
+  try {
+    var folders = teacherFolders_();
+    Object.keys(folders).forEach(function (email) { places.push(folders[email]); });
+  } catch (e) {
+    console.warn('Teacher folders not searched: ' + e);
   }
+  var best = null;
+  places.forEach(function (place) {
+    var files = place.searchFiles(query);
+    while (files.hasNext()) {
+      var f = files.next();
+      if (taken[f.getId()]) continue;
+      if (!best || f.getLastUpdated() > best.getLastUpdated()) best = f;
+    }
+  });
   return best ? best.getId() : null;
 }
 
@@ -547,6 +782,21 @@ function updateOneStudent_(id) {
         'This token now belongs to a different Canvas user (' + schedule.student_full_name +
           '). Click Edit and paste ' + student.name + "'s own token."
       );
+    }
+    // A Doc dragged into another teacher's folder in Drive brings that teacher with it.
+    try {
+      if (syncStudentTeacher_(student)) {
+        var adopted = student.teacher;
+        withLock_(function () {
+          var fresh = getStudent_(id);
+          if (fresh) {
+            fresh.teacher = adopted;
+            saveStudent_(fresh);
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('Teacher folder not checked: ' + e);
     }
     var docId = writeDocWithRecovery_(student, schedule, docInfo);
     student = getStudent_(id) || student;
@@ -592,6 +842,12 @@ function writeDocWithRecovery_(student, schedule, info) {
   var payload = {};
   Object.keys(schedule).forEach(function (k) { payload[k] = schedule[k]; });
   payload.studentFullName = schedule.student_full_name;
+  var teacher = student.teacher ? teacherByEmail_(student.teacher) : null;
+  if (teacher) {
+    payload.teacherName = teacher.name;
+    var folders = teacherFolders_();
+    if (folders[teacher.email]) payload.targetFolderId = folders[teacher.email].getId();
+  }
   var docId = student.docId || findReusableDoc_(schedule.student_full_name, student.id);
   if (docId) payload.documentId = docId;
   if (info && info.noDeadline) payload.noDeadline = true;
@@ -678,8 +934,19 @@ function startRun_(reason, startedBy) {
     return fresh;
   });
   if (!run) return false;
-  processRunBatch_(run.id);
+  // From the page, the first batch is short, so the page hears back quickly; automatic runs use
+  // the longer batches the time limit allows.
+  processRunBatch_(run.id, reason === 'manual' ? APP_BATCH_BUDGET_MS : triggerBatchBudgetMs_());
   return true;
+}
+
+/**
+ * How long an automatic batch keeps starting students: 2 minutes with the default 6-minute limit;
+ * with a longer measured limit, up to 5 minutes short of it (25 minutes at most). The last student
+ * must still fit (nextStudentFits_).
+ */
+function triggerBatchBudgetMs_() {
+  return Math.max(APP_BATCH_BUDGET_MS, Math.min(runtimeLimitMs_() - 5 * 60 * 1000, 25 * 60 * 1000));
 }
 
 /**
@@ -687,7 +954,8 @@ function startRun_(reason, startedBy) {
  * the run or schedules continueRun a minute later. A safety trigger resumes the run if this
  * execution is cut off.
  */
-function processRunBatch_(runId) {
+function processRunBatch_(runId, budgetMs) {
+  var budget = budgetMs === undefined ? APP_BATCH_BUDGET_MS : budgetMs;
   var batchStart = Date.now();
   // The safety trigger fires only after this execution must have ended (the time limit has
   // passed), so it never runs alongside a batch that's still going.
@@ -712,7 +980,7 @@ function processRunBatch_(runId) {
     }
     var result = updateOneStudent_(id);
     recordResult_(runId, result);
-    if (Date.now() - batchStart > APP_BATCH_BUDGET_MS) {
+    if (Date.now() - batchStart > budget) {
       var run = readJson_('run.current');
       if (run && run.id === runId && run.queue.length) {
         replaceContinueTrigger_(APP_CONTINUE_AFTER_MS);
@@ -824,7 +1092,7 @@ function continueRun(e) {
     });
     PropertiesService.getScriptProperties().deleteProperty('busy.' + run.inProgress);
   }
-  processRunBatch_(run.id);
+  processRunBatch_(run.id, triggerBatchBudgetMs_());
 }
 
 function deleteTriggersFor_(handler) {
@@ -918,6 +1186,19 @@ function checkSetup() {
   Logger.log(limitSet >= 60
     ? 'OK   Apps Script time limit: ' + limitSet + ' s per run (measured).'
     : 'NOTE Apps Script time limit: not measured; assuming ' + DEFAULT_RUNTIME_LIMIT_SECONDS + ' s. Run measureTimeLimit once to measure it.');
+  var teachers = clcTeachers_();
+  if (!teachers.length) {
+    Logger.log('     CLC_TEACHERS: (none: no teacher folders; every Doc stays in the shared folder)');
+  } else {
+    try {
+      var tf = teacherFolders_();
+      Logger.log('OK   CLC_TEACHERS: ' + teachers.map(function (t) {
+        return t.name + (tf[t.email] ? ' (folder ready)' : ' (no folder)');
+      }).join(', '));
+    } catch (err) {
+      Logger.log('FIX  CLC teacher folders: ' + friendlyError_(err));
+    }
+  }
   Logger.log('OK   Canvas: ' + canvasBaseUrl_());
   var excluded = courseExcludeKeywords_();
   Logger.log('     COURSE_EXCLUDE: ' + (excluded.length ? excluded.join(', ') : '(none: every class is shown)'));
@@ -1037,6 +1318,36 @@ function selfTestEveryday() {
   }
 }
 
+/** The "Added by staff" rows of the week tab with this title (readStaffRows_), or null. */
+function staffRowsOfWeek_(docId, title) {
+  var w = weekTabsOf_(docsGet_(docId)).filter(function (x) { return x.title === title; })[0];
+  return w ? readStaffRows_(w.tab) : null;
+}
+
+/** Types plain text into row `r` of a week tab's "Added by staff" table (replacing what's there). */
+function writeStaffRow_(docId, tabId, r, texts) {
+  var tab = findTabJsonById_(docsGet_(docId), tabId);
+  var table = findStaffTable_(tab);
+  var cells = table.tableRows[r + 1].tableCells;
+  var requests = [];
+  // Last cell first, so each edit leaves the earlier cells' positions alone.
+  for (var c = cells.length - 1; c >= 0; c--) {
+    var start = cellParagraphInsertIndex_(cells[c]);
+    var range = getCellTextRange_(cells[c]);
+    if (range && range.endIndex - 1 > start) {
+      requests.push({ deleteContentRange: { range: { tabId: tabId, startIndex: start, endIndex: range.endIndex - 1 } } });
+    }
+    if (texts[c]) requests.push({ insertText: { text: texts[c], location: { tabId: tabId, index: start } } });
+  }
+  docsBatchUpdate_(docId, requests);
+}
+
+/** Empties selfTest's row in "Added by staff" again. */
+function clearStaffTestRow_(docId, title, r) {
+  var w = weekTabsOf_(docsGet_(docId)).filter(function (x) { return x.title === title; })[0];
+  if (w) writeStaffRow_(docId, w.tab.tabProperties.tabId, r, ['', '', '', '', '']);
+}
+
 /** Puts a test assignment's Status and Note back in every row, and records them as written. */
 function restoreTestValues_(docId, url, original) {
   // One row at a time, reading the Doc again each time (each edit moves the text after it).
@@ -1101,6 +1412,9 @@ function runSelfTest_(keepToken) {
   }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
   var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo, tabsBefore, original;
+  var staffWeekTitle = null;
+  var staffRowIndex = -1;
+  var staffTestRow = null;
   var selfRow = null;
   var held = false;
   var selfTestStart = Date.now();
@@ -1196,6 +1510,19 @@ function runSelfTest_(keepToken) {
       testNote = 'selfTest note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
       writeStatusAndNote_(docId, target, testStatus, testNote);
       return '"' + testStatus + '" and a note on "' + target.title + '"';
+    });
+    step('staffrow', ['type'], 'Doc: type a row into "Added by staff" in that week', function () {
+      var week = weekTabsOf_(docsGet_(docId)).filter(function (w) { return w.tab.tabProperties.tabId === target.tabId; })[0];
+      if (!week) throw new Error("the test assignment's week tab wasn't found");
+      var rows = readStaffRows_(week.tab);
+      if (!rows) throw new Error('that week has no "Added by staff" table yet (run an update first)');
+      staffRowIndex = -1;
+      rows.forEach(function (r, i) { if (staffRowIndex < 0 && !countStaffRows_([r])) staffRowIndex = i; });
+      if (staffRowIndex < 0) return { skip: 'every row in that table has something in it; add an empty row to test this' };
+      staffTestRow = ['selfTest staff row', 'Study hall', 'Friday', 'Not started', 'selfTest: kept through updates'];
+      writeStaffRow_(docId, target.tabId, staffRowIndex, staffTestRow);
+      staffWeekTitle = week.title; // only once it's written, so the clean-up knows what to clear
+      return 'row ' + (staffRowIndex + 1) + ' of "' + week.title + '"';
     });
     step('moved', ['type'], 'Doc: run an update with that assignment moved to another week (timed)', function () {
       keepHold();
@@ -1309,8 +1636,12 @@ function runSelfTest_(keepToken) {
       var week = lines.filter(function (l) { return l.indexOf(expected.heading) === 0; })[0];
       if (!week) throw new Error('no "' + expected.heading + '" line (' + (expected.weekend ? 'weekend: coming week' : 'weekday: this week') + ')');
       var summaryRe = expected.weekend
-        ? /( in the coming week|^Nothing is due in the coming week) · (\d+ due this weekend|Nothing due this weekend)\.$/
-        : / this week · \d+ due today or tomorrow\.$|^Nothing is due this week\./;
+        ? /( in the coming week|^Nothing is due in the coming week) · (\d+ due this weekend|Nothing due this weekend)( · \d+ added by staff)?\.$/
+        : / this week · \d+ due today or tomorrow( · \d+ added by staff)?\.$|^Nothing is due this week\./;
+      var myTeacher = selfRow && selfRow.teacher ? teacherByEmail_(selfRow.teacher) : null;
+      var teacherLine = lines.filter(function (l) { return l.indexOf('CLC teacher: ') === 0; })[0];
+      if (myTeacher && teacherLine !== 'CLC teacher: ' + myTeacher.name) throw new Error('no "CLC teacher: ' + myTeacher.name + '" line');
+      if (!myTeacher && teacherLine) throw new Error('"' + teacherLine + '" shown for a student with no CLC teacher');
       if (!lines.some(function (l) { return summaryRe.test(l); })) {
         throw new Error('no this-week summary line');
       }
@@ -1375,9 +1706,50 @@ function runSelfTest_(keepToken) {
       });
       return 'week of ' + rows[0].weekKey;
     });
+    step('staffkept', ['staffrow', 'normal'], 'The "Added by staff" row came through both updates exactly', function () {
+      if (!staffWeekTitle) return { skip: 'no staff row was typed' };
+      var rows = staffRowsOfWeek_(docId, staffWeekTitle);
+      var got = rows && rows[staffRowIndex] ? rows[staffRowIndex].map(function (c) { return c.text; }) : null;
+      if (!got || got.join('|') !== staffTestRow.join('|')) throw new Error('found ' + JSON.stringify(got));
+      return 'kept in "' + staffWeekTitle + '" (that tab was rebuilt by both updates)';
+    });
+    step('teachers', ['hold'], 'CLC teacher folders: assign, switch, a Drive drag-in, the folder lock, Unassigned', function () {
+      var teachers = clcTeachers_();
+      if (!selfRow || !selfRow.docId) return { skip: "needs your student row's Doc" };
+      if (teachers.length < 2) return { skip: 'set CLC_TEACHERS (at least 2 teachers) to test this' };
+      var shared = getDocsFolder_();
+      var folders = teacherFolders_();
+      teachers.forEach(function (t) {
+        if (!folders[t.email]) throw new Error('no folder for ' + t.name);
+        if (!isInsideFolder_(folders[t.email], shared.getId(), 0)) throw new Error(t.name + "'s folder isn't inside the shared folder");
+      });
+      var id = selfRow.id;
+      var d = selfRow.docId;
+      var startTeacher = (getStudent_(id) || selfRow).teacher || '';
+      var inFolder = function (folder) { return docFolderIds_(d).indexOf(folder.getId()) !== -1; };
+      try {
+        setStudentTeacher(id, teachers[0].email);
+        if (!inFolder(folders[teachers[0].email])) throw new Error('assigning ' + teachers[0].name + " didn't move the Doc");
+        setStudentTeacher(id, teachers[1].email);
+        if (!inFolder(folders[teachers[1].email])) throw new Error('switching to ' + teachers[1].name + " didn't move the Doc");
+        assertDocIsInFolder_(d, shared); // the folder lock lets AutoPlanner update it there
+        DriveApp.getFileById(d).moveTo(folders[teachers[0].email]); // as if staff dragged it in Drive
+        var s = getStudent_(id);
+        syncStudentTeacher_(s);
+        if (s.teacher !== teachers[0].email) throw new Error('the Drive drag-in was not adopted');
+        setStudentTeacher(id, '');
+        if (!inFolder(shared)) throw new Error("Unassigned didn't move the Doc back to the shared folder");
+      } finally {
+        setStudentTeacher(id, startTeacher);
+      }
+      return 'your Doc went to ' + teachers[0].name + ', then ' + teachers[1].name + ', was adopted after a drag, ' +
+        'then back to the shared folder; your row is ' + (startTeacher ? teacherByEmail_(startTeacher).name + "'s" : 'Unassigned') + ' again';
+    });
     step('cleanup', ['type'], "Clean-up: the test assignment's Status and Note are back to what they were", function () {
       var n = restoreTestValues_(docId, target.url, original);
-      return '"' + original.status + '"' + (original.note ? ' and its note' : ' and no note') + ' back in ' + n + ' rows';
+      if (staffWeekTitle) clearStaffTestRow_(docId, staffWeekTitle, staffRowIndex);
+      return '"' + original.status + '"' + (original.note ? ' and its note' : ' and no note') + ' back in ' + n + ' rows' +
+        (staffWeekTitle ? '; the "Added by staff" test row cleared' : '');
     });
     step('trashed', ['folder'], 'A Doc in the trash is never written to (so the student gets a fresh Doc)', function () {
       // A throwaway Doc in your My Drive, trashed at once; Google empties the trash after 30 days.
