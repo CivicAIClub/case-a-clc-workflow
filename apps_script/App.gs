@@ -1001,14 +1001,14 @@ function startRun_(reason, startedBy) {
 
 /**
  * How long an automatic batch keeps starting students: 2 minutes with the default 6-minute limit;
- * with a longer measured limit, two thirds of it in whole minutes (20 minutes at most), so an
- * execution ends around 70% of the limit, never close to it. The last student must still fit
- * (nextStudentFits_).
+ * with a longer measured limit, 60% of it in whole minutes (18 minutes at most). With the last
+ * student's update, an execution ends around two thirds of the limit (the year simulation: 64%),
+ * never close to it. The last student must still fit (nextStudentFits_).
  */
 function triggerBatchBudgetMs_() {
   var limit = runtimeLimitMs_();
   if (limit <= DEFAULT_RUNTIME_LIMIT_SECONDS * 1000) return APP_BATCH_BUDGET_MS;
-  return Math.max(APP_BATCH_BUDGET_MS, Math.min(Math.floor(limit * 2 / 3 / 60000) * 60000, 20 * 60 * 1000));
+  return Math.max(APP_BATCH_BUDGET_MS, Math.min(Math.floor(limit * 0.6 / 60000) * 60000, 18 * 60 * 1000));
 }
 
 /**
