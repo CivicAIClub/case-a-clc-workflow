@@ -154,6 +154,25 @@ function sleepDocsChunkGap_() {
   if (updateStats_) updateStats_.pauseMs += DOCS_CHUNK_GAP_MS;
 }
 
+// Google allows 60 Docs writes a minute per account. Now that reads are fast, back-to-back updates
+// in a run could get close, so each execution keeps to 40 a minute: at most a short wait, never a
+// refused write.
+var DOCS_WRITES_PER_MINUTE = 40;
+var docsWriteTimes_ = [];
+
+function paceDocsWrites_() {
+  var now = Date.now();
+  docsWriteTimes_ = docsWriteTimes_.filter(function (t) { return now - t < 60000; });
+  if (docsWriteTimes_.length >= DOCS_WRITES_PER_MINUTE) {
+    var wait = 60000 - (now - docsWriteTimes_[0]) + 50;
+    Utilities.sleep(wait);
+    if (updateStats_) updateStats_.pauseMs += wait;
+    now = Date.now();
+    docsWriteTimes_ = docsWriteTimes_.filter(function (t) { return now - t < 60000; });
+  }
+  docsWriteTimes_.push(now);
+}
+
 // ---- Time: every execution's start, Apps Script's limit, and timing for selfTest -------------------
 // Global code runs at the start of every execution, so this is when the current one began.
 var EXECUTION_STARTED_AT_ = Date.now();
@@ -274,6 +293,7 @@ function docsBatchUpdate_(docId, requests) {
   var lastErr;
   for (var attempt = 0; attempt < 7; attempt++) {
     try {
+      paceDocsWrites_();
       var t0 = Date.now();
       var reply = Docs.Documents.batchUpdate({ requests: requests }, docId);
       if (updateStats_) {

@@ -523,6 +523,23 @@ test('the home tab changed after the last read: Docs refuses the stale edit, so 
   assert.throws(() => t.ctx.rebuildHomeTab_('DOC1', 't.0', scheduleAB(false), ['Biology'], {}, new Date(), {}, real.get('DOC1', { includeTabsContent: true })), /Quota exceeded/);
 });
 
+test('Docs writes are paced to 40 a minute per execution (Google allows 60), waiting only as long as needed', () => {
+  const t = setup();
+  let now = 1000000;
+  t.ctx.Date = class extends Date { static now() { return now; } };
+  const sleeps = [];
+  t.ctx.Utilities = Object.assign({}, t.ctx.Utilities, { sleep: (ms) => { sleeps.push(ms); now += ms; } });
+  t.ctx.Docs = { Documents: { batchUpdate: () => ({ replies: [] }) } };
+  t.ctx.docsWriteTimes_ = [];
+  for (let i = 0; i < 40; i++) { t.ctx.docsBatchUpdate_('DOC', [{ deleteTab: { tabId: 't' } }]); now += 500; }
+  assert.deepStrictEqual(sleeps, [], '40 writes in 20 s: no wait');
+  t.ctx.docsBatchUpdate_('DOC', [{ deleteTab: { tabId: 't' } }]);
+  assert.deepStrictEqual(sleeps, [40050], 'the 41st waits until the first is a minute old');
+  now += 30000;
+  t.ctx.docsBatchUpdate_('DOC', [{ deleteTab: { tabId: 't' } }]);
+  assert.strictEqual(sleeps.length, 1, 'then on at the normal pace');
+});
+
 test('the shared folder deleted, unshared or in the trash: a plain message, and nothing is written', () => {
   const gone = setup({ DOCS_FOLDER_ID: 'BAD' }, { badFolder: true });
   assert.throws(() => gone.ctx.upsertPlannerDocument_(base), (e) =>
