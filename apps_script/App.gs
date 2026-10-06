@@ -1263,7 +1263,7 @@ function finishTimeLimitProbe_() {
  */
 function selfTestEveryday() {
   requireOwner_();
-  Logger.log("NOTE selfTestEveryday edits your planner Doc for about 2 minutes. Don't open or edit that Doc " +
+  Logger.log("NOTE selfTestEveryday edits your planner Doc for about 4 minutes. Don't open or edit that Doc " +
     'until it finishes: an edit there can change the result.');
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
   var row = null;
@@ -1379,7 +1379,7 @@ function selfTestKeepToken() {
 
 function runSelfTest_(keepToken) {
   requireOwner_();
-  Logger.log("NOTE selfTest edits your planner Doc for about 4 minutes. Don't open or edit that Doc " +
+  Logger.log("NOTE selfTest edits your planner Doc for about 6 minutes. Don't open or edit that Doc " +
     'until it finishes: an edit there can change the results.');
   var results = [];
   function check(name, fn) {
@@ -1489,8 +1489,18 @@ function runSelfTest_(keepToken) {
         docId = selfStudent.docId;
         assertDocIsInFolder_(docId, getDocsFolder_());
         doc = docsGet_(docId, { includeTabsContent: true });
-        return (row && row.docId ? "your student row's Doc" : 'your Doc in the folder') +
+        var which = (row && row.docId ? "your student row's Doc" : 'your Doc in the folder') +
           ': https://docs.google.com/document/d/' + docId + '/edit';
+        // A Doc last written by an older AutoPlanner has week tabs without "Added by staff". Update
+        // it first, so the checks below find the layout they test (and the week tabs' IDs they use).
+        var older = currentWeeks().filter(function (w) { return !readStaffRows_(w.tab); }).length;
+        if (!older) return which;
+        keepHold();
+        var t1 = Date.now();
+        writeDocWithRecovery_(selfStudent, schedule, { noDeadline: true });
+        doc = docsGet_(docId, { includeTabsContent: true });
+        return which + ' (' + older + ' week tab' + (older === 1 ? '' : 's') + ' had no "Added by staff" table yet, ' +
+          'so it was updated first, in ' + Math.round((Date.now() - t1) / 1000) + ' s)';
       }
       keepHold();
       var t0 = Date.now();

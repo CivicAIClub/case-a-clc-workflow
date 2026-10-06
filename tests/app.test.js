@@ -601,7 +601,7 @@ test("selfTest uses your student row's Doc when you're on the list (no second co
   t.ctx.selfTestKeepToken();
   assert.deepStrictEqual(calls[0], { id: student.id, docId: 'MY-DOC' });
   assert.match(t.sb.logs.join('\n'), /PASS Doc: create or update yours in the shared folder: your student row's Doc: https:\/\/docs\.google\.com\/document\/d\/MY-DOC\/edit/);
-  assert.match(t.sb.logs[0], /^NOTE selfTest edits your planner Doc for about 4 minutes\. Don't open or edit that Doc until it finishes/);
+  assert.match(t.sb.logs[0], /^NOTE selfTest edits your planner Doc for about 6 minutes\. Don't open or edit that Doc until it finishes/);
   assert.match(t.sb.logs.join('\n'), /PASS Not authorized page: the CLC-staff message, and no data or actions/);
 });
 
@@ -700,7 +700,7 @@ test('selfTestEveryday (real code, fake Docs API): the By Class edit survives a 
   const { sb, ctx, docs, X, svc, student } = liveSetup();
   ctx.selfTestEveryday();
   const log = sb.logs.join('\n');
-  assert.match(sb.logs[0], /^NOTE selfTestEveryday edits your planner Doc for about 2 minutes/);
+  assert.match(sb.logs[0], /^NOTE selfTestEveryday edits your planner Doc for about 4 minutes/);
   assert.match(log, /PASS A staff edit in By Class survives a plain update: "Complete" and a note on "X", kept in By Class and By Day/);
   assert.match(log, /PASS Clean-up/);
   assert.match(log, /selfTestEveryday finished in \d+ s \(TEST_CANVAS_TOKEN kept\)/);
@@ -726,6 +726,35 @@ test('selfTest (real code, fake Docs API): two runs in a row pass the type, move
     const staffTab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === 'Week of Jan 5 – Jan 11, 2099');
     assert.deepStrictEqual(toPlain(ctx.readStaffRows_(staffTab)).map((r) => r.map((c) => c.text).join('')), ['', ''], 'staff test row cleared');
   }
+});
+
+test('selfTest on a Doc written by an older AutoPlanner (no "Added by staff" yet): it updates the Doc first, then the staff checks pass', () => {
+  const { sb, ctx, docs } = liveSetup();
+  // As before Phase 2: each week tab ends after By Day.
+  const isHeading = (el) => el.paragraph && (el.paragraph.elements[0] || {}).textRun && el.paragraph.elements[0].textRun.content === 'Added by staff\n';
+  docs.service.Documents.get().tabs[0].childTabs.forEach((copy) => {
+    const tab = docs.find(copy.tabProperties.tabId);
+    const body = tab.documentTab.body;
+    body.content = body.content.slice(0, body.content.findIndex(isHeading) - 1);
+    assert.strictEqual(ctx.readStaffRows_(tab), null, 'no staff table');
+  });
+  const staffChecks = (log) => {
+    for (const name of ['Doc: type a test Status and Note', 'Doc: type a row into "Added by staff" in that week',
+      'Status and Note followed the assignment to its new week', 'Status and Note came back with it, in exactly one week tab',
+      'The "Added by staff" row came through both updates exactly', 'Clean-up']) {
+      assert.match(log, new RegExp('PASS ' + name), name + '\n' + log);
+    }
+  };
+  ctx.selfTestKeepToken();
+  let log = sb.logs.join('\n');
+  assert.match(log, /PASS Doc: create or update yours in the shared folder: your student row's Doc: \S+ \(2 week tabs had no "Added by staff" table yet, so it was updated first, in \d+ s\)/);
+  staffChecks(log);
+  // The next run finds the new layout and skips the extra update.
+  sb.logs.length = 0;
+  ctx.selfTestKeepToken();
+  log = sb.logs.join('\n');
+  assert.doesNotMatch(log, /updated first/);
+  staffChecks(log);
 });
 
 test('selfTest teacher-folder check (real code): assign, switch, drag-in, folder lock, Unassigned, then your row exactly as before', () => {
