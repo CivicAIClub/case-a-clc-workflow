@@ -121,6 +121,7 @@ The message next to it says what happened. Most fix themselves:
 | "Google Drive couldn't find this student's Doc just now" | Nothing. If the Doc is really gone, the next scheduled update makes a new one and says so on the row. |
 | "AutoPlanner only updates Docs in the … folder" | Someone moved the Doc. Move it back into **AutoPlanner – CLC Student Planners** (or its CLC teacher's folder there), then click **Update**. |
 | "That CLC teacher's folder isn't available" or "That CLC teacher is no longer on the list" | Reload the page and try again. If it keeps happening, contact us. |
+| "This student's Doc has … tabs, and Google allows 100" | Start a new Doc for that student, as in step 1 of "Summer, and a new school year" below (rename the Doc, then **Remove** and add the student again). |
 | "Updated 2 of 4 weeks: Google Docs was slow…" | Nothing. The other weeks (with their Status and Notes) are updated at the next update. |
 | "Was stopped partway by Apps Script's time limit" | Nothing; it's tried again at the next update. Contact us if it keeps happening. |
 | "Not tried: Canvas wasn't answering…" (in **Last update**) | Nothing. Canvas was down, so AutoPlanner stopped asking. The next update tries everyone again, and their Docs keep the last update until then. |
