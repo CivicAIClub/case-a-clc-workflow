@@ -1,9 +1,13 @@
-# Case A — AutoPlanner (CLC Workflow Automation)
+# Case A: AutoPlanner (CLC Workflow Automation)
+
+## What this is
+
+The Supported Study Hall staff at Pomfret's Center for Learning and Collaboration (CLC) were spending hours each week logging into individual students' Canvas accounts and copying assignments by hand into to-do lists in Google Docs. AutoPlanner does that for them: staff add each student once, and it keeps one Google Doc per student with that week's Canvas assignments laid out by class and by day, updated automatically at 7 pm and midnight. Status: in use by the CLC since October 5, 2026.
 
 | | |
 |---|---|
 | **Client** | Supported Study Hall staff at the Center for Learning and Collaboration (CLC), Pomfret School |
-| **Developers** | Luke Ryan, Jack Weinberg |
+| **Developers** | Cayden Auyang, Luke Ryan, Jack Weinberg |
 | **Club lead** | Cayden Auyang |
 | **Status** | 🟢 Handed to the CLC: an Apps Script web app on the Pomfret Google domain, with automatic updates at 7 pm and midnight |
 | **Web app** | https://script.google.com/a/macros/pomfret.org/s/AKfycby1FSQahq5fzxF9XHWZ5drKXFrfyF9e-y1o8cfwnGYY_uXVYKIZ6dFKk3muEGEKG3HA/exec (Pomfret sign-in, CLC staff only) |
@@ -178,3 +182,9 @@ The student-facing version is [`docs/handoff/student-token-guide.md`](docs/hando
 - This repository was split out of the club monorepo (`CivicAIClub/Civic-AI-Github-Repository`, `projects/case-a-clc-workflow/`) on 2026-09-18 with full history preserved.
 - Until October 2026, AutoPlanner was a Python/FastAPI backend plus a static page on GitHub Pages. It never got a hosted backend.
 - In October 2026 it moved entirely into Apps Script. The Python code is in the git history before that change.
+
+## Contributors
+
+- **Cayden Auyang:** developer and club lead; wrote most of the code
+- **Luke Ryan:** developer
+- **Jack Weinberg:** developer
