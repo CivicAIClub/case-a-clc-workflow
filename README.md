@@ -7,7 +7,7 @@ The Supported Study Hall staff at Pomfret's Center for Learning and Collaboratio
 | | |
 |---|---|
 | **Client** | Supported Study Hall staff at the Center for Learning and Collaboration (CLC), Pomfret School |
-| **Developers** | Cayden Auyang, Luke Ryan, Jack Weinberg |
+| **Developers** | Luke Ryan, Jack Weinberg |
 | **Club lead** | Cayden Auyang |
 | **Status** | 🟢 Handed to the CLC: an Apps Script web app on the Pomfret Google domain, with automatic updates at 7 pm and midnight |
 | **Web app** | https://script.google.com/a/macros/pomfret.org/s/AKfycby1FSQahq5fzxF9XHWZ5drKXFrfyF9e-y1o8cfwnGYY_uXVYKIZ6dFKk3muEGEKG3HA/exec (Pomfret sign-in, CLC staff only) |
@@ -185,6 +185,8 @@ The student-facing version is [`docs/handoff/student-token-guide.md`](docs/hando
 
 ## Contributors
 
-- **Cayden Auyang:** developer and club lead; wrote most of the code
 - **Luke Ryan:** developer
 - **Jack Weinberg:** developer
+- **Cayden Auyang:** club lead; final review and edits
+
+The team built the original planner and its structure. Cayden did the final review and edits and committed the code, which is why most commits are under his name.
