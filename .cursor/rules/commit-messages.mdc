@@ -1,0 +1,7 @@
+---
+description: "Commit and pull request message rules"
+alwaysApply: true
+---
+# Commit and pull request messages
+- Never add Co-authored-by, Generated with, Made-with, Claude-Session or any other AI attribution line to a commit message or pull request description.
+- When squash merging, delete any such lines GitHub puts in the merge message.
