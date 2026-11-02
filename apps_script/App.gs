@@ -1794,20 +1794,47 @@ function runSelfTest_(keepToken) {
         'deleted for good (not just trashed) would show "Google Drive didn\'t answer" on its row. Trashed Docs ' +
         'are fine (check above). Send this line to the club.' };
     });
-    step('reads', ['doc'], "Doc reads skip Past weeks' content, so updates stay fast all year", function () {
-      var short = docsGet_(docId);
-      if (docsGetFieldsRejected_) {
-        throw new Error('Google refused the shorter read, so AutoPlanner reads everything. Updates still work but get slower as Past weeks grows.');
+    step('reads', ['doc'], "Doc reads are slim (no styles, no Past weeks' content) and give the same answers as a full read", function () {
+      // A full read and a slim one, back to back, twice: timed, and compared on every current week.
+      var ms = { full: 0, slim: 0 };
+      var full;
+      var slim;
+      for (var round = 0; round < 2; round++) {
+        var t1 = Date.now();
+        full = docsGet_(docId, { includeTabsContent: true });
+        ms.full += Date.now() - t1;
+        t1 = Date.now();
+        slim = docsGet_(docId);
+        ms.slim += Date.now() - t1;
       }
-      var parent = findTabJsonById_(short, findRootTabIdByTitle_(short, PARENT_TAB_TITLE));
+      if (docsGetFieldsRejected_) {
+        throw new Error('Google refused the slim read, so AutoPlanner reads everything. Updates still work, but more slowly. Send this line to the club.');
+      }
+      var parent = findTabJsonById_(slim, findRootTabIdByTitle_(slim, PARENT_TAB_TITLE));
       var weeks = (parent.childTabs || []).filter(function (t) { return t.tabProperties.title !== PAST_WEEKS_TITLE; });
       if (weeks.some(function (t) { return !t.documentTab; })) throw new Error('a current week came back without its content');
       var past = (parent.childTabs || []).filter(function (t) { return t.tabProperties.title === PAST_WEEKS_TITLE; })[0];
       var kids = (past && past.childTabs) || [];
       if (kids.some(function (t) { return t.documentTab; })) throw new Error('past weeks came back with their content');
+      var answers = {
+        'Status and Notes': readExistingDataFromTab_,
+        '"Added by staff" rows': readStaffRows_,
+        'page width': tabContentWidth_,
+        'Past weeks gray cells': pastPriorityGrayRequests_,
+      };
+      weeks.forEach(function (w) {
+        var whole = findTabJsonById_(full, w.tabProperties.tabId);
+        Object.keys(answers).forEach(function (what) {
+          if (JSON.stringify(answers[what](w)) !== JSON.stringify(answers[what](whole))) {
+            throw new Error('the slim read gives different ' + what + ' on "' + w.tabProperties.title + '". Send this line to the club.');
+          }
+        });
+      });
       var kb = function (o) { return Math.round(JSON.stringify(o).length / 1024); };
-      return kb(short) + ' KB per read instead of ' + kb(doc) + ' KB; ' + kids.length + ' past week' +
-        (kids.length === 1 ? '' : 's') + ' left out, current weeks complete';
+      var sec = function (x) { return (x / 2000).toFixed(1) + ' s'; };
+      return 'slim ' + kb(slim) + ' KB in ' + sec(ms.slim) + ', full ' + kb(full) + ' KB in ' + sec(ms.full) +
+        ' (each the average of 2); the same Status, Notes, staff rows and widths on ' + weeks.length + ' week tabs; ' +
+        kids.length + ' past week' + (kids.length === 1 ? '' : 's') + ' left out';
     });
 
   if (held) PropertiesService.getScriptProperties().deleteProperty('busy.' + selfRow.id);

@@ -616,7 +616,7 @@ test('selfTest runs every check after a failure (unless it needs the failed one)
   const log = t.sb.logs.join('\n');
   assert.match(log, /FAIL Every class has its own By Class table in every week/);
   assert.match(log, /PASS A Doc deleted for good: Drive's message \(shown as is\): recognized as deleted: "No item with the given ID could be found"/);
-  assert.match(log, /(PASS|FAIL) Doc reads skip Past weeks' content/, 'a check after the failures still ran');
+  assert.match(log, /(PASS|FAIL) Doc reads are slim/, 'a check after the failures still ran');
   assert.match(log, /selfTest: FAILED \(\d+ failed, \d+ passed/);
   assert.doesNotMatch(log, /later checks skipped/);
   // Drive's words not recognized: shown, as a SKIP, not a FAIL.

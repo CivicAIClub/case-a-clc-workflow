@@ -6,6 +6,9 @@ const assert = require('node:assert');
 const { createSandbox, toPlain } = require('./helpers/gas-sandbox');
 const { fakeServices } = require('./helpers/gas-services');
 const { fakeDocs, withRendering, copiesOf, staffTypes, staffWrites, richCell } = require('./helpers/fake-docs');
+const { parseMask, applyFieldMask } = require('./helpers/field-mask');
+const fs = require('node:fs');
+const path = require('node:path');
 
 function setup(props, opts) {
   const svc = fakeServices({ owner: 'owner@pomfret.org', props: props || {} });
@@ -396,7 +399,7 @@ test('past weeks: Priority cells turn gray just before the move; nothing else is
   assert.deepStrictEqual(sent, []);
 });
 
-test("Doc reads leave out Past weeks' content; if Google refuses that, a full read is used instead", () => {
+test("Doc reads ask only for what AutoPlanner uses (no Past weeks' content, no paragraph or cell styles); if Google refuses that, a full read is used", () => {
   const t = setup();
   const asked = [];
   let refuse = false;
@@ -406,7 +409,19 @@ test("Doc reads leave out Past weeks' content; if Google refuses that, a full re
     if (id === 'GONE') throw new Error('Requested entity was not found.');
     return { tabs: [] };
   } } };
-  const mask = 'tabs(tabProperties,documentTab,childTabs(tabProperties,documentTab,childTabs(tabProperties)))';
+  const mask = t.ctx.DOCS_GET_FIELDS;
+  const tree = parseMask(mask);
+  // Tab levels: CLC Planner and other tabs, the week tabs (and Past weeks), the weeks inside Past weeks.
+  assert.deepStrictEqual(Object.keys(tree.tabs), ['tabProperties', 'documentTab', 'childTabs']);
+  assert.deepStrictEqual(Object.keys(tree.tabs.childTabs), ['tabProperties', 'documentTab', 'childTabs']);
+  assert.deepStrictEqual(tree.tabs.childTabs.childTabs, { tabProperties: true }, "past weeks: titles and IDs only");
+  const doc = tree.tabs.documentTab;
+  assert.deepStrictEqual(doc.documentStyle, { pageSize: true, marginLeft: true, marginRight: true }, 'what tabContentWidth_ uses');
+  const el = doc.body.content;
+  const textStyle = el.paragraph.elements.textRun.textStyle;
+  for (const f of t.ctx.STAFF_STYLE_FIELDS.concat(['link', 'foregroundColor', 'backgroundColor'])) assert.strictEqual(textStyle[f], true, f);
+  assert.deepStrictEqual(el.table.tableRows.tableCells.content.paragraph, el.paragraph, 'cells: the same paragraph fields');
+  assert.ok(!/paragraphStyle|tableCellStyle|tableStyle|namedStyles/.test(mask), 'no styles AutoPlanner never reads');
   t.ctx.docsGet_('DOC');
   assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }]);
   t.ctx.docsGet_('DOC', { includeTabsContent: true });
@@ -421,6 +436,91 @@ test("Doc reads leave out Past weeks' content; if Google refuses that, a full re
   t.ctx.docsGet_('DOC');
   assert.deepStrictEqual(asked, [{ includeTabsContent: true, fields: mask }, { includeTabsContent: true }, { includeTabsContent: true }]);
   assert.strictEqual(t.ctx.docsGetFieldsRejected_, true);
+});
+
+test('a slim read of a live Doc gives the same answers as a full read, at a fifth of the size (Status, Notes, links, "Added by staff" formatting, positions, widths)', () => {
+  const t = setup();
+  // A full read of a scratch Doc (made-up data) with a week tab written by the real requests, and
+  // a staff row typed with bold, red italic and a link (checked live 2026-10-06).
+  const full = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'live-week-tab-read.json'), 'utf8'));
+  const slim = applyFieldMask(full, t.ctx.DOCS_GET_FIELDS);
+  const size = (o) => JSON.stringify(o).length;
+  assert.ok(size(slim) < size(full) / 4, 'slim ' + size(slim) + ' vs full ' + size(full));
+  const week = (doc) => doc.tabs.find((x) => /^Week of/.test(x.tabProperties.title));
+  const same = (name, fn) => {
+    const a = JSON.stringify(toPlain(fn(full)));
+    assert.strictEqual(JSON.stringify(toPlain(fn(slim))), a, name);
+    return JSON.parse(a);
+  };
+  const staff = same('Added by staff rows', (d) => t.ctx.readStaffRows_(week(d)));
+  assert.deepStrictEqual(staff[0].map((c) => c.text), ['Vocab quiz (announced in class)', 'Spanish', 'Friday', 'Not started', 'Bring flashcards']);
+  const runs = JSON.stringify(staff[0]);
+  for (const bit of ['"bold":true', '"italic":true', '"red":0.8', 'https://www.example.org/flashcards']) assert.ok(runs.includes(bit), bit + ' kept: ' + runs);
+  const saved = same('Status and Notes', (d) => t.ctx.readExistingDataFromTab_(week(d)));
+  assert.deepStrictEqual(saved.status, { 'https://pomfret.instructure.com/courses/1/assignments/2': 'In progress' });
+  assert.deepStrictEqual(saved.notes, { 'https://pomfret.instructure.com/courses/1/assignments/2': 'Ask about the lab report' });
+  assert.strictEqual(same('page width', (d) => t.ctx.tabContentWidth_(week(d))), 468);
+  same('rebuild needed', (d) => t.ctx.tabBodyHasHeavyContent_(week(d)));
+  same('Past weeks gray requests', (d) => t.ctx.pastPriorityGrayRequests_(week(d)));
+  same('home tab clear', (d) => t.ctx.homeClearRequests_(week(d), week(d).tabProperties.tabId));
+  same('nothing changed', (d) => t.ctx.changedSince_(week(d), week(d)));
+  same('staff table position', (d) => { const tb = t.ctx.findStaffTable_(week(d)); return [tb.tableRows.length, tb.tableRows[1].tableCells.map((c) => c.content[0].startIndex)]; });
+});
+
+test('an update reads the Doc N+1 times for N weeks (each week reuses the last one\'s final read), and the home tab reuses the last', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false)); // makes both week tabs
+  let reads = 0;
+  const realGet = docs.service.Documents.get;
+  t.ctx.Docs = { Documents: { get: (id, opts) => { reads++; return realGet(id, opts); }, batchUpdate: docs.service.Documents.batchUpdate } };
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.strictEqual(reads, 3, 'one at the start, then each week\'s last look (was 5: a fresh read per week and for the home tab)');
+  assert.deepStrictEqual(docs.titles('t.0'), [WB, WA]);
+  assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+});
+
+test('staff typing in the next week right after the last week\'s final read: still kept (that week\'s own last look catches it)', () => {
+  const { t, docs, X } = liveStateBeforeRun1();
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  const realSwap = t.ctx.swapInRead_;
+  let typed = false;
+  t.ctx.swapInRead_ = (...args) => {
+    const r = realSwap(...args); // week B is done; week A will use this (older) read
+    if (!typed) { typed = true; staffTypes(docs, WA, X, 'day', 'Complete', 'typed between weeks'); }
+    return r;
+  };
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.ok(typed);
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Complete', 'typed between weeks'], ['Complete', 'typed between weeks']]);
+  assert.deepStrictEqual(docs.titleAnywhere(/\(updating\)/), []);
+});
+
+test('the home tab changed after the last read: Docs refuses the stale edit, so it reads again and rebuilds', () => {
+  const { t, docs } = rebuildSetup([]);
+  withRendering(t, docs);
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  let refused = 0;
+  let reads = 0;
+  const real = docs.service.Documents;
+  t.ctx.Docs = { Documents: {
+    get: (id, opts) => { reads++; return real.get(id, opts); },
+    batchUpdate: (body, id) => {
+      const homeClear = body.requests.some((r) => r.deleteParagraphBullets && r.deleteParagraphBullets.range.tabId === 't.0');
+      if (homeClear && !refused) { refused++; throw new Error('Invalid requests[0].deleteContentRange: Index 412 must be less than the end index of the referenced segment, 380.'); }
+      return real.batchUpdate(body, id);
+    },
+  } };
+  t.ctx.upsertPlannerDocument_(scheduleAB(false));
+  assert.strictEqual(refused, 1);
+  assert.strictEqual(reads, 4, 'the 3 reads, plus one fresh read for the home tab');
+  // Google's per-minute limit is not a stale read: it isn't retried this way (the update reports it).
+  t.ctx.Docs = { Documents: { get: real.get, batchUpdate: (body, id) => {
+    if (body.requests.some((r) => r.deleteParagraphBullets)) throw new Error('Quota exceeded for quota metric Write requests');
+    return real.batchUpdate(body, id);
+  } } };
+  t.ctx.sleepDocsChunkGap_ = () => {};
+  assert.throws(() => t.ctx.rebuildHomeTab_('DOC1', 't.0', scheduleAB(false), ['Biology'], {}, new Date(), {}, real.get('DOC1', { includeTabsContent: true })), /Quota exceeded/);
 });
 
 test('the shared folder deleted, unshared or in the trash: a plain message, and nothing is written', () => {
