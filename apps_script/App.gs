@@ -40,7 +40,14 @@ var APP_NOTICE_DAYS = 7; // how long a one-off message (e.g. "made a new Doc") s
 // A run summary is one Script Property (9 KB at most), so it keeps this many problems in full.
 var APP_MAX_FAILURES_KEPT = 20;
 var APP_STALE_AFTER_MS = 26 * 3600 * 1000; // no finished update for this long means something is wrong
-var APP_TOKEN_WARN_DAYS = 14; // the page warns this long before a student's Canvas token expires
+var APP_CANVAS_DOWN_STOP = 5; // a run stops after this many students in a row find Canvas down
+var APP_TABS_WARN = 80; // the weekly email warns when a Doc has this many tabs (Google allows 100)
+var APP_HEALTH_HOUR = 7; // the weekly health check: Mondays at about 7 AM, New York time
+var APP_HEALTH_FAILING_MS = 20 * 3600 * 1000; // a student failing this long (two runs) goes in the email
+var APP_PROPS_LIMIT_BYTES = 500 * 1024; // Google's limit on all Script Properties together
+// The page warns this long before a student's Canvas token expires: three weeks, so tokens that run
+// out during a two-week break (Oct 4 tokens expire Jan 2) are flagged while students are still here.
+var APP_TOKEN_WARN_DAYS = 21;
 // Drive said "Invalid argument" about a student's Doc: it's treated as gone only if an update at least
 // this much later says the same (7 pm and midnight are 5 hours apart).
 var APP_DOC_UNSURE_CONFIRM_MS = 4 * 3600 * 1000;
@@ -132,6 +139,7 @@ function getAppState() {
     run: publicRun_(readJson_('run.current')),
     lastRun: readJson_('run.last'),
     automaticUpdatesOn: dailyTriggerCount_() === APP_DAILY_HOURS.length,
+    pausedSince: pausedSince_(),
     updatesStaleSince: updatesStaleSince_(),
     tokensExpiring: tokensExpiringSoon_(),
     contact: APP_CONTACT,
@@ -145,7 +153,7 @@ function getAppState() {
  */
 function updatesStaleSince_() {
   var last = readJson_('run.last');
-  if (!last || !last.finishedAt || activeRun_()) return null;
+  if (!last || !last.finishedAt || activeRun_() || pausedSince_()) return null;
   return Date.now() - new Date(last.finishedAt).getTime() > APP_STALE_AFTER_MS ? last.finishedAt : null;
 }
 
@@ -572,6 +580,8 @@ function teacherFolders_() {
           }
         }
         if (!f) f = shared.createFolder(t.name);
+        // The old folder was trashed or moved out of the shared folder: its Docs come along.
+        if (stored[t.email] && stored[t.email] !== f.getId()) rescueTeacherFolder_(stored[t.email], f);
         stored[t.email] = f.getId();
         map[t.email] = f;
       });
@@ -579,6 +589,39 @@ function teacherFolders_() {
     });
   }
   return (teacherFolderCache_ = map);
+}
+
+/**
+ * Moves every file from a teacher's old folder (trashed, or moved out of the shared folder) into
+ * their new one, out of the trash, so their students keep the same Docs, Status and Notes. A
+ * folder deleted for good can't be helped: those Docs are gone, and new ones are made.
+ */
+function rescueTeacherFolder_(oldId, dest) {
+  var old;
+  try {
+    old = DriveApp.getFolderById(oldId);
+  } catch (e) {
+    return 0;
+  }
+  var moved = 0;
+  var files = old.getFiles();
+  while (files.hasNext()) {
+    var file = files.next();
+    try {
+      try {
+        file.moveTo(dest);
+      } catch (e) {
+        file.setTrashed(false); // Drive may not move a file that's in the trash
+        file.moveTo(dest);
+      }
+      if (file.isTrashed()) file.setTrashed(false);
+      moved++;
+    } catch (err) {
+      console.warn('Could not move a file out of an old teacher folder: ' + err);
+    }
+  }
+  if (moved) console.log('Moved ' + moved + ' Doc(s) from a trashed or moved teacher folder into "' + dest.getName() + '".');
+  return moved;
 }
 
 /** Who a Drive folder belongs to: a teacher's email, '' for the shared folder itself, else null. */
@@ -757,7 +800,7 @@ function updateOneStudent_(id) {
   var student = getStudent_(id);
   if (!student) return { ok: false, skipped: true, message: 'That student was removed.' };
   if (!claimStudent_(id)) {
-    return { ok: false, skipped: true, message: 'This student is already being updated. Try again in a minute.' };
+    return { ok: false, skipped: true, busy: true, name: student.name, message: 'This student is already being updated. Try again in a minute.' };
   }
   var token = getToken_(id);
   var result;
@@ -798,10 +841,22 @@ function updateOneStudent_(id) {
     } catch (e) {
       console.warn('Teacher folder not checked: ' + e);
     }
+    var teacherUsed = student.teacher || '';
     var docId = writeDocWithRecovery_(student, schedule, docInfo);
     student = getStudent_(id) || student;
+    // Staff picked another CLC teacher while this update was writing (a new Doc goes into the
+    // folder of the teacher it started with): put the Doc where the row now says.
+    if ((student.teacher || '') !== teacherUsed && (!student.teacher || teacherByEmail_(student.teacher))) {
+      try {
+        moveDocToTeacher_(docId, student.teacher || '');
+      } catch (e) {
+        console.warn('Doc not moved to the new CLC teacher: ' + e);
+      }
+    }
     applyTokenInfo(student);
     delete student.docUnsureSince;
+    delete student.failingSince;
+    if (docInfo.tabs) student.docTabs = docInfo.tabs; // the weekly email warns well before Google's 100
     student.name = schedule.student_full_name || student.name;
     student.docId = docId;
     if (docInfo.replaced) student.notice = { at: new Date().toISOString(), message: docInfo.replaced };
@@ -826,7 +881,9 @@ function updateOneStudent_(id) {
         'new token, then click Edit on their row, paste it and click Save.';
     }
     student.last = { at: new Date().toISOString(), ok: false, message: message };
+    student.failingSince = student.failingSince || student.last.at; // for the weekly health check
     result = { ok: false, name: student.name, message: student.last.message };
+    if (err && (err.canvasKind === 'unavailable' || err.canvasKind === 'network')) result.canvasDown = true;
   } finally {
     PropertiesService.getScriptProperties().deleteProperty('busy.' + id);
   }
@@ -855,6 +912,7 @@ function writeDocWithRecovery_(student, schedule, info) {
     if (info) {
       info.weeksDone = res.weeksDone;
       info.weeksTotal = res.weeksTotal;
+      info.tabs = res.tabs;
     }
     return res.documentId;
   };
@@ -881,6 +939,7 @@ function writeDocWithRecovery_(student, schedule, info) {
       throw new Error("Google Drive didn't answer about this student's Doc. They'll be tried again at the next update.");
     }
     if (other) payload.documentId = other;
+    payload.previousDocId = docId; // its record of Statuses comes along
     var newId = done(upsertPlannerDocument_(payload));
     if (info) {
       info.replaced = payload.documentId
@@ -942,11 +1001,14 @@ function startRun_(reason, startedBy) {
 
 /**
  * How long an automatic batch keeps starting students: 2 minutes with the default 6-minute limit;
- * with a longer measured limit, up to 5 minutes short of it (25 minutes at most). The last student
- * must still fit (nextStudentFits_).
+ * with a longer measured limit, 60% of it in whole minutes (18 minutes at most). With the last
+ * student's update, an execution ends around two thirds of the limit (the year simulation: 64%),
+ * never close to it. The last student must still fit (nextStudentFits_).
  */
 function triggerBatchBudgetMs_() {
-  return Math.max(APP_BATCH_BUDGET_MS, Math.min(runtimeLimitMs_() - 5 * 60 * 1000, 25 * 60 * 1000));
+  var limit = runtimeLimitMs_();
+  if (limit <= DEFAULT_RUNTIME_LIMIT_SECONDS * 1000) return APP_BATCH_BUDGET_MS;
+  return Math.max(APP_BATCH_BUDGET_MS, Math.min(Math.floor(limit * 0.6 / 60000) * 60000, 18 * 60 * 1000));
 }
 
 /**
@@ -957,6 +1019,13 @@ function triggerBatchBudgetMs_() {
 function processRunBatch_(runId, budgetMs) {
   var budget = budgetMs === undefined ? APP_BATCH_BUDGET_MS : budgetMs;
   var batchStart = Date.now();
+  withLock_(function () {
+    var run = readJson_('run.current');
+    if (run && run.id === runId) {
+      run.batchStartedAt = batchStart; // continueRun uses it if this batch is cut off
+      writeJson_('run.current', run);
+    }
+  });
   // The safety trigger fires only after this execution must have ended (the time limit has
   // passed), so it never runs alongside a batch that's still going.
   replaceContinueTrigger_(runtimeLimitMs_() + APP_SAFETY_GRACE_MS);
@@ -979,7 +1048,7 @@ function processRunBatch_(runId, budgetMs) {
       return;
     }
     var result = updateOneStudent_(id);
-    recordResult_(runId, result);
+    recordResult_(runId, result, id);
     if (Date.now() - batchStart > budget) {
       var run = readJson_('run.current');
       if (run && run.id === runId && run.queue.length) {
@@ -1012,18 +1081,36 @@ function takeNextStudent_(runId) {
   });
 }
 
-function recordResult_(runId, result) {
+function recordResult_(runId, result, id) {
   withLock_(function () {
     var run = readJson_('run.current');
     if (!run || run.id !== runId) return;
     run.inProgress = null;
     run.heartbeatAt = Date.now();
+    run.requeued = run.requeued || [];
+    if (result.busy && id && run.requeued.indexOf(id) === -1) {
+      // Someone is updating this student from the page right now: try them again at the end.
+      run.requeued.push(id);
+      run.queue.push(id);
+      writeJson_('run.current', run);
+      return;
+    }
+    if (result.busy) result = { name: result.name, message: 'Was already being updated at the same time; see their row.' };
     if (result.ok) run.updated++;
     else if (result.skipped && result.message === 'That student was removed.') run.total--;
     else if (run.failed.length < APP_MAX_FAILURES_KEPT) {
       run.failed.push({ name: result.name || 'A student', message: String(result.message || '').substring(0, 200) });
     } else {
       run.moreFailed = (run.moreFailed || 0) + 1;
+    }
+    // Canvas down or refusing for several students in a row: stop, rather than keep asking it.
+    run.canvasDownStreak = result.canvasDown ? (run.canvasDownStreak || 0) + 1 : 0;
+    if (run.canvasDownStreak >= APP_CANVAS_DOWN_STOP && run.queue.length) {
+      run.failed.push({
+        name: run.queue.length + ' more student' + (run.queue.length === 1 ? '' : 's'),
+        message: "Not tried: Canvas wasn't answering for " + APP_CANVAS_DOWN_STOP + ' students in a row. The next update tries again.',
+      });
+      run.queue = [];
     }
     writeJson_('run.current', run);
   });
@@ -1073,6 +1160,10 @@ function scheduledRun(e) {
   var uid = requireTrigger_(e);
   var oneOff = (readJson_('trigger.oneoff') || []).indexOf(uid) !== -1;
   if (oneOff) deleteTriggerByUid_(uid);
+  if (!oneOff && pausedSince_()) {
+    Logger.log('Automatic updates are paused (since ' + shortDate_(pausedSince_()) + '), so this one was skipped.');
+    return;
+  }
   startRun_(oneOff ? 'test' : 'scheduled', 'automatic');
 }
 
@@ -1091,8 +1182,26 @@ function continueRun(e) {
       message: "Was stopped partway by Apps Script's time limit. It will be tried again at the next update.",
     });
     PropertiesService.getScriptProperties().deleteProperty('busy.' + run.inProgress);
+    noteEarlyCutOff_(run);
   }
   processRunBatch_(run.id, triggerBatchBudgetMs_());
+}
+
+/**
+ * A batch cut off long before the time limit AutoPlanner measured (before half of it) means the
+ * real limit is now lower: for example Google changed it, or a new owner's account has the usual 6
+ * minutes. Plan for 6 minutes from now on (otherwise every batch is cut off and a run takes hours),
+ * and say so in the weekly email until measureTimeLimit measures it again.
+ */
+function noteEarlyCutOff_(run) {
+  var limit = runtimeLimitMs_();
+  if (limit <= DEFAULT_RUNTIME_LIMIT_SECONDS * 1000 || !run.batchStartedAt || !run.heartbeatAt) return;
+  var survived = run.heartbeatAt - run.batchStartedAt;
+  if (survived >= limit / 2) return;
+  PropertiesService.getScriptProperties().setProperty('RUNTIME_LIMIT_SECONDS', String(DEFAULT_RUNTIME_LIMIT_SECONDS));
+  writeJson_('limit.dropped', { at: new Date().toISOString(), was: Math.round(limit / 1000), survived: Math.round(survived / 1000) });
+  console.warn('A batch was cut off after about ' + Math.round(survived / 60000) + ' min, before the ' + Math.round(limit / 60000) +
+    ' min measured: planning for ' + Math.round(DEFAULT_RUNTIME_LIMIT_SECONDS / 60) + ' min from now on.');
 }
 
 function deleteTriggersFor_(handler) {
@@ -1145,8 +1254,19 @@ function setupTriggers() {
       .inTimezone(APP_TIME_ZONE)
       .create();
   });
+  deleteTriggersFor_('weeklyHealthCheck');
+  var weekly = function (near) {
+    var b = ScriptApp.newTrigger('weeklyHealthCheck').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(APP_HEALTH_HOUR);
+    if (near) b = b.nearMinute(0);
+    return b.inTimezone(APP_TIME_ZONE).create();
+  };
+  try {
+    weekly(true);
+  } catch (e) {
+    weekly(false); // some accounts only take the hour for a weekly trigger
+  }
   PropertiesService.getScriptProperties().deleteProperty('APPS_SCRIPT_SECRET');
-  Logger.log('Daily updates installed: about 7 pm and about midnight (New York time).');
+  Logger.log('Daily updates installed: about 7 pm and about midnight (New York time). Weekly health check: Mondays at about 7 AM.');
   checkSetup();
 }
 
@@ -1162,6 +1282,187 @@ function scheduleTestRun() {
     'Test update scheduled for about ' + Utilities.formatDate(at, APP_TIME_ZONE, 'h:mm a') +
       '. The daily 7 pm and midnight updates are unchanged.'
   );
+}
+
+// =====================================================================================
+// Summer: pause the automatic updates (the triggers stay, so resuming needs no new permissions)
+// =====================================================================================
+
+/**
+ * Since when automatic updates are paused (ISO time), or null. A backup admin with editor access
+ * (who can't run the owner's functions) pauses by adding PAUSED_SINCE by hand, for example
+ * "2027-06-12": a date alone means that day, and anything else that isn't a date still pauses.
+ */
+function pausedSince_() {
+  var v = getScriptProperty_('PAUSED_SINCE');
+  if (!v) return null;
+  var d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? v + 'T12:00:00Z' : v);
+  if (isNaN(d.getTime())) {
+    // Not a date (for example "yes"): paused from now on, and remembered as now.
+    d = new Date();
+    PropertiesService.getScriptProperties().setProperty('PAUSED_SINCE', d.toISOString());
+  }
+  return d.toISOString();
+}
+
+/**
+ * Pauses the 7 pm and midnight updates and the weekly health email, for example over the summer.
+ * The page still works, including "Update all students now". Run resumeAutomaticUpdates to undo.
+ */
+function pauseAutomaticUpdates() {
+  requireOwner_();
+  if (!pausedSince_()) PropertiesService.getScriptProperties().setProperty('PAUSED_SINCE', new Date().toISOString());
+  Logger.log('Automatic updates are paused (since ' + shortDate_(pausedSince_()) + '). The page still works, and ' +
+    '"Update all students now" still updates everyone. Run resumeAutomaticUpdates to turn them back on.');
+}
+
+/** Turns the automatic updates and the weekly health email back on. */
+function resumeAutomaticUpdates() {
+  requireOwner_();
+  PropertiesService.getScriptProperties().deleteProperty('PAUSED_SINCE');
+  if (dailyTriggerCount_() !== APP_DAILY_HOURS.length || !triggerCountFor_('weeklyHealthCheck')) {
+    setupTriggers(); // they were removed meanwhile: put them back (it logs a setup check)
+  } else {
+    Logger.log('Automatic updates are back on: about 7 pm and about midnight. The next one runs tonight.');
+  }
+}
+
+function triggerCountFor_(handler) {
+  return ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === handler; }).length;
+}
+
+// =====================================================================================
+// Weekly health check: an email on Mondays, only when something needs attention
+// =====================================================================================
+
+/** Who gets the health email: HEALTH_EMAILS (commas between), or else AutoPlanner's owner. */
+function healthRecipients_() {
+  var list = String(getScriptProperty_('HEALTH_EMAILS') || '').split(',').map(function (e) {
+    return e.trim();
+  }).filter(function (e) { return /^[^@\s]+@[^@\s]+$/.test(e); });
+  if (!list.length) list = [String(Session.getEffectiveUser().getEmail() || '')].filter(Boolean);
+  return list;
+}
+
+/**
+ * What needs attention, as [{ title, lines, todo }]: the daily updates not set up or not
+ * finishing, students whose updates have failed for over a day, tokens running out in the next
+ * three weeks, and Script Properties close to Google's limit. Empty while updates are paused.
+ */
+function healthReport_() {
+  if (pausedSince_()) return [];
+  var items = [];
+  var now = Date.now();
+  if (dailyTriggerCount_() !== APP_DAILY_HOURS.length) {
+    items.push({
+      title: "The 7 pm and midnight updates aren't set up.",
+      lines: [],
+      todo: 'In the Apps Script editor, open App.gs and run setupTriggers.',
+    });
+  } else if (updatesStaleSince_()) {
+    items.push({
+      title: 'No update for all students has finished since ' + shortDate_(updatesStaleSince_()) + '.',
+      lines: [],
+      todo: "The owner's account may have lost access. See \"Long-term care\" in the quick start.",
+    });
+  }
+  var dropped = readJson_('limit.dropped');
+  if (dropped) {
+    items.push({
+      title: 'Apps Script stopped an update after about ' + Math.max(1, Math.round(dropped.survived / 60)) + ' minutes, sooner than the ' +
+        Math.round(dropped.was / 60) + ' minutes it allowed before, so AutoPlanner now plans for 6.',
+      lines: [],
+      todo: 'In the Apps Script editor, open App.gs, run measureTimeLimit and leave it (up to 31 minutes), then run checkSetup.',
+    });
+  }
+  var students = listStudents_();
+  var failing = students.filter(function (s) {
+    return s.last && !s.last.ok && s.failingSince && now - new Date(s.failingSince).getTime() >= APP_HEALTH_FAILING_MS;
+  });
+  if (failing.length) {
+    items.push({
+      title: failing.length + ' student' + (failing.length === 1 ? "'s Doc hasn't" : "s' Docs haven't") + ' updated for over a day:',
+      lines: failing.map(function (s) { return (s.name || 'Student') + ': ' + s.last.message; }),
+      todo: 'Each line says what to do. The same message is on their row, next to "Needs attention".',
+    });
+  }
+  var full = students.filter(function (s) { return s.docTabs >= APP_TABS_WARN; });
+  if (full.length) {
+    items.push({
+      title: 'Docs getting close to Google\'s limit of ' + DOC_TAB_LIMIT + ' tabs:',
+      lines: full.map(function (s) { return (s.name || 'Student') + ': ' + s.docTabs + ' tabs'; }),
+      todo: 'Start new Docs for them, as in "Summer, and a new school year" in the quick start (each school year adds about 37 tabs).',
+    });
+  }
+  var expiring = tokensExpiringSoon_().filter(function (x) { return !x.expired; });
+  if (expiring.length) {
+    items.push({
+      title: 'Canvas tokens running out in the next 3 weeks:',
+      lines: expiring.map(function (x) { return x.name + ': ' + x.date; }),
+      todo: 'Ask each student for a new token (the student token guide shows how), then click Edit on their row, paste it and click Save.',
+    });
+  }
+  var bytes = scriptPropertiesBytes_();
+  if (bytes > APP_PROPS_LIMIT_BYTES * 0.7) {
+    items.push({
+      title: "AutoPlanner's saved data is " + Math.round(bytes / 1024) + ' KB, close to Google\'s limit of 500 KB.',
+      lines: [],
+      todo: 'Contact the Civic AI Club.',
+    });
+  }
+  return items;
+}
+
+/** Everything in Script Properties, in bytes (keys and values). */
+function scriptPropertiesBytes_() {
+  var all = PropertiesService.getScriptProperties().getProperties();
+  return Object.keys(all).reduce(function (n, k) { return n + k.length + String(all[k]).length; }, 0);
+}
+
+/** The email for a health report (plain text, never a token). */
+function healthEmail_(items) {
+  var n = items.length;
+  var body = ['AutoPlanner weekly check, ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'EEE MMM d') + ': ' +
+    n + (n === 1 ? ' thing needs' : ' things need') + ' attention.', ''];
+  items.forEach(function (item, i) {
+    body.push((i + 1) + '. ' + item.title);
+    item.lines.forEach(function (l) { body.push('   - ' + l); });
+    body.push('   What to do: ' + item.todo, '');
+  });
+  var url = '';
+  try {
+    url = ScriptApp.getService().getUrl();
+  } catch (e) {
+    url = '';
+  }
+  if (url) body.push('Open AutoPlanner: ' + url);
+  body.push('This email comes on Mondays only when something needs attention. To change who gets it, edit ' +
+    'HEALTH_EMAILS in the Apps Script project\'s Script Properties.');
+  return { subject: 'AutoPlanner: ' + n + (n === 1 ? ' thing needs' : ' things need') + ' attention', body: body.join('\n') };
+}
+
+/** Mondays at about 7 AM: emails HEALTH_EMAILS if something needs attention. */
+function weeklyHealthCheck(e) {
+  requireTrigger_(e);
+  sendHealthEmail_();
+}
+
+/** Run from the editor: the same check right now. It emails only if something needs attention. */
+function healthCheckNow() {
+  requireOwner_();
+  var sent = sendHealthEmail_();
+  Logger.log(sent ? 'Sent to ' + sent.to + ':\n\n' + sent.body :
+    pausedSince_() ? 'Automatic updates are paused, so there is no health email.' : 'Nothing needs attention, so no email was sent.');
+}
+
+function sendHealthEmail_() {
+  var items = healthReport_();
+  if (!items.length) return null;
+  var mail = healthEmail_(items);
+  var to = healthRecipients_().join(',');
+  if (!to) return null;
+  MailApp.sendEmail({ to: to, subject: mail.subject, body: mail.body, name: 'AutoPlanner' });
+  return { to: to, body: mail.body };
 }
 
 /** Logs whether everything is set up. Never logs tokens. */
@@ -1186,6 +1487,10 @@ function checkSetup() {
   Logger.log(limitSet >= 60
     ? 'OK   Apps Script time limit: ' + limitSet + ' s per run (measured).'
     : 'NOTE Apps Script time limit: not measured; assuming ' + DEFAULT_RUNTIME_LIMIT_SECONDS + ' s. Run measureTimeLimit once to measure it.');
+  if (readJson_('limit.dropped')) {
+    Logger.log('NOTE An update was cut off long before the measured limit, so AutoPlanner now plans for ' + DEFAULT_RUNTIME_LIMIT_SECONDS +
+      ' s. Run measureTimeLimit, then checkSetup.');
+  }
   var teachers = clcTeachers_();
   if (!teachers.length) {
     Logger.log('     CLC_TEACHERS: (none: no teacher folders; every Doc stays in the shared folder)');
@@ -1208,6 +1513,17 @@ function checkSetup() {
       ? 'OK   Daily updates: about 7 pm and about midnight.'
       : 'FIX  Daily updates: ' + daily + ' found, expected 2. Run setupTriggers.'
   );
+  if (pausedSince_()) {
+    Logger.log('NOTE Automatic updates are paused (since ' + shortDate_(pausedSince_()) + '). Run resumeAutomaticUpdates (or delete ' +
+      'the PAUSED_SINCE Script Property) to turn them back on.');
+  }
+  Logger.log(
+    triggerCountFor_('weeklyHealthCheck')
+      ? 'OK   Weekly health check: Mondays at about 7 AM, emailed only when something needs attention, to ' +
+        (getScriptProperty_('HEALTH_EMAILS') ? 'HEALTH_EMAILS: ' : 'the owner (HEALTH_EMAILS is not set): ') + healthRecipients_().join(', ')
+      : 'FIX  Weekly health check: not set up. Run setupTriggers.'
+  );
+  Logger.log('     Saved data (Script Properties): ' + Math.round(scriptPropertiesBytes_() / 1024) + ' KB of 500 KB');
   Logger.log('     Students on the list: ' + listStudents_().length);
   if (getScriptProperty_('APPS_SCRIPT_SECRET')) {
     Logger.log('FIX  APPS_SCRIPT_SECRET is still set; setupTriggers removes it.');
@@ -1254,6 +1570,7 @@ function finishTimeLimitProbe_() {
   var props = PropertiesService.getScriptProperties();
   props.setProperty('RUNTIME_LIMIT_SECONDS', String(limit));
   props.deleteProperty('probe.timeLimit');
+  props.deleteProperty('limit.dropped');
   return limit;
 }
 
@@ -1450,6 +1767,16 @@ function runSelfTest_(keepToken) {
       if (/<script|google\.script\.run/.test(html)) throw new Error('the page has a script');
       return 'shows "' + want + '"';
     });
+    step('health', [], 'Weekly health check: set up (nothing is sent now)', function () {
+      if (!triggerCountFor_('weeklyHealthCheck')) throw new Error('Its trigger is missing. Run setupTriggers.');
+      var to = healthRecipients_();
+      if (!to.length) throw new Error('Nobody to send it to: set HEALTH_EMAILS.');
+      var items = healthReport_();
+      if (pausedSince_()) return 'automatic updates are paused, so there is no email';
+      return items.length
+        ? 'today it would email ' + to.join(', ') + ' about: ' + items.map(function (i) { return i.title; }).join(' / ')
+        : 'nothing needs attention today, so no email; it goes to ' + to.join(', ');
+    });
     step('canvas', ['token'], 'Canvas: fetch your assignments and classes', function () {
       try {
         schedule = fetchStudentSchedule_(token, canvasBaseUrl_(), APP_WEEKS_AHEAD, undefined, courseExcludeKeywords_());
@@ -1553,6 +1880,21 @@ function runSelfTest_(keepToken) {
         if (r.note !== testNote) throw new Error(r.table + ' Notes is "' + r.note + '"');
       });
       return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
+    });
+    step('kept', ['followed'], 'An assignment removed from Canvas keeps its Status and Note in its week, marked "Not on Canvas" (timed)', function () {
+      keepHold();
+      startUpdateStats_();
+      writeDocWithRecovery_(selfStudent, scheduleWithoutAssignment_(schedule, target.url), { noDeadline: true });
+      var timing = updateStatsText_();
+      updateStats_ = null;
+      var rows = findRowsByUrl_(docId, target.url);
+      if (rows.length !== 2) throw new Error('Expected it in both tables, found ' + rows.length + '.');
+      rows.forEach(function (r) {
+        if (movedTo && r.weekKey !== movedTo) throw new Error('found in the week of ' + r.weekKey + ', expected ' + movedTo);
+        if (r.priority !== KEPT_NOT_ON_CANVAS) throw new Error(r.table + ' Priority says "' + r.priority + '"');
+        if (r.status !== testStatus || r.note !== testNote) throw new Error(r.table + ' lost the Status or Note');
+      });
+      return 'kept in By Class and By Day, with its Status and Note; ' + timing;
     });
     step('normal', ['doc'], 'Doc: run a normal update (the real due date again)', function () {
       keepHold();
@@ -1947,7 +2289,7 @@ function findRowsByUrl_(docId, url) {
       (el.table.tableRows || []).forEach(function (row) {
         var cells = row.tableCells || [];
         if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
-          rows.push({ table: kind, weekKey: key, status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
+          rows.push({ table: kind, weekKey: key, priority: getCellText_(cells[3]), status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
         }
       });
     });
@@ -1978,6 +2320,18 @@ function rowCellsByUrl_(docId, url) {
 function weekKeyOfTab_(docJson, tabId) {
   var w = weekTabsOf_(docJson).filter(function (x) { return x.tab.tabProperties.tabId === tabId; })[0];
   return w ? weekKeyFromTabTitle_(w.title) : null;
+}
+
+/** A copy of the schedule without one assignment, as if it were removed or unpublished in Canvas. */
+function scheduleWithoutAssignment_(schedule, url) {
+  var copy = JSON.parse(JSON.stringify(schedule));
+  Object.keys(copy.weeks).forEach(function (k) {
+    (copy.weeks[k].days || []).forEach(function (d) {
+      d.assignments = (d.assignments || []).filter(function (a) { return a.url !== url; });
+    });
+  });
+  if (copy.elsewhere) delete copy.elsewhere[url];
+  return copy;
 }
 
 /** A copy of the schedule with one assignment moved to the same weekday of another week. */

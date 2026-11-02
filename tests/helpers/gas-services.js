@@ -72,6 +72,8 @@ function fakeServices(options) {
         atHour: (h) => { config.atHour = h; return builder; },
         nearMinute: (m) => { config.nearMinute = m; return builder; },
         everyDays: (n) => { config.everyDays = n; return builder; },
+        everyWeeks: (n) => { config.everyWeeks = n; return builder; },
+        onWeekDay: (d) => { config.weekDay = d; return builder; },
         inTimezone: (tz) => { config.timeZone = tz; return builder; },
         after: (ms) => { config.after = ms; return builder; },
         at: (d) => { config.at = d; return builder; },
@@ -79,7 +81,12 @@ function fakeServices(options) {
       };
       return builder;
     },
+    WeekDay: { MONDAY: 'MONDAY', TUESDAY: 'TUESDAY', WEDNESDAY: 'WEDNESDAY', THURSDAY: 'THURSDAY', FRIDAY: 'FRIDAY', SATURDAY: 'SATURDAY', SUNDAY: 'SUNDAY' },
+    getService: () => ({ getUrl: () => 'https://script.google.com/a/macros/pomfret.org/s/FAKE/exec' }),
   };
+  // Mail AutoPlanner sends (the weekly health check): recorded, never sent.
+  const mail = [];
+  const MailApp = { sendEmail: (msg) => { mail.push(JSON.parse(JSON.stringify(msg))); } };
 
   function output(kind, value) {
     const o = { kind, value, title: '', setTitle: (t) => { o.title = t; return o; }, addMetaTag: () => o, getContent: () => value };
@@ -105,6 +112,7 @@ function fakeServices(options) {
       getName: () => fd.name,
       setName: (n) => { fd.name = n; },
       isTrashed: trashed,
+      setTrashed: (v) => { if (fd.state) fd.state.trashed = !!v; else fd.trashed = !!v; },
       getParents: () => iter(folders[fd.parent] ? [folders[fd.parent]] : [], wrapFolder),
       createFolder: (name) => {
         const id = 'FOLDER-' + (++folderCounter);
@@ -123,12 +131,15 @@ function fakeServices(options) {
     };
   }
   const folder = wrapFolder(folders.FOLDER123);
+  // Like Drive, a file in a trashed folder (at any level) is in the trash too.
+  const inTrashedFolder = (id) => { const fd = folders[id]; return !!fd && (!!(fd.state ? fd.state.trashed : fd.trashed) || inTrashedFolder(fd.parent)); };
   function wrapFile(f) {
     return {
       getId: () => f.id,
       getName: () => f.name,
       getLastUpdated: () => f.updated || new Date(0),
-      isTrashed: () => !!f.trashed,
+      isTrashed: () => !!f.trashed || inTrashedFolder(f.parent),
+      setTrashed: (v) => { f.trashed = !!v; },
       getParents: () => iter(f.parent ? [f.parent] : [], (pid) => (folders[pid] ? wrapFolder(folders[pid]) : { getId: () => pid, getName: () => pid, getParents: () => iter([], (x) => x) })),
       moveTo: (dest) => { f.parent = dest.getId(); },
     };
@@ -152,11 +163,12 @@ function fakeServices(options) {
   };
 
   return {
-    globals: { PropertiesService, LockService, Session, ScriptApp, HtmlService, DriveApp, Utilities, MimeType },
+    globals: { PropertiesService, LockService, Session, ScriptApp, HtmlService, DriveApp, Utilities, MimeType, MailApp },
     props,
     triggers,
     files,
     sleepCalls,
+    mail,
     setActive: (email) => { active = email; },
     addFile: (id, name, parent, extra) => { files[id] = Object.assign({ id, name, parent }, extra || {}); },
     folderState,

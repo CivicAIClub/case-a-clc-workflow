@@ -141,6 +141,26 @@ test('follows Link-header pages, runs rounds in parallel, and builds the schedul
   assert.deepStrictEqual(Object.keys(schedule.weeks), ['2026-10-26']);
 });
 
+test('elsewhere: every assignment Canvas has that is not on the planner, with its local due date or "" for none', () => {
+  const sb = setup({
+    [PROFILE_URL]: ok({ id: 5, name: 'Jordan Lee' }),
+    [COURSES_URL]: ok([course(1, 'Biology')]),
+    [assignmentsUrl(1)]: ok([
+      assignment(11, 1), // Thu Oct 29: on the planner
+      assignment(12, 1, null), // no due date
+      assignment(13, 1, '2026-12-16T04:30:00Z'), // Dec 15, 11:30 PM in New York: after these 2 weeks
+      assignment(14, 1, '2026-10-01T16:00:00Z'), // before this week
+    ]),
+  });
+  const schedule = toPlain(sb.context.fetchStudentSchedule_(TOKEN, BASE, 2, NOW));
+  assert.equal(schedule.total_assignments, 1);
+  assert.deepStrictEqual(schedule.elsewhere, {
+    [`${BASE}/courses/1/assignments/12`]: '',
+    [`${BASE}/courses/1/assignments/13`]: '2026-12-15',
+    [`${BASE}/courses/1/assignments/14`]: '2026-10-01',
+  });
+});
+
 test('assignment pairs keep class order and page order; unnamed class gets "Course <id>"', () => {
   const sb = setup(paginatedRoutes({ id: 1 }));
   const pairs = toPlain(sb.context.fetchCanvasAssignmentPairs_(TOKEN, BASE));

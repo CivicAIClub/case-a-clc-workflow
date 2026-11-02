@@ -36,12 +36,35 @@ function fetchStudentSchedule_(token, baseUrl, weeksAhead, now, excludeKeywords)
     var x = a.toLowerCase(), y = b.toLowerCase();
     return x < y ? -1 : x > y ? 1 : 0;
   });
+  schedule.elsewhere = canvasElsewhere_(pairs, schedule);
   schedule.student_full_name = canvasDisplayName_(data.profile);
   // The Canvas ID lets the web page find the same student's Doc again next time.
   if (data.profile.id !== null && data.profile.id !== undefined) {
     schedule.canvas_user_id = data.profile.id;
   }
   return schedule;
+}
+
+// Every assignment Canvas listed that isn't on this planner, by its link: its due date
+// ('yyyy-MM-dd' in the school's time zone), or '' if it has none. The Doc uses it to say why a row
+// with a Status or Note left its week ("Now due Nov 30", "No due date"); an assignment that isn't
+// listed at all was removed or unpublished.
+function canvasElsewhere_(pairs, schedule) {
+  var placed = {};
+  Object.keys(schedule.weeks || {}).forEach(function (k) {
+    (schedule.weeks[k].days || []).forEach(function (d) {
+      (d.assignments || []).forEach(function (a) { if (a.url) placed[a.url] = true; });
+    });
+  });
+  var out = {};
+  (pairs || []).forEach(function (pair) {
+    var raw = pair[0];
+    var url = raw && raw.html_url;
+    if (!url || placed[url]) return;
+    var due = raw.due_at ? new Date(raw.due_at) : null;
+    out[url] = due && !isNaN(due.getTime()) ? Utilities.formatDate(due, SCHEDULE_TIME_ZONE, 'yyyy-MM-dd') : '';
+  });
+  return out;
 }
 
 // Ask Canvas only "who owns this token?" (one request). Used when staff add a student.

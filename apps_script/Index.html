@@ -845,7 +845,12 @@
       if (state.teachers.length) newTeacherFromFilter();
       document.getElementById('userChip').innerHTML = 'Signed in as <span class="who-v">' + esc(s.user) + '</span>';
       var note = document.getElementById('autoNote');
-      if (s.automaticUpdatesOn && s.updatesStaleSince) {
+      if (s.pausedSince) {
+        // Paused on purpose (for example over the summer): say so, not that something is wrong.
+        note.textContent = 'Automatic updates are paused (since ' + when(s.pausedSince) + '). ' +
+          'Update all students now still updates everyone.';
+        note.classList.add('off');
+      } else if (s.automaticUpdatesOn && s.updatesStaleSince) {
         // The triggers exist but no update has finished for over a day: one is failing.
         note.textContent = 'Automatic updates haven’t finished since ' + when(s.updatesStaleSince) +
           '. Contact ' + s.contact + '.';
