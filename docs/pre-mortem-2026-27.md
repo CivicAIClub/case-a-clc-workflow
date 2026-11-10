@@ -2,6 +2,8 @@
 
 Written in October 2026, right after the handoff, by imagining the year has gone badly and asking why. For club developers and whoever looks after AutoPlanner next. Each scenario says what AutoPlanner does now, and what changed because of it.
 
+Since November 2026 week tabs look different: Status is a dropdown, there is no Priority column, and staff's own to-dos sit under each day in By Day instead of in an "Added by staff" table. The scenarios below still hold. Where they say Priority, read the gray line under the assignment's title; where they say "Added by staff", read staff's to-dos and the Weekend plan.
+
 ## 1. A simulated year
 
 Every update of a full school year was run, with the real code, for **30 made-up students with 5 classes each**: Sept 8 to June 11, with winter and spring break, the semester change on Jan 25, both DST changes and the Dec 28 – Jan 3 week. Teachers move due dates, unpublish, extend and add late work; staff type Status, Notes and "Added by staff" rows. Both runs, every day, as in production: 16,620 updates. The tool is [`tools/year-simulation`](../tools/year-simulation/), and its Doc size model matched a live Google read exactly.

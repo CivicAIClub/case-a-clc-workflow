@@ -34,11 +34,12 @@ Every Doc is in the Google Drive folder **AutoPlanner – CLC Student Planners**
 - Inside the folder, each CLC teacher has their own folder, named with their full name. A student's Doc is in their CLC teacher's folder, or loose in the main folder if they don't have one (**Unassigned**).
 - The **CLC Planner** tab at the top is a one-page summary: how many assignments each class has this week, when each is next due, and a link to this week's tab. On **Saturday and Sunday** it shows the **coming week** instead, and how many assignments are due that weekend.
 - Open the **Document tabs** sidebar on the left to see one tab per week under **CLC Planner**.
-- Work due earlier in the week stays in its week, marked **Past due** in gray, until the week ends.
-- When a week ends, its tab moves into **Past weeks** (newest first), with the Status and Notes typed during it. Its Priority column turns gray, since those colors no longer apply. After that, AutoPlanner never changes it again.
-- Each week tab has a **By Class** section with a table for **every class** the student takes. A class with nothing due that week says "No assignments due this week."
-- Under that, **By Day** lists the same assignments by day.
-- At the bottom, **Added by staff** is a table for you (see [Status and Notes](#6-status-and-notes)).
+- Each week tab has three parts:
+  - **By Day** is the to-do list: Monday to Friday, each day with its Canvas assignments, your own to-dos, and a blank **+ Add a to-do** row.
+  - **Weekend plan** has a **Saturday** and a **Sunday** table (Morning, Afternoon, Evening) for you to fill in.
+  - **By Class** lists the same assignments by class, with a table for every class that has work due. One line under the tables names the classes with nothing due.
+- Work due earlier in the week stays in its week until the week ends.
+- When a week ends, its tab moves into **Past weeks** (newest first), with everything in it: Status, Notes, your own to-dos and the Weekend plan. After that, AutoPlanner never changes it again.
 - **Keep the Docs in this folder or a teacher's folder inside it.** AutoPlanner only updates Docs that are there. If one gets moved out, move it back.
 
 ## 5. CLC teachers
@@ -53,35 +54,58 @@ Each student can have a CLC teacher. The **CLC teacher** column on the page has 
 
 ## 6. Status and Notes
 
-Type in the white **Status** and **Notes** cells, in either table:
+**Status** is a dropdown. Click it and pick one:
 
-- **Status:** type **Not started**, **In progress**, or **Complete**, as plain words. New assignments start as Not started.
-- **Notes:** type anything you like.
+- **Need to Start** (red). New assignments start here.
+- **In progress** (yellow).
+- **Done/Submitted** (green).
+
+**Notes:** type anything you like.
+
+Each assignment is in By Day and in By Class. Change its Status or Note in either one, and the next update copies it to the other. If the two differ, the one changed last wins.
 
 Use the Notes column, not comments, for anything you want to keep. Comments on week tabs can be lost when AutoPlanner updates.
 
-AutoPlanner never changes these two columns, so what you type survives every update. The same reminder is at the top of every week tab. If a teacher moves an assignment's due date to another week, its Status and Notes move with it, even if its old week has already gone into Past weeks (for example, overdue work given a new date). That works for up to 10 weeks.
+AutoPlanner never changes Status or Notes, so they survive every update. If a teacher moves an assignment's due date to another week, its Status and Notes move with it, even if its old week has already gone into Past weeks (for example, overdue work given a new date). That works for up to 10 weeks.
 
-**If an assignment disappears from Canvas after you typed on it**, it stays in its week with your Status and Note, and its **Priority** cell says why:
+**If an assignment disappears from Canvas after you set its Status or typed a Note**, it stays in its week with both, and a small gray line under its title says why:
 
 - **Not on Canvas:** the teacher removed or unpublished it, or the student dropped the class.
 - **No due date:** it's still on Canvas, without a due date.
 - **Now due Nov 30** (for example): its due date moved outside the next 4 weeks.
 
-If it comes back, your Status and Note go with it. It stays until its week ends, or until you clear its Status (back to Not started) and its Notes. Rows with nothing typed in them just disappear.
+If it comes back, your Status and Note go with it. It stays until its week ends, or until you set its Status back to Need to Start and clear its Notes. Rows left on Need to Start with no Note just disappear.
 
-Assignments that have no due date in Canvas aren't listed at all. If one matters, add it to **Added by staff**.
+Assignments that have no due date in Canvas aren't listed at all. If one matters, add it as your own to-do (below).
 
-**Everything else is rewritten on each update, including the CLC Planner tab** (except the Added by staff table below). For notes about the student in general, add your own tab with **+** at the top of the **Document tabs** sidebar. AutoPlanner leaves tabs it didn't make alone.
+### Your own to-dos
+
+For work that isn't on Canvas, such as a quiz a teacher announced in class:
+
+1. In **By Day**, find the day and type in its **+ Add a to-do** row. You can fill in Class and Notes too.
+2. At the next update, your to-do gets a Status dropdown and the day gets a fresh **+ Add a to-do** row.
+3. Need more than one before then? Right-click a row and choose **Insert row below**.
+
+AutoPlanner keeps your to-dos exactly as you typed them, formatting included, under the day's Canvas assignments. To remove one, delete its row or clear its Assignment cell. Your to-dos belong to their week and day: they aren't listed in By Class, and they move into **Past weeks** with their week.
+
+A day with nothing from Canvas still has its **+ Add a to-do** row, so there is always a place to write.
+
+### Weekend plan
+
+Under By Day, the **Saturday** and **Sunday** tables each have a Morning, Afternoon and Evening row, with an Assignment and a Notes column. Type the weekend plan there. AutoPlanner never changes these two tables.
+
+Canvas work due on a Saturday or Sunday is listed in By Day under that day.
+
+### What gets replaced
+
+**Everything else is rewritten on each update, including the CLC Planner tab.** The CLC Planner tab counts your to-dos and Weekend plan lines, for example "· 2 added by staff". For notes about the student in general, add your own tab with **+** at the top of the **Document tabs** sidebar. AutoPlanner leaves tabs it didn't make alone.
 
 - **Renamed a week tab?** AutoPlanner puts its name back at the next update, with everything in it.
-- **Deleted a week tab by mistake?** The next update makes it again, with its Statuses but not its Notes. To get the Notes back, open **File → Version history → See version history** and pick a version from before the tab was deleted. Then copy the Notes you need back into the Doc. **Restore this version** also works, but it undoes every change made to the whole Doc since then, so only use it right after the mistake.
+- **Deleted a week tab by mistake?** The next update makes it again, with its Statuses but not its Notes, your to-dos or the Weekend plan. To get those back, open **File → Version history → See version history** and pick a version from before the tab was deleted. Then copy what you need back into the Doc. **Restore this version** also works, but it undoes every change made to the whole Doc since then, so only use it right after the mistake.
 
-### Added by staff
+### If a Doc still has the old layout
 
-At the bottom of every week tab, **Added by staff** is a table for work that isn't on Canvas, such as a quiz a teacher announced in class. It has the columns Assignment, Class, Day, Status and Notes, and starts with 2 empty rows. For more rows, click in the last cell and press **Tab**.
-
-AutoPlanner never changes this table. It's kept exactly as you typed it, formatting included, on every update, and it moves into **Past weeks** with its week. The CLC Planner tab counts its rows, for example "· 2 added by staff".
+Until November 2026, week tabs had a Priority column, a Status you typed, and an **Added by staff** table at the bottom. The next update changes each current week tab to the layout above. A typed Status becomes the matching dropdown choice. Each Added by staff row moves under its day in By Day, or into the Weekend plan if its day was Saturday or Sunday. Nothing you typed is lost. Weeks already in **Past weeks** stay as they were.
 
 ## 7. Change or remove a student
 

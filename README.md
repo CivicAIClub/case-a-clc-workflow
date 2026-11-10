@@ -22,13 +22,17 @@ CLC staff spend hours each week logging into individual student Canvas accounts 
 
 CLC staff open one web page, signed in with their Pomfret Google account. They add each student once by pasting the student's Canvas access token. AutoPlanner then keeps **one Google Doc per student** in a shared Drive folder.
 
-- Each Doc has one tab per week: a **By Class** table for every class the student takes (including classes with nothing due), then a **By Day** table. Every table uses the same full-width layout, written down at the top of `apps_script/Code.gs`.
+- Each Doc has one tab per week, with three parts. The layout is written down at the top of `apps_script/Code.gs`.
+  - **By Day** is the working to-do list: Monday to Friday, each day with its Canvas assignments, then staff's own to-dos, then a blank "+ Add a to-do" row. Columns: Assignment, Class, Status, Notes.
+  - **Weekend plan** has a Saturday and a Sunday table (Morning, Afternoon, Evening, with Assignment and Notes) that staff fill in. AutoPlanner never changes them.
+  - **By Class** has a table for every class with work due (Assignment, Due, Status, Notes), then one line naming the classes with nothing due.
 - The **CLC Planner** tab is a one-page summary of this week by class. On Saturday and Sunday (New York time) it summarizes the coming week.
-- Staff type **Status** (Not started, In progress or Complete, as plain text) and **Notes**. Both are kept across updates, keyed by the assignment's Canvas link, and follow an assignment whose due date moves to another week.
-  - An assignment that leaves the planner after staff typed on it stays in its week with its Status and Notes. That covers removed, unpublished, undated, or moved outside the 4 weeks. Its Priority says why: "Not on Canvas", "No due date" or "Now due Nov 30".
+- **Status** is a dropdown staff click: Need to Start (red), In progress (yellow) or Done/Submitted (green). Staff type **Notes**. Both are kept across updates, keyed by the assignment's Canvas link, and follow an assignment whose due date moves to another week. By Day and By Class show the same Status; if they differ, the one staff changed last wins.
+  - An assignment that leaves the planner after staff set a Status or typed a Note stays in its week with both. That covers removed, unpublished, undated, or moved outside the 4 weeks. A small gray line under its title says why: "Not on Canvas", "No due date" or "Now due Nov 30".
   - A renamed week tab gets its name back. A deleted one comes back with its Statuses, from AutoPlanner's record of what it last wrote; notes are never stored outside the Doc.
-- Work due earlier in the week stays in its week as **Past due** (gray) until the week ends. Then the tab moves into a **Past weeks** tab, newest first, and its Priority cells turn gray in the same step. After that AutoPlanner never edits, rebuilds or deletes past weeks, and its Doc reads leave their content out so updates stay fast all year.
-- At the bottom of every week tab, an **Added by staff** table (Assignment, Class, Day, Status, Notes) holds work that isn't on Canvas. AutoPlanner writes it back exactly, formatting included, on every update, and it moves into Past weeks with its week. The CLC Planner tab counts its rows.
+- Work due earlier in the week stays in its week until the week ends. Then the tab moves into a **Past weeks** tab, newest first. After that AutoPlanner never edits, rebuilds or deletes past weeks, and its Doc reads leave their content out so updates stay fast all year.
+- Staff's own to-dos (typed in a "+ Add a to-do" row under a day in By Day) and the Weekend plan are written back exactly, formatting included, on every update, and move into Past weeks with their week. A to-do goes away when staff delete its row or clear its Assignment cell. The CLC Planner tab counts them.
+- A Doc last written before November 2026 (Priority column, typed Status, an "Added by staff" table at the bottom) is brought to this layout by its next update: each typed Status becomes a dropdown, and each "Added by staff" row moves under its day in By Day, or into the Weekend plan for a Saturday or Sunday row. Nothing staff typed is lost.
 - **CLC teachers** (optional, the `CLC_TEACHERS` Script Property): each teacher gets a folder inside the shared folder, named with their full name. A student's CLC teacher, picked on the page, decides which folder their Doc is in. Moving it is the same Doc and link. A Doc dragged between folders in Drive changes the student's teacher at the next page load or update. The page has a **Show** filter, and a signed-in CLC teacher starts on their own students.
 - If a student's Doc is deleted or in the trash, AutoPlanner never writes to it: it makes a fresh Doc in the shared folder (or the student's teacher's folder) and says so on the student's row.
 - Each row shows when the student's Canvas token expires (Canvas reports it; Pomfret limits tokens to about 90 days), and the page warns three weeks ahead (so tokens that run out over winter break are flagged before it).
@@ -110,14 +114,16 @@ Only needed for a brand-new project, for example to move AutoPlanner to a CLC st
 
    Properties named `student.*`, `token.*`, `busy.*`, `run.*`, `trigger.*`, `written.*`, `probe.*` and `teacherFolders` are written by the app, and so are `RUNTIME_LIMIT_SECONDS` (see `measureTimeLimit`) and `PAUSED_SINCE` (see `pauseAutomaticUpdates`). Don't edit them by hand.
 4. In the editor, open **App.gs** (the function menu only lists functions from the open file). Run **setupTriggers** and approve the permissions. It installs the daily updates and the weekly health check, and logs a setup check.
-5. Run **selfTest** (about 6 minutes; a Doc last written by an older version gets one extra update first). Don't open or edit your planner Doc while it runs. Using your own token, it:
+5. Run **selfTest** (about 7 minutes; a Doc last written by an older version gets one extra update first). Don't open or edit your planner Doc while it runs. Using your own token, it:
    - fetches your Canvas assignments
    - creates or reuses your Doc in the folder, and holds your student row so no other update writes it meanwhile
-   - types a test Status and Note, and a row in **Added by staff**, moves that assignment to another week and back with two updates, and checks both followed it, in both tables, in exactly one week tab, and that the staff row came through exactly
-   - checks the layout after a full update, then puts the test assignment's Status and Note back and clears the staff row
+   - picks a test Status in a dropdown and types a Note, moves that assignment to another week and back with two updates, and checks both followed it, in both tables, in exactly one week tab
+   - adds two to-dos under a day in By Day (one typed in the "+ Add a to-do" row, one in a row inserted between two assignments, set to In progress) and a line in Sunday Afternoon of the Weekend plan. After two updates it checks all of it is there exactly, the to-dos sit below the assignments, each has a Status dropdown, and the day ends with one blank row. Then it clears one to-do's Assignment cell and checks that to-do is gone after the next update
+   - puts an old "Added by staff" table with one row at the end of a week tab, and checks the next update moves the row under its day with a Status dropdown
+   - checks the layout after a full update (the three parts in order, a Status dropdown on every assignment row, column widths, the CLC Planner tab), then puts the test assignment's Status and Note back and removes its own to-dos. Its "Status is a dropdown" line also says whether dropdown requests went through the Advanced Docs service or the Docs REST API
    - with at least 2 CLC teachers set, moves your Doc between teacher folders (from the page and as a Drive drag-in), checks the folder lock, and puts your row back how it was
    - removes the test assignment from the schedule for one update, and checks it stays in its week, marked "Not on Canvas", with its Status and Note
-   - reads your Doc both ways (slim and full), times them, and checks they give the same Status, Notes, staff rows and widths
+   - reads your Doc both ways (slim and full), times them, and checks they give the same Status, Notes, to-dos, Weekend plan and widths
    - checks the weekly health check is set up, and says what it would email today (it sends nothing)
 
    Every line of the log should say `PASS` (a `SKIP` says why it skipped).
@@ -147,9 +153,10 @@ node --test tests/*.test.js
   - Doc reuse
   - batching and triggers
   - the shared-folder rules and Status preservation in `Code.gs`
-  - the "Added by staff" table and CLC teacher folders (against a pretend Docs API that enforces Google's rules)
+  - Status dropdowns, staff to-dos, the Weekend plan, the move from the old "Added by staff" table, and CLC teacher folders (against a pretend Docs API that enforces Google's rules and numbers a Doc's content the way Google does)
+  - `selfTest` itself, run from start to finish on that pretend Docs API
   - the Canvas client
-  - a week-grouping golden file: the original Python version's output, plus this week's past-due work
+  - a week-grouping golden file: the original Python version's output without its priority label, plus this week's past-due work
 - CI runs them, plus a syntax check of every `.gs` file and of the script in `Index.html`, on every PR.
 
 **Security rule for developers:** `google.script.run` can call **any** function whose name does not end in `_`. Every internal function must end in `_`. Every public function must start with:

@@ -22,7 +22,7 @@ AutoPlanner helps Pomfret's Supported Study Hall staff at the Center for Learnin
 - `App.gs` handles `doGet`, `ALLOWED_USERS` checks, students, tokens, run summaries, batches, triggers, and setup/test helpers. Store one student per Script Property and use `LockService` around writes.
 - Keep batches under the 6-minute limit, using `continueRun` to continue later. Daily updates run at about 7 pm and midnight in `America/New_York`.
 - `Canvas.gs` uses `UrlFetchApp`, `fetchAll`, and Link-header paging to read Canvas and group assignments by week and day. Keep its output compatible with `Code.gs`.
-- `Code.gs` uses the Docs API for nested week tabs under "CLC Planner" and stacked "By Class" and "By Day" tables. Preserve Status and Notes across updates, keyed by each Canvas assignment URL.
+- `Code.gs` uses the Docs API for nested week tabs under "CLC Planner" and stacked "By Day", "Weekend plan" and "By Class" tables. Preserve Status and Notes across updates, keyed by each Canvas assignment URL.
 - Only update Docs inside `DOCS_FOLDER_ID`. Batch Docs API writes using `BATCH_CHUNK` and reuse the existing `documentId` instead of creating extra Docs.
 - Never write to a deleted or trashed student Doc. Create a fresh Doc in the shared folder or the student's teacher folder and report this on the student's row.
 - Preserve staff-added work and its formatting. Do not edit, rebuild, or delete archived Past weeks.
