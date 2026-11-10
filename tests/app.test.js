@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createSandbox, toPlain, REPO_ROOT } = require('./helpers/gas-sandbox');
 const { fakeServices } = require('./helpers/gas-services');
-const { fakeDocs, withRendering, copiesOf, staffTypes, staffWrites } = require('./helpers/fake-docs');
+const { fakeDocs, withRendering, copiesOf, staffAddsTodo, staffPlansWeekend, staffTypes, dayRowsOf, dayPlan, weekendOf, oldLayoutContent, liveTab, tablesIn, typed } = require('./helpers/fake-docs');
 
 const OWNER = 'owner@pomfret.org';
 const STAFF = 'staff@pomfret.org';
@@ -776,26 +776,43 @@ test('checkSetup and selfTest never log a token; selfTest deletes TEST_CANVAS_TO
   assert.ok(!logText.includes(TOKEN_A), 'token never logged');
   assert.match(logText, /COURSE_EXCLUDE: advisory, dorm/);
   assert.match(logText, /PASS Canvas: fetch your assignments and classes: Avery Example, 3 assignments/);
-  assert.match(logText, /FAIL Every class has its own By Class table in every week: (No week tabs found|Found 0 week tabs)/);
+  assert.match(logText, /FAIL By Class: a table for every class with work due, and one line naming the classes with nothing due: (No week tabs found|Found 0 week tabs)/);
   assert.match(logText, /selfTest: FAILED/);
   t.svc.props.TEST_CANVAS_TOKEN = 'NOT-A-TOKEN';
   t.ctx.selfTest();
   assert.match(t.sb.logs.join('\n'), /FAIL Canvas: fetch your assignments and classes: Canvas didn't accept TEST_CANVAS_TOKEN/);
 });
 
-test('writeStatusAndNote_ edits the Notes cell before the Status cell and keeps the cell newline', () => {
+test('writeStatusAndNote_ retypes the Note, then sets the Status dropdown; a typed Status (a Doc from before dropdowns) is retyped after the Note', () => {
   const t = setup();
   const cell = (start, text) => ({
     content: [{ startIndex: start, paragraph: { elements: [{ startIndex: start, endIndex: start + text.length + 1, textRun: { content: text + '\n' } }] } }],
   });
-  const sent = [];
-  t.ctx.docsBatchUpdate_ = (docId, requests) => sent.push(...toPlain(requests));
-  t.ctx.writeStatusAndNote_('DOC', { tabId: 't.1', status: cell(100, '⬜ Not started'), note: cell(120, '') }, 'S', 'N');
-  assert.deepStrictEqual(sent, [
-    { insertText: { text: 'N', location: { tabId: 't.1', index: 120 } } },
-    { deleteContentRange: { range: { tabId: 't.1', startIndex: 100, endIndex: 100 + '⬜ Not started'.length } } },
-    { insertText: { text: 'S', location: { tabId: 't.1', index: 100 } } },
+  const chip = (start) => ({
+    content: [{ startIndex: start, paragraph: { elements: [
+      { startIndex: start, endIndex: start + 1, dropdown: { dropdownId: 'kix.abc', dropdownProperties: { displayValue: 'Need to Start' } } },
+      { startIndex: start + 1, endIndex: start + 2, textRun: { content: '\n' } },
+    ] } }],
+  });
+  const batches = [];
+  t.ctx.docsBatchUpdate_ = (docId, requests) => batches.push(toPlain(requests));
+  // A Status dropdown: the note is typed first (it sits later in the row), then the chip is set.
+  t.ctx.writeStatusAndNote_('DOC', { tabId: 't.1', status: chip(100), note: cell(120, 'old') }, 'Done/Submitted', 'N');
+  assert.deepStrictEqual(batches, [
+    [
+      { deleteContentRange: { range: { tabId: 't.1', startIndex: 120, endIndex: 123 } } },
+      { insertText: { text: 'N', location: { tabId: 't.1', index: 120 } } },
+    ],
+    [{ updateDropdownProperties: { tabId: 't.1', dropdownId: 'kix.abc', dropdownProperties: { selectedOptionId: 'dropdownItem.done' }, fields: 'selectedOptionId' } }],
   ]);
+  // A typed Status: one batch, Notes before Status, and each cell keeps its last newline.
+  batches.length = 0;
+  t.ctx.writeStatusAndNote_('DOC', { tabId: 't.1', status: cell(100, 'Not started'), note: cell(120, '') }, 'S', 'N');
+  assert.deepStrictEqual(batches, [[
+    { insertText: { text: 'N', location: { tabId: 't.1', index: 120 } } },
+    { deleteContentRange: { range: { tabId: 't.1', startIndex: 100, endIndex: 100 + 'Not started'.length } } },
+    { insertText: { text: 'S', location: { tabId: 't.1', index: 100 } } },
+  ]]);
 });
 
 test("selfTest uses your student row's Doc when you're on the list (no second copy in the folder)", () => {
@@ -811,7 +828,7 @@ test("selfTest uses your student row's Doc when you're on the list (no second co
   t.ctx.selfTestKeepToken();
   assert.deepStrictEqual(calls[0], { id: student.id, docId: 'MY-DOC' });
   assert.match(t.sb.logs.join('\n'), /PASS Doc: create or update yours in the shared folder: your student row's Doc: https:\/\/docs\.google\.com\/document\/d\/MY-DOC\/edit/);
-  assert.match(t.sb.logs[0], /^NOTE selfTest edits your planner Doc for about 6 minutes\. Don't open or edit that Doc until it finishes/);
+  assert.match(t.sb.logs[0], /^NOTE selfTest edits your planner Doc for about 7 minutes\. Don't open or edit that Doc until it finishes/);
   assert.match(t.sb.logs.join('\n'), /PASS Not authorized page: the CLC-staff message, and no data or actions/);
 });
 
@@ -824,7 +841,10 @@ test('selfTest runs every check after a failure (unless it needs the failed one)
   t.ctx.docsGet_ = () => ({ tabs: [{ tabProperties: { tabId: 't.0', title: 'CLC Planner' }, childTabs: [] }] });
   t.ctx.selfTestKeepToken();
   const log = t.sb.logs.join('\n');
-  assert.match(log, /FAIL Every class has its own By Class table in every week/);
+  assert.match(log, /FAIL By Class: a table for every class with work due, and one line naming the classes with nothing due: No week tabs found\./);
+  // A check that looked at no week tab at all doesn't count as passed.
+  assert.match(log, /FAIL Status is a dropdown on every assignment row, in By Day and By Class: No week tabs found\./);
+  assert.match(log, /FAIL Every week tab reads By Day, Weekend plan, By Class, with the two help lines: No week tabs found\./);
   assert.match(log, /PASS A Doc deleted for good: Drive's message \(shown as is\): recognized as deleted: "No item with the given ID could be found"/);
   assert.match(log, /(PASS|FAIL) Doc reads are slim/, 'a check after the failures still ran');
   assert.match(log, /selfTest: FAILED \(\d+ failed, \d+ passed/);
@@ -876,25 +896,24 @@ function liveSetup() {
   ctx.sleepDocsChunkGap_ = () => {};
   withRendering({ ctx }, docs);
   const u = (n) => 'https://pomfret.instructure.com/courses/1/assignments/' + n;
-  const item = (n, name, week) => ({ day: 'Monday', assignment: name, course: 'Biology', due_time: '8:30 AM', priority: 'Upcoming', days_until_due: 9, due_date: week, week_start: week, url: u(n) });
+  const item = (n, name, week) => ({ day: 'Monday', assignment: name, course: 'Biology', due_time: '8:30 AM', days_until_due: 9, due_date: week, week_start: week, url: u(n) });
   ctx.fetchCanvasProfile_ = () => CANVAS[TOKEN_A];
   ctx.fetchCanvasTokenExpiry_ = () => null;
   ctx.fetchStudentSchedule_ = () => ({
-    student_full_name: 'Avery Example', canvas_user_id: 101, total_assignments: 3, generated_at: 'x', courses: ['Biology'],
+    student_full_name: 'Avery Example', canvas_user_id: 101, total_assignments: 3, generated_at: 'x', courses: ['Art', 'Biology'],
     weeks: {
       '2099-01-05': { week_label: 'Jan 5 – Jan 11', days: [{ day: 'Monday', assignments: [item(1, 'X', '2099-01-05'), item(2, 'Y', '2099-01-05')] }] },
       '2099-01-12': { week_label: 'Jan 12 – Jan 18', days: [{ day: 'Monday', assignments: [item(3, 'Z', '2099-01-12')] }] },
     },
   });
-  // selfTest edits cells by position; the fake has no positions, so edits go by tab, link and table.
-  ctx.writeStatusAndNote_ = (docId, target, status, note) => {
-    const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.tabId === target.tabId);
-    staffTypes(docs, tab.tabProperties.title, target.url, target.kind === 'By Day' ? 'day' : 'class', status, note);
-  };
-  ctx.writeStaffRow_ = (docId, tabId, r, texts) => {
-    const tab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.tabId === tabId);
-    staffWrites(docs, tab.tabProperties.title, r, texts);
-  };
+  // selfTest edits its Doc the way a person would: by position. The fake Docs API makes those edits
+  // for real while one of these runs (see asStaff in fake-docs.js); the writer's own requests are
+  // laid out by withRendering instead.
+  for (const name of ['writeStatusAndNote_', 'setStatusChip_', 'typeTodoInBlankRow_', 'insertTodoRowBelow_', 'typeWeekendPlan_',
+    'clearTodoAssignment_', 'removeTestTodos_', 'plantOldStaffTable_']) {
+    const real = ctx[name];
+    ctx[name] = (...args) => docs.asStaff(() => real(...args));
+  }
   svc.setActive(STAFF);
   const student = toPlain(ctx.addStudent(TOKEN_A, 'Demo')).student;
   const rec = JSON.parse(svc.props['student.' + student.id]);
@@ -906,66 +925,174 @@ function liveSetup() {
   return { svc, sb, ctx, docs, X: u(1), student };
 }
 
+const WEEK1 = 'Week of Jan 5 – Jan 11, 2099';
+const WEEK2 = 'Week of Jan 12 – Jan 18, 2099';
+// Every selfTest step that works on the Doc's week tabs, by the name it logs.
+const DOC_STEPS = [
+  'Your row is held for selfTest',
+  'Doc: create or update yours in the shared folder',
+  'Doc: choose a test Status and type a Note in a By Class table',
+  'Doc: add two to-dos under a day in By Day and a line in the Weekend plan',
+  'Doc: put an "Added by staff" table from before this version at the end of that week tab',
+  'Doc: run an update with that assignment moved to another week',
+  'Status and Note followed the assignment to its new week',
+  'The "Added by staff" row moved under its day in By Day with a Status dropdown, and the old table is gone',
+  'Every to-do has a Status dropdown after an update',
+  'An assignment removed from Canvas keeps its Status and Note in its week, marked "Not on Canvas"',
+  'To-dos and the Weekend plan came through two updates exactly: below the assignments, each with its Status, one blank row at the end of the day',
+  'Doc: clear the Assignment cell of one to-do',
+  'Doc: run a normal update',
+  'By Class: a table for every class with work due, and one line naming the classes with nothing due',
+  'Status is a dropdown on every assignment row, in By Day and By Class',
+  'Every week tab reads By Day, Weekend plan, By Class, with the two help lines',
+  'Existing week tabs were rebuilt in place',
+  'Status and Note came back with it, in exactly one week tab',
+  'The to-do whose Assignment cell was cleared is gone, and the other one is still there',
+  "Clean-up: the test assignment's Status and Note are back to what they were, and selfTest's to-dos are gone",
+];
+const assertSteps = (log, label) => {
+  for (const name of DOC_STEPS) {
+    assert.ok(log.includes('PASS ' + name), label + ': ' + name + '\n' + log);
+  }
+};
+
 test('selfTestEveryday (real code, fake Docs API): the By Class edit survives a plain update, then everything is put back', () => {
   const { sb, ctx, docs, X, svc, student } = liveSetup();
   ctx.selfTestEveryday();
   const log = sb.logs.join('\n');
   assert.match(sb.logs[0], /^NOTE selfTestEveryday edits your planner Doc for about 4 minutes/);
-  assert.match(log, /PASS A staff edit in By Class survives a plain update: "Complete" and a note on "X", kept in By Class and By Day/);
+  assert.match(log, /PASS A staff edit in By Class survives a plain update: "Done\/Submitted" and a note on "X", kept in By Class and By Day/);
   assert.match(log, /PASS Clean-up/);
   assert.match(log, /selfTestEveryday finished in \d+ s \(TEST_CANVAS_TOKEN kept\)/);
-  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']]);
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Need to Start', ''], ['Need to Start', '']]);
   assert.ok(!svc.props['busy.' + student.id], 'hold released');
   assert.ok(svc.props.TEST_CANVAS_TOKEN, 'token kept');
 });
 
-test('selfTest (real code, fake Docs API): two runs in a row pass the type, move, come-back and clean-up checks', () => {
-  const { sb, ctx, docs, X } = liveSetup();
+test('selfTestEveryday on an assignment that is already Done/Submitted: it tests with In progress, then puts Done/Submitted and the note back', () => {
+  const { sb, ctx, docs, X, student } = liveSetup();
+  staffTypes(docs, WEEK1, X, 'class', 'Done/Submitted', 'handed in Friday');
+  ctx.updateStudentNow(student.id);
+  ctx.selfTestEveryday();
+  assert.match(sb.logs.join('\n'), /PASS A staff edit in By Class survives a plain update: "In progress" and a note on "X"/);
+  assert.match(sb.logs.join('\n'), /PASS Clean-up/);
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Done/Submitted', 'handed in Friday'], ['Done/Submitted', 'handed in Friday']]);
+});
+
+test('selfTest (real code, fake Docs API): two runs in a row pass every Doc check, and leave the Doc and staff\'s own to-dos as they were', () => {
+  const { sb, ctx, docs, X, student } = liveSetup();
+  // What staff had in the Doc before selfTest ran: a to-do, and a plan in the cell selfTest types in.
+  staffAddsTodo(docs, WEEK1, 'Tuesday', ['Pack gym bag', 'PE', 'by Friday']);
+  staffPlansWeekend(docs, WEEK1, 'Sunday', 'Afternoon', 1, 'Finish lab report');
+  ctx.updateStudentNow(student.id);
+  const planBefore = dayPlan(docs, WEEK1);
+  assert.deepStrictEqual(planBefore.Tuesday, ['todo Pack gym bag', 'blank']);
   for (const run of [1, 2]) {
     sb.logs.length = 0;
     ctx.selfTestKeepToken();
     const log = sb.logs.join('\n');
-    for (const name of ['Your row is held for selfTest', 'Doc: create or update yours in the shared folder', 'Doc: type a test Status and Note',
-      'Doc: type a row into "Added by staff" in that week', 'Status and Note followed the assignment to its new week',
-      'An assignment removed from Canvas keeps its Status and Note in its week, marked "Not on Canvas"', 'Doc: run a normal update',
-      'Existing week tabs were rebuilt in place', 'Status and Note came back with it, in exactly one week tab',
-      'The "Added by staff" row came through both updates exactly', 'Clean-up']) {
-      assert.match(log, new RegExp('PASS ' + name.replace(/[()]/g, '\\$&')), 'run ' + run + ': ' + name + '\n' + log);
-    }
-    assert.ok(log.indexOf('PASS Doc: run a normal update') < log.indexOf('Every class has its own By Class table'), 'layout checks come after the update');
-    assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Not started', ''], ['Not started', '']], 'run ' + run + ' cleaned up');
-    const staffTab = docs.service.Documents.get().tabs[0].childTabs.find((x) => x.tabProperties.title === 'Week of Jan 5 – Jan 11, 2099');
-    assert.deepStrictEqual(toPlain(ctx.readStaffRows_(staffTab)).map((r) => r.map((c) => c.text).join('')), ['', ''], 'staff test row cleared');
+    assertSteps(log, 'run ' + run);
+    assert.match(log, /PASS Doc: add two to-dos[^\n]*: under Monday in "Week of Jan 5 – Jan 11, 2099": one typed in the "\+ Add a to-do" row, one in a row inserted between two assignments, set to "In progress"; "selfTest plan: library, 2 to 4" in Sunday Afternoon/);
+    assert.match(log, /PASS The "Added by staff" row moved under its day[^\n]*: under Wednesday, "In progress", with its class and note/);
+    assert.match(log, /PASS Status is a dropdown on every assignment row, in By Day and By Class: 6 Status dropdowns on 2 week tabs\. Dropdown requests went through the Advanced Docs service/);
+    assert.match(log, /PASS By Class: [^\n]*: 2 week tabs, 2 classes: 2 class tables, and 2 week tabs with the one line for the rest/);
+    assert.match(log, /PASS Clean-up[^\n]*: "Need to Start" and no note back in 2 rows; 3 of selfTest's own to-dos and Weekend plan lines removed/);
+    assert.ok(log.indexOf('PASS Doc: run a normal update') < log.indexOf('By Class: a table for every class'), 'layout checks come after the update');
+    // The Doc afterwards: the test assignment as it was, none of selfTest's rows, staff's own untouched.
+    assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Need to Start', ''], ['Need to Start', '']], 'run ' + run + ' cleaned up');
+    assert.deepStrictEqual(dayPlan(docs, WEEK1), planBefore, 'run ' + run + ': By Day is back to what it was');
+    const mine = dayRowsOf(docs, WEEK1).find((r) => r.assignment === 'Pack gym bag');
+    assert.deepStrictEqual([mine.klass, mine.status, mine.chip, mine.notes], ['PE', 'Need to Start', true, 'by Friday']);
+    assert.deepStrictEqual(weekendOf(docs, WEEK1).Sunday, [['Morning', '', ''], ['Afternoon', 'Finish lab report', ''], ['Evening', '', '']]);
+    assert.strictEqual(tablesIn(liveTab(docs, WEEK1), 'old staff').length, 0, 'no "Added by staff" table left');
+    assert.ok(!JSON.stringify(docs.service.Documents.get()).includes('selfTest'), 'nothing of selfTest is left in the Doc');
   }
 });
 
-test('selfTest on a Doc written by an older AutoPlanner (no "Added by staff" yet): it updates the Doc first, then the staff checks pass', () => {
+test('selfTest when a row inserted below an assignment comes without a Status chip: the next update adds one, and selfTest sets it then', () => {
   const { sb, ctx, docs } = liveSetup();
-  // As before Phase 2: each week tab ends after By Day.
-  const isHeading = (el) => el.paragraph && (el.paragraph.elements[0] || {}).textRun && el.paragraph.elements[0].textRun.content === 'Added by staff\n';
-  docs.service.Documents.get().tabs[0].childTabs.forEach((copy) => {
-    const tab = docs.find(copy.tabProperties.tabId);
-    const body = tab.documentTab.body;
-    body.content = body.content.slice(0, body.content.findIndex(isHeading) - 1);
-    assert.strictEqual(ctx.readStaffRows_(tab), null, 'no staff table');
-  });
-  const staffChecks = (log) => {
-    for (const name of ['Doc: type a test Status and Note', 'Doc: type a row into "Added by staff" in that week',
-      'Status and Note followed the assignment to its new week', 'Status and Note came back with it, in exactly one week tab',
-      'The "Added by staff" row came through both updates exactly', 'Clean-up']) {
-      assert.match(log, new RegExp('PASS ' + name), name + '\n' + log);
+  // As if Google copied only the look of the row above, not its chip.
+  const realBatch = docs.service.Documents.batchUpdate;
+  docs.service.Documents.batchUpdate = (body) => {
+    const reply = realBatch(body);
+    if (body.requests.some((r) => r.insertTableRow)) {
+      dayRowsOf(docs, WEEK1).filter((r) => r.kind !== 'canvas' && r.chip && !r.assignment).forEach((r) => { r.row.tableCells[2] = typed(''); });
     }
+    return reply;
   };
   ctx.selfTestKeepToken();
+  const log = sb.logs.join('\n');
+  assert.match(log, /PASS Doc: add two to-dos[^\n]*one in a row inserted between two assignments \(the new row had no Status chip yet\)/);
+  assert.match(log, /PASS Every to-do has a Status dropdown after an update: 3 to-dos in "Week of Jan 5 – Jan 11, 2099"; the inserted one is set to "In progress" now/);
+  assertSteps(log, 'no chip on the new row');
+});
+
+test('selfTest when the Advanced Docs service refuses dropdown requests: those batches go through the Docs REST API, every check still passes, and the log says so', () => {
+  const { sb, ctx, docs } = liveSetup();
+  const service = docs.service.Documents.batchUpdate;
+  const sent = { service: 0, rest: 0, refused: 0 };
+  const hasDropdown = (body) => body.requests.some((r) => /Dropdown/.test(Object.keys(r)[0]));
+  docs.service.Documents.batchUpdate = (body, docId) => {
+    if (hasDropdown(body)) {
+      sent.refused++;
+      throw new Error('GoogleJsonResponseException: API call to docs.documents.batchUpdate failed with error: Invalid JSON payload received. Unknown name "updateDropdownProperties"');
+    }
+    sent.service++;
+    return service(body, docId);
+  };
+  const otherFetch = ctx.UrlFetchApp.fetch;
+  ctx.UrlFetchApp.fetch = (url, params) => {
+    const m = /^https:\/\/docs\.googleapis\.com\/v1\/documents\/([^:]+):batchUpdate$/.exec(url);
+    if (!m) return otherFetch(url, params);
+    assert.strictEqual(params.headers.Authorization, 'Bearer fake-oauth-token');
+    const body = JSON.parse(params.payload);
+    assert.ok(hasDropdown(body), 'only batches with a dropdown request leave the Advanced service');
+    sent.rest++;
+    const reply = service(body, m[1]);
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify(reply || {}) };
+  };
+  ctx.selfTestKeepToken();
+  const log = sb.logs.join('\n');
+  assertSteps(log, 'through REST');
+  assert.match(log, /PASS Status is a dropdown on every assignment row[^\n]*Dropdown requests went through the Docs REST API, because the Advanced Docs service refused them/);
+  assert.strictEqual(sent.refused, 1, 'the service is asked once; after that dropdown batches go straight to REST');
+  assert.ok(sent.rest > 5 && sent.service > 5, JSON.stringify(sent));
+});
+
+test('selfTest on a Doc from before November 2026 (Priority column, typed Status, "Added by staff"): it updates the Doc first, then every Doc check passes', () => {
+  const { sb, ctx, docs, X } = liveSetup();
+  const u = (n) => 'https://pomfret.instructure.com/courses/1/assignments/' + n;
+  const a = (n, name) => ({ assignment: name, url: u(n), day: 'Monday', due_time: '8:30 AM', course: 'Biology' });
+  const old = {
+    [WEEK1]: oldLayoutContent([{ course: 'Biology', assignments: [a(1, 'X'), a(2, 'Y')] }],
+      { status: { [X]: 'Complete' }, notes: { [X]: 'handed in Friday' } },
+      [['Bring calculator', 'Math', 'thu', 'In progress', 'for the quiz'], ['', '', '', '', '']]),
+    [WEEK2]: oldLayoutContent([{ course: 'Biology', assignments: [a(3, 'Z')] }]),
+  };
+  for (const title of [WEEK1, WEEK2]) {
+    const tab = liveTab(docs, title);
+    tab.documentTab.body.content = old[title];
+    delete tab.documentTab.dropdownDefinitions; // Status was typed then
+    assert.strictEqual(ctx.isNewLayoutTab_(tab), false);
+  }
+  ctx.selfTestKeepToken();
   let log = sb.logs.join('\n');
-  assert.match(log, /PASS Doc: create or update yours in the shared folder: your student row's Doc: \S+ \(2 week tabs had no "Added by staff" table yet, so it was updated first, in \d+ s\)/);
-  staffChecks(log);
+  assert.match(log, /PASS Doc: create or update yours in the shared folder: your student row's Doc: \S+ \(2 week tabs had the layout from before this version, so it was updated first, in \d+ s\)/);
+  assertSteps(log, 'old Doc');
+  // The test assignment was Complete, so selfTest tested with In progress and put Done/Submitted back.
+  assert.match(log, /PASS Doc: choose a test Status and type a Note in a By Class table: "In progress" and a note on "X"/);
+  assert.match(log, /PASS Clean-up[^\n]*: "Done\/Submitted" and its note back in 2 rows/);
+  assert.deepStrictEqual(copiesOf(docs, X).map((c) => [c.status, c.note]), [['Done/Submitted', 'handed in Friday'], ['Done/Submitted', 'handed in Friday']]);
+  // Staff's own "Added by staff" row is under its day now, with a chip.
+  const moved = dayRowsOf(docs, WEEK1).find((r) => r.assignment === 'Bring calculator');
+  assert.deepStrictEqual([moved.day, moved.kind, moved.klass, moved.status, moved.chip, moved.notes], ['Thursday', 'todo', 'Math', 'In progress', true, 'for the quiz']);
+  assert.strictEqual(tablesIn(liveTab(docs, WEEK1), 'old staff').length, 0);
   // The next run finds the new layout and skips the extra update.
   sb.logs.length = 0;
   ctx.selfTestKeepToken();
   log = sb.logs.join('\n');
   assert.doesNotMatch(log, /updated first/);
-  staffChecks(log);
+  assertSteps(log, 'second run');
 });
 
 test('selfTest teacher-folder check (real code): assign, switch, drag-in, folder lock, Unassigned, then your row exactly as before', () => {
@@ -1167,23 +1294,4 @@ test('folder lock with teacher folders: Docs anywhere inside the shared folder a
   t.ctx.assertDocIsInFolder_('IN-TEACHER', folder);
   assert.throws(() => t.ctx.assertDocIsInFolder_('OUTSIDE', folder), /only updates Docs in the "AutoPlanner – CLC Student Planners" folder \(or a CLC teacher's folder inside it\)/);
   assert.strictEqual(t.ctx.findReusableDoc_('Blake Sample', null), 'IN-TEACHER');
-});
-
-test("selfTest's gray check: passes when a past week's Priority cells are gray, fails when one isn't", () => {
-  const t = setup();
-  const cell = (text, bg) => ({
-    content: [{ paragraph: { elements: [{ textRun: { content: text + '\n' } }] } }],
-    tableCellStyle: bg ? { backgroundColor: { color: { rgbColor: bg } } } : {},
-  });
-  const gray = { red: 224 / 255, green: 224 / 255, blue: 224 / 255 };
-  const orange = { red: 1, green: 0.702, blue: 0.278 };
-  const tab = (bg) => ({
-    tabProperties: { tabId: 't.x', title: 'Week of Oct 5 – Oct 11, 2026' },
-    documentTab: { body: { content: [{ startIndex: 5, table: { tableRows: [
-      { tableCells: ['Assignment', 'Day', 'Due Time', 'Priority', 'Status', 'Notes'].map((x) => cell(x)) },
-      { tableCells: [cell('Essay'), cell('Monday'), cell('8:30 AM'), cell('Today', bg), cell('Complete'), cell('')] },
-    ] } }] } },
-  });
-  assert.strictEqual(t.ctx.assertPriorityGray_(tab(gray)), 1);
-  assert.throws(() => t.ctx.assertPriorityGray_(tab(orange)), /a Priority cell in "Week of Oct 5 – Oct 11, 2026" is not gray/);
 });
