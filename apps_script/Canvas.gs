@@ -361,7 +361,7 @@ function canvasError_(kind, message) {
  * Week grouping: the "sorting table" of AutoPlanner (a port of backend/processor.py).
  *
  * It takes the raw assignment list that Canvas.gs pulled from Canvas and turns it into a
- * tidy planner: which assignments are due, on what day and time, how urgent they are,
+ * tidy planner: which assignments are due, on what day and time and how soon,
  * grouped first by week (Monday to Sunday) and then by day of the week.
  * Nothing here talks to Canvas or Google; it only rearranges the data it is handed.
  *
@@ -453,32 +453,22 @@ function normalizeAssignment_(raw, courseName, timeZone, today) {
 
   // 0 = due today, 1 = tomorrow, and so on. Anything due earlier today still counts.
   var daysUntil = scheduleDaysBetween_(today, dueDate);
-  // Work from earlier this week stays (as "Past due"), so a week keeps all of its assignments
-  // and their Status and Notes until it ends and moves into "Past weeks".
+  // Work from earlier this week stays, so a week keeps all of its assignments and their Status
+  // and Notes until it ends and moves into "Past weeks".
   if (dueDate < scheduleWeekStart_(today)) return null;
 
-  // The key order here matters: it matches the Python version's JSON exactly.
+  // The same keys, in the same order, as the Python version's JSON (without its priority label,
+  // which the week tabs stopped showing in November 2026).
   return {
     day: SCHEDULE_WEEKDAY_NAMES[scheduleWeekdayIndex_(dueDate)],
     assignment: scheduleHasKey_(raw, 'name') ? raw.name : 'Untitled Assignment',
     course: courseName,
     due_time: dueTime,
-    priority: schedulePriority_(daysUntil),
     days_until_due: daysUntil,
     due_date: dueDate,
     week_start: scheduleWeekStart_(dueDate),
     url: scheduleHasKey_(raw, 'html_url') ? raw.html_url : ''
   };
-}
-
-// Turn "how many days until this is due" into a short urgency label.
-function schedulePriority_(days) {
-  if (days < 0) return 'Past due';
-  if (days === 0) return 'Today';
-  if (days === 1) return 'Tomorrow';
-  if (days <= 3) return 'Due Soon';
-  if (days <= 7) return 'This Week';
-  return 'Upcoming';
 }
 
 // Keep assignments due from this week's Monday through the last Sunday of the requested window.
