@@ -18,30 +18,47 @@
 
 /**
  * LAYOUT: one set of values for every table, so tables line up. Change them here only.
+ *   Order:     each week tab has By Day first (the working to-do list), then Weekend plan, then
+ *              By Class.
  *   Width:     every table spans the full text width (page width minus margins: 468 pt on
  *              US Letter with 1" margins). The column widths below are for 468 pt and are
  *              scaled to other page sizes, always adding up to the full width.
- *   By Class:  Assignment 128 | Day 64 | Due Time 56 | Priority 60 | Status 64 | Notes 96 (pt)
- *   By Day:    Assignment 120 | Course 80 | Due Time 56 | Priority 60 | Status 64 | Notes 88 (pt)
- *   Alignment: Assignment and Notes left; Day, Course, Due Time, Priority and Status centered;
- *              every cell vertically centered.
+ *   By Day:    Assignment 160 | Class 80 | Status 116 | Notes 112 (pt)
+ *   By Class:  Assignment 160 | Due 80 | Status 116 | Notes 112 (pt)
+ *   Weekend:   Saturday or Sunday 80 (never scaled) | Assignment | Notes (the rest, split evenly)
+ *   Alignment: Assignment and Notes left; Class, Due and Status centered; every cell vertically
+ *              centered.
  *   Padding:   4 pt top and bottom, 5 pt left and right, in every cell.
  *   Text:      10 pt, #212121 in tables; assignment links #1a73e8.
- *   Header row (column names): #434343 background, bold white text, at least 22 pt tall.
+ *   Header row (column names): #EFEFEF background, bold #212121 text, at least 22 pt tall.
  *   Class heading row (By Class) and day row (By Day): merged across the full width, bold,
  *              at least 22 pt tall; the class color (COURSE_COLORS), or #B7B7B7 for days.
- *   Assignment row: class color on the first three cells, priority color (PRIORITY_COLORS)
- *              on Priority, white Status and Notes.
- *   "No assignments due this week." row: merged, white, italic #666666.
- *   Added by staff (bottom of every week tab, after By Day): heading, one help line, and a table
- *              Assignment 152 | Class 80 | Day 56 | Status 64 | Notes 116 (pt), header as above,
- *              white rows. Its rows are written back exactly as staff typed them (STAFF_*).
- *   Spacing:   each heading sits directly on its table; exactly one empty paragraph after
- *              every table. The Status/Notes help line above the tables is 10 pt, #444444.
+ *   Assignment row: white. The class color is only on the class heading row (By Class) and on
+ *              the Class cell (By Day); the Status chip is the only other color in a row.
+ *              Due is the day ("Tue 11/17"). A time other than 11:59 pm is added after the day
+ *              in By Class ("Tue 11/17, 8:00 am") and after the title in By Day ("(due 8:00 am)").
+ *   Status:    a dropdown chip (STATUS_OPTIONS), background / text: Need to Start #F4CCCC /
+ *              #990000, In progress #FFF2CC / #7F6000, Done/Submitted #D9EAD3 / #274E13.
+ *   Kept row:  an assignment that left Canvas, moved past these weeks or lost its due date says
+ *              why on a second line of its Assignment cell, in italic #666666.
+ *   By Day:    one help line under the heading. Monday to Friday are always listed; Saturday and
+ *              Sunday only when something is in them. Inside a day: the Canvas rows, then the
+ *              rows staff added (written back exactly as typed; an empty Class cell says "Added
+ *              by staff" in italic #666666), then one blank row that says "+ Add a to-do" in
+ *              italic #666666 (Monday to Friday only).
+ *   Weekend plan (after By Day): a heading, one help line, and a Saturday and a Sunday table.
+ *              Header row in the day's color (Saturday #C9DAF8, Sunday #D9EAD3), bold #212121;
+ *              rows Morning, Afternoon, Evening. Staff type in them; they're written back exactly.
+ *   By Class:  one table for each class with something due. Classes with nothing due are named
+ *              in one line after the last table ("Nothing due this week: Art, Chorus."), 10 pt
+ *              italic #666666; with nothing due at all it says "No assignments due this week."
+ *   Spacing:   each heading sits directly on its help line or table; exactly one empty paragraph
+ *              after every table. Help lines are 10 pt, #444444.
  */
 var LAYOUT_BASE_WIDTH_PT = 468;
-var BY_CLASS_WIDTHS = [128, 64, 56, 60, 64, 96];
-var BY_DAY_WIDTHS = [120, 80, 56, 60, 64, 88];
+var BY_DAY_WIDTHS = [160, 80, 116, 112];
+var BY_CLASS_WIDTHS = [160, 80, 116, 112];
+var WEEKEND_LABEL_WIDTH_PT = 80;
 var TABLE_FONT_PT = 10;
 var HELP_FONT_PT = 10;
 var HELP_FG = '#444444';
@@ -50,14 +67,6 @@ var CELL_PAD_SIDE_PT = 5;
 var ROW_MIN_HEIGHT_PT = 22;
 
 var PARENT_TAB_TITLE = 'CLC Planner';
-
-// "Added by staff": rows staff add for work that isn't on Canvas. Every update rewrites the week tab,
-// so this table is read first and written back exactly (text, paragraphs, links and text styles).
-var STAFF_TITLE = 'Added by staff';
-var STAFF_HELP_LINE = 'Add anything not on Canvas here. AutoPlanner never changes this table.';
-var STAFF_HEADERS = ['Assignment', 'Class', 'Day', 'Status', 'Notes'];
-var STAFF_WIDTHS = [152, 80, 56, 64, 116];
-var STAFF_EMPTY_ROWS = 2;
 
 /** Drive title: First Last - CLC Assignments */
 function buildDocumentTitle_(data) {
@@ -70,8 +79,11 @@ function buildDocumentTitle_(data) {
   }
   return title;
 }
+
 var DATA_FG = '#212121';
 var LINK_FG = '#1a73e8';
+// The blue Google Docs gives a link staff add themselves.
+var GOOGLE_LINK_FG = '#1155cc';
 
 // Pastels; uniqueness within a week is enforced in buildCourseColorMap_ (not hash-only).
 var COURSE_COLORS = [
@@ -108,39 +120,77 @@ var COURSE_COLORS = [
   '#FFCDD2',
 ];
 
-var PRIORITY_COLORS = {
-  Today: '#FF9999',
-  Tomorrow: '#FFB347',
-  'Due Soon': '#FFD966',
-  'This Week': '#93C47D',
-  Upcoming: '#A4C2F4',
-  'Past due': '#E0E0E0', // earlier this week; the same gray as Priority in Past weeks
-};
-
-var HEADER_BG = '#434343';
-var HEADER_FG = '#FFFFFF';
+var HEADER_BG = '#EFEFEF';
+var HEADER_FG = '#212121';
 var DAY_ROW_BG = '#B7B7B7';
 
 /*
  * Each week tab has:
- *   - a heading, the assignment count, and the Status/Notes help line;
- *   - "By Class": one table for EVERY class the student is enrolled in (a class with nothing due
- *     shows "No assignments due this week.");
- *   - "By Day": one table with every assignment, grouped by day.
- * Status and Notes are typed by staff and preserved across updates, keyed by the Canvas link.
+ *   - a heading and the assignment count;
+ *   - "By Day": one table with every assignment, grouped by day, where staff also add their own
+ *     to-dos;
+ *   - "Weekend plan": a Saturday and a Sunday table that only staff fill in;
+ *   - "By Class": one table for each class with something due this week.
+ * Status and Notes belong to staff and are kept across updates, keyed by the Canvas link.
  */
-var BY_CLASS_HEADERS = ['Assignment', 'Day', 'Due Time', 'Priority', 'Status', 'Notes'];
-var BY_DAY_HEADERS = ['Assignment', 'Course', 'Due Time', 'Priority', 'Status', 'Notes'];
-
-/* Default Status. Staff type Not started, In progress, or Complete (plain text, no symbols). */
-var STATUS_DEFAULT = 'Not started';
-var STATUS_HELP_LINE =
-  'Status: type Not started, In progress, or Complete. Notes: type anything you like. ' +
-  'AutoPlanner never changes these two columns.';
+var BY_DAY_TITLE = 'By Day';
+var BY_DAY_HEADERS = ['Assignment', 'Class', 'Status', 'Notes'];
+var BY_DAY_HELP_LINE =
+  'To add your own to-do, type in the "+ Add a to-do" row under any day. Need more than one? ' +
+  'Right-click a row and choose Insert row below. AutoPlanner keeps everything you add.';
+var BY_CLASS_TITLE = 'By Class';
+var BY_CLASS_HEADERS = ['Assignment', 'Due', 'Status', 'Notes'];
 var NO_ASSIGNMENTS_TEXT = 'No assignments due this week.';
+var NOTHING_DUE_PREFIX = 'Nothing due this week: ';
 
-/* White background marks columns the teacher manually edits (Status, Notes). */
-var EDITABLE_BG = '#FFFFFF';
+// By Day: the blank row at the end of each day, and what an empty Class cell of a staff row says.
+var ADD_TODO_TEXT = '+ Add a to-do';
+var ADDED_BY_STAFF_TEXT = 'Added by staff';
+
+// Weekend plan: two tables staff fill in. AutoPlanner writes back what it read, nothing else.
+var WEEKEND_TITLE = 'Weekend plan';
+var WEEKEND_HELP_LINE = 'Plan Saturday and Sunday here. AutoPlanner never changes these two tables.';
+var WEEKEND_TABLES = [
+  { day: 'Saturday', bg: '#C9DAF8' },
+  { day: 'Sunday', bg: '#D9EAD3' },
+];
+var WEEKEND_HEADERS = ['Assignment', 'Notes'];
+var WEEKEND_ROWS = ['Morning', 'Afternoon', 'Evening'];
+
+/*
+ * Status is a dropdown chip. Google keeps a dropdown's choices in the tab the chip is in, so every
+ * week tab gets its own copy of this one, always with the same IDs. An ID has a fixed start
+ * ("kix." or "dropdownItem.") and then 2 to 14 letters, digits, "_" or "-".
+ * The first choice is the default: a new assignment starts on it.
+ */
+var STATUS_DROPDOWN_ID = 'kix.clc_status';
+var STATUS_DROPDOWN_TITLE = 'Status';
+var STATUS_OPTIONS = [
+  { id: 'dropdownItem.need', label: 'Need to Start', bg: '#F4CCCC', fg: '#990000' },
+  { id: 'dropdownItem.progress', label: 'In progress', bg: '#FFF2CC', fg: '#7F6000' },
+  { id: 'dropdownItem.done', label: 'Done/Submitted', bg: '#D9EAD3', fg: '#274E13' },
+];
+var STATUS_DEFAULT = STATUS_OPTIONS[0].label;
+// What staff typed in the Status column before it was a dropdown, and what it means now. The first
+// three are the old choices; the rest are common ways of saying the same thing. Anything else goes
+// to the front of the row's note ("Status was: ...") and the chip starts on Need to Start.
+var OLD_STATUS_WORDS = {
+  'not started': 'Need to Start',
+  'in progress': 'In progress',
+  complete: 'Done/Submitted',
+  completed: 'Done/Submitted',
+  done: 'Done/Submitted',
+  submitted: 'Done/Submitted',
+  finished: 'Done/Submitted',
+  'turned in': 'Done/Submitted',
+  started: 'In progress',
+};
+var OLD_STATUS_NOTE_PREFIX = 'Status was: ';
+
+// The "Added by staff" table every week tab had before staff rows moved into By Day. It's only
+// read now: the first update moves its rows into By Day or the Weekend plan (see readStaffWork_).
+var OLD_STAFF_COLUMNS = 5;
+
 var MUTED_FG = '#666666';
 
 /* Requests per batchUpdate call; one call counts once against the per-minute write quota. */
@@ -226,18 +276,20 @@ function docsApiIsQuotaError_(err) {
 
 /**
  * Reads ask only for what AutoPlanner uses: every tab's title and ID; each tab's page size and
- * margins (for column widths); and the text, positions and links in it, with the text styles that
- * "Added by staff" keeps. Paragraph and cell styles, about 80% of a full read, are left out, and so
- * is the content of the week tabs inside "Past weeks" (the third tab level), which grow all year.
- * A read is about 5 times smaller (checked on a live Doc, 2026-10-06), and reads were most of
- * every update's time. Pass opts (e.g. { includeTabsContent: true }) for a full read.
+ * margins (for column widths); the text, positions and links in it, with the text styles kept for
+ * what staff typed; each Status chip and the choice picked in it; and the tab's dropdowns (to know
+ * whether it already has the Status one). Paragraph and cell styles, about 80% of a full read, are
+ * left out, and so is the content of the week tabs inside "Past weeks" (the third tab level), which
+ * grow all year. A read is about 5 times smaller (checked on a live Doc, 2026-10-06), and reads
+ * were most of every update's time. Pass opts (e.g. { includeTabsContent: true }) for a full read.
  */
 var DOCS_READ_TEXT_RUN = 'textRun(content,textStyle(bold,italic,underline,strikethrough,link,foregroundColor,backgroundColor))';
-var DOCS_READ_PARAGRAPH = 'paragraph(elements(startIndex,endIndex,' + DOCS_READ_TEXT_RUN + '))';
+var DOCS_READ_DROPDOWN = 'dropdown(dropdownId,dropdownProperties(dropdownDefinitionId,selectedOptionId,displayValue))';
+var DOCS_READ_PARAGRAPH = 'paragraph(elements(startIndex,endIndex,' + DOCS_READ_TEXT_RUN + ',' + DOCS_READ_DROPDOWN + '))';
 var DOCS_READ_TABLE = 'table(rows,columns,tableRows(startIndex,endIndex,tableCells(startIndex,endIndex,' +
   'content(startIndex,endIndex,' + DOCS_READ_PARAGRAPH + '))))';
-var DOCS_READ_TAB = 'documentTab(documentStyle(pageSize,marginLeft,marginRight),body/content(startIndex,endIndex,' +
-  DOCS_READ_PARAGRAPH + ',' + DOCS_READ_TABLE + ',sectionBreak/sectionStyle/sectionType))';
+var DOCS_READ_TAB = 'documentTab(documentStyle(pageSize,marginLeft,marginRight),dropdownDefinitions,' +
+  'body/content(startIndex,endIndex,' + DOCS_READ_PARAGRAPH + ',' + DOCS_READ_TABLE + ',sectionBreak/sectionStyle/sectionType))';
 var DOCS_GET_FIELDS = 'tabs(tabProperties,' + DOCS_READ_TAB + ',childTabs(tabProperties,' + DOCS_READ_TAB +
   ',childTabs(tabProperties)))';
 // The same, with Past weeks' content: read only when an assignment comes back from a filed week.
@@ -305,7 +357,7 @@ function docsBatchUpdate_(docId, requests) {
     try {
       paceDocsWrites_();
       var t0 = Date.now();
-      var reply = Docs.Documents.batchUpdate({ requests: requests }, docId);
+      var reply = sendDocsBatch_(docId, requests);
       if (updateStats_) {
         updateStats_.writes++;
         updateStats_.writeMs += Date.now() - t0;
@@ -322,6 +374,67 @@ function docsBatchUpdate_(docId, requests) {
     }
   }
   throw lastErr;
+}
+
+// Set once the Advanced Docs service has refused Status dropdown requests in this run; then every
+// batch with one goes straight to the REST API.
+var docsDropdownsViaRest_ = false;
+
+/**
+ * Sends one batch through the Advanced Docs service, like every other write. Status dropdowns are
+ * newer than that service: if it refuses the batch that adds a tab's dropdown, the same batch goes
+ * to the Docs REST API instead, and so does every later batch with a dropdown request in it.
+ * Only that first batch is ever sent twice, and it can't be applied twice: Docs refuses a second
+ * dropdown with the same ID in a tab. If the REST API refuses it too, the batch was wrong for some
+ * other reason, and the first error is the one reported.
+ */
+function sendDocsBatch_(docId, requests) {
+  var has = function (word) {
+    return requests.some(function (r) { return Object.keys(r || {}).join(' ').indexOf(word) >= 0; });
+  };
+  if (docsDropdownsViaRest_ && has('Dropdown')) return docsRestBatchUpdate_(docId, requests);
+  try {
+    return Docs.Documents.batchUpdate({ requests: requests }, docId);
+  } catch (e) {
+    if (!has('createDropdownDefinition') || docsApiIsQuotaError_(e)) throw e;
+    console.warn('The Advanced Docs service refused a batch with a Status dropdown (' + e + '). Trying the Docs REST API.');
+    var reply;
+    try {
+      paceDocsWrites_();
+      reply = docsRestBatchUpdate_(docId, requests);
+    } catch (restError) {
+      if (docsApiIsQuotaError_(restError)) throw restError;
+      console.warn('The Docs REST API refused it too (' + restError + ').');
+      throw e;
+    }
+    docsDropdownsViaRest_ = true;
+    return reply;
+  }
+}
+
+/**
+ * documents.batchUpdate through the Docs REST API, as the script's owner. It needs no permission the
+ * script doesn't already have (Docs, and "connect to an external service").
+ */
+function docsRestBatchUpdate_(docId, requests) {
+  var res = UrlFetchApp.fetch('https://docs.googleapis.com/v1/documents/' + encodeURIComponent(docId) + ':batchUpdate', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    payload: JSON.stringify({ requests: requests }),
+    muteHttpExceptions: true,
+  });
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code < 200 || code >= 300) {
+    var message = body;
+    try {
+      message = JSON.parse(body).error.message || body;
+    } catch (e) {}
+    // The code comes first, so a 429 is still seen as a quota error (docsApiIsQuotaError_).
+    throw new Error('Docs API ' + code + ': ' + String(message).slice(0, 300));
+  }
+  return JSON.parse(body);
 }
 
 function readJsonProperty_(key) {
@@ -499,7 +612,7 @@ function upsertPlannerDocument_(data) {
   // Never write a week that has ended (an update running across Sunday midnight would otherwise
   // make a blank copy of the week it just filed).
   var weekKeys = Object.keys(weeks).sort().filter(function (k) { return k >= scheduleWeekStart_(today); });
-  // Every class gets a table each week, in the same color every week.
+  // Every class keeps the same color every week.
   var courses = plannerCourseList_(data);
   var colorMap = buildCourseColorMap_(courses, readJsonProperty_('colors.' + docId));
   writeJsonProperty_('colors.' + docId, colorMap);
@@ -530,7 +643,10 @@ function upsertPlannerDocument_(data) {
     (weeks[k].days || []).forEach(function (d) {
       (d.assignments || []).forEach(function (a) {
         var last = a.url && !scheduleHasKey_(saved.status, a.url) ? lastWritten[assignmentKey_(a.url)] : null;
-        if (last && last.s) saved.status[a.url] = last.s;
+        if (!last || !last.s) return;
+        var settled = settleStatus_(last.s, saved.notes[a.url]);
+        saved.status[a.url] = settled.status;
+        if (settled.note) saved.notes[a.url] = settled.note;
       });
     });
   });
@@ -830,8 +946,6 @@ function nextChildTabInsertIndex_(parentTabJson) {
 // ---- Past weeks: ended week tabs move into one "Past weeks" tab, untouched -----------------
 var PAST_WEEKS_TITLE = 'Past weeks';
 var PAST_WEEKS_LINE = 'Every past week, with the Status and Notes typed during it. AutoPlanner never changes these.';
-// A past week's Priority colors no longer mean anything, so its Priority cells turn this gray.
-var PAST_PRIORITY_BG = '#E0E0E0';
 
 /** "Week of Oct 5 – Oct 11, 2026" gives '2026-10-05' (its Monday); any other tab title gives null. */
 function weekKeyFromTabTitle_(title) {
@@ -922,18 +1036,6 @@ function archivePastWeeks_(docId, parentTabId, today, readDoc) {
     pastId = addWeekChildTab_(docId, parentTabId, PAST_WEEKS_TITLE, parent.childTabs.length);
     docsBatchUpdate_(docId, [{ insertText: { text: PAST_WEEKS_LINE, location: { tabId: pastId, index: 1 } } }]);
   }
-  // Gray each week's Priority cells, then move it. Nothing in it changes after this. The gray is
-  // only a look, so if Google refuses it the week still moves.
-  var gray = [];
-  ended.forEach(function (w) {
-    var tab = parent.childTabs.filter(function (t) { return t.tabProperties.tabId === w.id; })[0];
-    gray = gray.concat(pastPriorityGrayRequests_(tab));
-  });
-  try {
-    docsBatchUpdate_(docId, gray);
-  } catch (err) {
-    console.warn('Past weeks: Priority not grayed: ' + err);
-  }
   docsBatchUpdate_(docId, archiveMoveRequests_(ended, pastId));
   rememberFiledAssignments_(docId, ended.map(function (w) {
     return { key: w.key, tab: parent.childTabs.filter(function (t) { return t.tabProperties.tabId === w.id; })[0] };
@@ -972,7 +1074,7 @@ function rememberFiledAssignments_(docId, filedWeeks, today, record) {
   var map = readFiled_(docId);
   filedWeeks.forEach(function (w) {
     eachAssignmentCopy_(w.tab, function (url, kind, status, note) {
-      if (status === STATUS_DEFAULT && !note) return;
+      if ((!status || status === STATUS_DEFAULT) && !note) return;
       var id = assignmentKey_(url);
       var last = (record || {})[id];
       map[id] = last && last.w === w.key ? last : { w: w.key };
@@ -1033,46 +1135,6 @@ function restoreFromPastWeeks_(docId, parentTabId, weeks, saved) {
   return n;
 }
 
-/**
- * Requests that turn one ended week's Priority cells gray (PAST_PRIORITY_BG), keeping their text.
- * Only cells under a "Priority" heading that hold a priority are changed: class names, day rows,
- * "No assignments" rows, Status and Notes are never touched.
- */
-function pastPriorityGrayRequests_(tabJson) {
-  var reqs = [];
-  if (!tabJson || !tabJson.documentTab || !tabJson.tabProperties) return reqs;
-  var tabId = tabJson.tabProperties.tabId;
-  (tabJson.documentTab.body.content || []).forEach(function (el) {
-    if (!el.table) return;
-    var rows = el.table.tableRows || [];
-    var header = -1;
-    var col = -1;
-    for (var r = 0; r < rows.length && col < 0; r++) {
-      var cells = rows[r].tableCells || [];
-      for (var c = 0; c < cells.length; c++) {
-        if (getCellText_(cells[c]) === 'Priority') { header = r; col = c; break; }
-      }
-    }
-    if (col < 0) return;
-    // Neighbouring priority rows share one request.
-    var start = -1;
-    var flush = function (end) {
-      if (start < 0) return;
-      reqs.push(cellStyleRequest_(tabId, toDocIndex_(el.startIndex), start, col, end - start + 1, 1,
-        { backgroundColor: optionalColorFromHex_(PAST_PRIORITY_BG) }, 'backgroundColor'));
-      start = -1;
-    };
-    for (var i = header + 1; i < rows.length; i++) {
-      var rowCells = rows[i].tableCells || [];
-      var hasPriority = rowCells.length > col && getCellText_(rowCells[col]) !== '';
-      if (hasPriority && start < 0) start = i;
-      if (!hasPriority) flush(i - 1);
-    }
-    flush(rows.length - 1);
-  });
-  return reqs;
-}
-
 /** The week tabs directly under CLC Planner whose week ended before `today`, oldest first. */
 function endedWeekTabs_(parentTabJson, today) {
   var thisMonday = scheduleWeekStart_(today);
@@ -1105,8 +1167,12 @@ function archiveMoveRequests_(ended, pastId) {
  * Each value can appear in several places: By Class and By Day in one tab, and (until the next
  * rebuild) more than one week. `written` says what AutoPlanner wrote last time for each assignment
  * (see readWritten_); a copy that differs from it is a staff edit, and an edit always wins. If
- * there's no record (or no edit), a typed value beats the default. Between several edits, the copy
- * from the week the assignment was in last time wins, then By Class, then the most recent week.
+ * there's no record (or no edit), a chosen value beats the first choice. Between several edits, the
+ * copy from the week the assignment was in last time wins, then By Class, then the most recent week.
+ *
+ * A Status cell with no chip and no text says nothing (staff deleted the chip): the other copy, or
+ * what was written last time, is used. A Status that isn't one of the three choices (typed before
+ * Status was a dropdown) moves to the start of the note (see settleStatus_).
  */
 function collectSavedData_(parentTabJson, written) {
   var record = written || {};
@@ -1130,14 +1196,19 @@ function collectSavedData_(parentTabJson, written) {
       if (ak !== bk) return ak - bk;
       return a.week < b.week ? 1 : a.week > b.week ? -1 : 0;
     };
-    var pick = function (get, fingerprint, writtenPrint) {
-      var edits = list.filter(function (c) { return fingerprint(get(c)) !== writtenPrint; }).sort(order);
-      return edits.length ? get(edits[0]) : get(list.slice().sort(order)[0]);
+    var pick = function (from, get, fingerprint, writtenPrint) {
+      var edits = from.filter(function (c) { return fingerprint(get(c)) !== writtenPrint; }).sort(order);
+      return edits.length ? get(edits[0]) : get(from.slice().sort(order)[0]);
     };
-    result.status[url] = pick(function (c) { return c.status; }, function (v) { return v; },
-      last ? last.s : STATUS_DEFAULT);
-    result.notes[url] = pick(function (c) { return c.note; }, noteFingerprint_,
-      last ? last.n : noteFingerprint_(''));
+    var lastStatus = last && last.s ? last.s : STATUS_DEFAULT;
+    var withStatus = list.filter(function (c) { return c.status !== ''; });
+    var status = withStatus.length
+      ? pick(withStatus, function (c) { return c.status; }, function (v) { return v; }, lastStatus)
+      : lastStatus;
+    var note = pick(list, function (c) { return c.note; }, noteFingerprint_, last ? last.n : noteFingerprint_(''));
+    var settled = settleStatus_(status, note);
+    result.status[url] = settled.status;
+    result.notes[url] = settled.note;
   });
   return result;
 }
@@ -1145,10 +1216,10 @@ function collectSavedData_(parentTabJson, written) {
 /**
  * Assignments that left the planner while their row had a Status or Note: removed or unpublished in
  * Canvas, given a due date outside these weeks, or no due date any more. Each stays in its week,
- * with its Status and Note, and its Priority cell says why ("Not on Canvas", "Now due Nov 30", "No
- * due date"), until it comes back (then its Status and Note follow it as usual) or the week ends.
+ * with its Status and Note, and a line under its title says why ("Not on Canvas", "Now due Nov 30",
+ * "No due date"), until it comes back (then its Status and Note follow it as usual) or the week ends.
  * Without this, a teacher unpublishing an assignment for a day would wipe the notes typed on it.
- * Gives back [{ week, item }], item shaped like a Canvas assignment.
+ * Gives back [{ week, item }], item shaped like a Canvas assignment plus kept_reason.
  */
 function keptAssignments_(parentTabJson, weeks, saved, elsewhere, today) {
   var onPlanner = {};
@@ -1180,7 +1251,7 @@ function keptAssignments_(parentTabJson, weeks, saved, elsewhere, today) {
         assignment: r.title,
         course: r.course || '(No Course)',
         due_time: r.dueTime,
-        priority: due === undefined ? KEPT_NOT_ON_CANVAS : due === '' ? KEPT_NO_DUE_DATE : 'Now due ' + scheduleShortDate_(due),
+        kept_reason: due === undefined ? KEPT_NOT_ON_CANVAS : due === '' ? KEPT_NO_DUE_DATE : 'Now due ' + scheduleShortDate_(due),
         days_until_due: null,
         due_date: scheduleAddDays_(r.week, SCHEDULE_WEEKDAY_NAMES.indexOf(day)),
         week_start: r.week,
@@ -1203,47 +1274,296 @@ function weekWithAssignment_(week, item) {
   return { week_label: week.week_label, days: days };
 }
 
+// ---- Reading a week tab ----------------------------------------------------------------------------
+
 /**
- * Calls fn({ url, kind, title, course, day, dueTime }) for every assignment row in a week tab. By
- * Class tables give the class (their first row) and the day; By Day gives the day from its day rows.
+ * How one of a week tab's tables is laid out, or null if AutoPlanner doesn't read it.
+ *   kind:   'day' (By Day), 'class' (a By Class table) or 'weekend' (a Weekend plan table)
+ *   status, notes: the columns that hold Status and Notes
+ *   old:    true for the six columns week tabs had before November 2026 (Assignment, Day or Course,
+ *           Due Time, Priority, Status, Notes). They're still read: that's how a Doc gets to this
+ *           layout without losing anything, and weeks filed in Past weeks keep the old one.
+ *   header: (By Day in this layout) the row with the column names
+ *   day:    (Weekend plan) 'Saturday' or 'Sunday', or '' if its first cell no longer says
+ * Tables are told apart by their number of columns, so one more column added at the right end of a
+ * table doesn't stop it being read. (A Weekend plan table with an added column is known by its
+ * header row: the day, then "Assignment".)
+ */
+function tableLayout_(table) {
+  var rows = table.tableRows || [];
+  var cols = table.columns || 0;
+  var text = function (r, c) {
+    var cells = (rows[r] && rows[r].tableCells) || [];
+    return cells.length > c ? getCellText_(cells[c]) : '';
+  };
+  var heads = [text(0, 1), text(1, 1)];
+  if (cols >= 6) return { kind: heads.indexOf('Course') >= 0 ? 'day' : 'class', status: 4, notes: 5, old: true };
+  var weekendDay = weekdayFromText_(text(0, 0));
+  if (cols === 3) return { kind: 'weekend', day: weekendTable_(weekendDay) ? weekendDay : '' };
+  if (cols === 4 || cols === 5) {
+    if (weekendTable_(text(0, 0)) && text(0, 1) === WEEKEND_HEADERS[0]) return { kind: 'weekend', day: text(0, 0) };
+    var header = heads.indexOf(BY_DAY_HEADERS[1]);
+    return header >= 0
+      ? { kind: 'day', status: 2, notes: 3, old: false, header: header }
+      : { kind: 'class', status: 2, notes: 3, old: false };
+  }
+  return null;
+}
+
+/** The Weekend plan table for 'Saturday' or 'Sunday' (see WEEKEND_TABLES), or null. */
+function weekendTable_(day) {
+  return WEEKEND_TABLES.filter(function (w) { return w.day === day; })[0] || null;
+}
+
+/**
+ * Every table in a week tab that AutoPlanner reads: [{ rows, layout }] (see tableLayout_). The old
+ * "Added by staff" table isn't one of them (see moveOldStaffRows_).
+ */
+function weekTabTables_(tabJson) {
+  var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
+  var oldStaff = findOldStaffTable_(tabJson);
+  var out = [];
+  content.forEach(function (el) {
+    var layout = el.table && el.table !== oldStaff ? tableLayout_(el.table) : null;
+    if (layout) out.push({ rows: el.table.tableRows || [], layout: layout });
+  });
+  return out;
+}
+
+/** By Class in this layout: Canvas link -> day. It tells By Day which of its rows are Canvas work. */
+/**
+ * What this layout's By Class tables say about the assignments in a week tab:
+ *   days:     { assignment link: the weekday in its Due cell }
+ *   titles:   { assignment link: its title (the linked words) }
+ *   unlinked: { title: true } for assignments Canvas gave no link for (rare). Their By Day rows have
+ *             no link either, and must not be taken for to-dos staff typed.
+ */
+function classTableRows_(tables) {
+  var found = { days: {}, titles: {}, unlinked: {} };
+  tables.forEach(function (t) {
+    if (t.layout.kind !== 'class' || t.layout.old) return;
+    t.rows.forEach(function (row, r) {
+      var cells = row.tableCells || [];
+      if (cells.length <= t.layout.notes) return;
+      var url = getCellLinkUrl_(cells[0]);
+      if (url && !scheduleHasKey_(found.days, url)) {
+        found.days[url] = weekdayFromText_(getCellText_(cells[1]));
+        found.titles[url] = cellLinkText_(cells[0]);
+      }
+      // Rows 0 and 1 are the class name and the column names.
+      if (!url && r > 1 && getCellText_(cells[0])) found.unlinked[getCellText_(cells[0])] = true;
+    });
+  });
+  return found;
+}
+
+/** True for a By Day row that shows a Canvas assignment without a link (see classTableRows_). */
+function isUnlinkedCanvasRow_(cells, unlinked) {
+  var text = getCellText_(cells[0]);
+  return scheduleHasKey_(unlinked, text) || scheduleHasKey_(unlinked, text.replace(/ \(due [^)]*\)$/, ''));
+}
+
+/**
+ * Calls fn({ url, kind, title, course, day, dueTime, status, note }) for every assignment row in a
+ * week tab; kind is 'class' or 'day'. By Class tables give the class (their first row) and the day;
+ * By Day gives the day from its day rows. status is '' when a Status cell holds no chip and no text.
+ * For selfTest the row also carries `text` (everything in its Assignment cell: the title, and under
+ * it the line that says why a row was kept) and its Status and Notes cells (statusCell, noteCell).
  */
 function eachAssignmentRow_(tabJson, fn) {
-  var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
-  content.forEach(function (el) {
-    if (!el.table || (el.table.columns || 0) < 6) return;
-    var rows = el.table.tableRows || [];
-    var isDay = rows.slice(0, 2).some(function (r) {
-      var c = r.tableCells || [];
-      return c.length > 1 && getCellText_(c[1]) === 'Course';
-    });
-    var first = rows.length && rows[0].tableCells && rows[0].tableCells.length ? rows[0].tableCells[0] : null;
-    var course = !isDay && first && !getCellLinkUrl_(first) ? getCellText_(first) : '';
-    var day = '';
-    rows.forEach(function (row) {
+  var tables = weekTabTables_(tabJson);
+  var fromClass = classTableRows_(tables);
+  tables.forEach(function (t) {
+    var L = t.layout;
+    if (L.kind !== 'class') return;
+    var first = t.rows.length && t.rows[0].tableCells && t.rows[0].tableCells.length ? t.rows[0].tableCells[0] : null;
+    var course = first && !getCellLinkUrl_(first) ? getCellText_(first) : '';
+    t.rows.forEach(function (row) {
       var cells = row.tableCells || [];
-      if (!cells.length) return;
-      var url = getCellLinkUrl_(cells[0]);
-      if (!url) {
-        if (isDay && SCHEDULE_WEEKDAY_NAMES.indexOf(getCellText_(cells[0])) >= 0) day = getCellText_(cells[0]);
-        return;
-      }
-      if (cells.length < 6) return;
+      var url = cells.length > L.notes ? getCellLinkUrl_(cells[0]) : null;
+      if (!url) return;
+      var due = getCellText_(cells[1]);
+      var day = L.old ? due : weekdayFromText_(due);
       fn({
         url: url,
-        kind: isDay ? 'day' : 'class',
-        title: getCellText_(cells[0]),
-        course: isDay ? getCellText_(cells[1]) : course,
-        day: isDay ? day : getCellText_(cells[1]),
-        dueTime: getCellText_(cells[2]),
+        kind: 'class',
+        title: cellLinkText_(cells[0]),
+        course: course,
+        day: day,
+        dueTime: L.old ? getCellText_(cells[2]) : dueTimeFromText_(due),
+        status: cellStatus_(cells[L.status], L.old),
+        note: getCellText_(cells[L.notes]),
+        text: getCellText_(cells[0]),
+        statusCell: cells[L.status],
+        noteCell: cells[L.notes],
       });
     });
+  });
+  tables.forEach(function (t) {
+    var L = t.layout;
+    if (L.kind !== 'day') return;
+    eachDayTableRow_(t, fromClass, function (cells, day) {
+      var title = cellLinkText_(cells[0]);
+      var whole = getCellText_(cells[0]);
+      fn({
+        url: getCellLinkUrl_(cells[0]),
+        kind: 'day',
+        title: title,
+        course: getCellText_(cells[1]),
+        day: day,
+        dueTime: L.old ? getCellText_(cells[2]) : dueTimeFromText_(whole.indexOf(title) === 0 ? whole.slice(title.length) : ''),
+        status: cellStatus_(cells[L.status], L.old),
+        note: getCellText_(cells[L.notes]),
+        text: whole,
+        statusCell: cells[L.status],
+        noteCell: cells[L.notes],
+      });
+    }, null);
   });
 }
 
 /**
- * Status and Notes typed into a week tab between two reads of it: { status: {url}, notes: {url} }
- * with the new values. Rows that weren't in the first read don't count. If both tables changed, By
- * Class wins.
+ * Walks one By Day table: onCanvas(cells, day) for each assignment row AutoPlanner wrote, and
+ * onStaff(cells, day) for every other row under the column names (the blank "+ Add a to-do" rows and
+ * the to-dos staff typed). Day rows only set the day.
+ *
+ * A row is Canvas work when its first link is also in one of this tab's By Class tables, because
+ * AutoPlanner writes every assignment in both. That way a to-do staff typed with a Canvas link in it
+ * stays theirs. If a link is in By Day twice (staff pasted it into a to-do in the same week), the
+ * Canvas row is the one under the assignment's own day with the assignment's title; the other one
+ * is the to-do. (Before November 2026 staff couldn't add rows here: every row with a link is Canvas
+ * work.)
+ * A Canvas assignment that came without a link can't keep a Status or Note, so its row is skipped.
+ */
+function eachDayTableRow_(t, fromClass, onCanvas, onStaff) {
+  var classDays = fromClass.days;
+  var L = t.layout;
+  var rows = t.rows.map(function (row) { return row.tableCells || []; });
+  var dayOf = [];
+  var isDayRow = [];
+  var day = '';
+  rows.forEach(function (cells, i) {
+    isDayRow[i] = cells.length > 0 && dayRowName_(cells, L) !== '';
+    if (isDayRow[i]) day = dayRowName_(cells, L);
+    dayOf[i] = day;
+  });
+  var canvasRow = {}; // link -> the row AutoPlanner wrote for it
+  var match = {}; // link -> how well that row fits (right day 2, right title 1)
+  rows.forEach(function (cells, i) {
+    var url = cells.length > L.notes && !isDayRow[i] ? getCellLinkUrl_(cells[0]) : null;
+    if (!url || !(L.old || scheduleHasKey_(classDays, url))) return;
+    if (L.old) { canvasRow[url + ' ' + i] = i; return; } // every linked row, as it always was
+    var fits = (dayOf[i] === classDays[url] ? 2 : 0) + (cellLinkText_(cells[0]) === fromClass.titles[url] ? 1 : 0);
+    if (!scheduleHasKey_(canvasRow, url) || fits > match[url]) { canvasRow[url] = i; match[url] = fits; }
+  });
+  rows.forEach(function (cells, i) {
+    if (cells.length <= L.notes || isDayRow[i] || (!L.old && i <= L.header)) return;
+    var url = getCellLinkUrl_(cells[0]);
+    var isCanvas = url && (L.old ? true : canvasRow[url] === i);
+    if (isCanvas) onCanvas(cells, dayOf[i]);
+    else if (!url && isUnlinkedCanvasRow_(cells, fromClass.unlinked)) return;
+    else if (!L.old && onStaff) onStaff(cells, dayOf[i]);
+  });
+}
+
+/**
+ * The weekday a By Day row announces ("Monday"), or '' if it isn't a day row. In this layout a day
+ * row is bold with nothing else in the row, so a to-do staff called "Monday" stays a to-do.
+ */
+function dayRowName_(cells, layout) {
+  var name = getCellText_(cells[0]);
+  if (SCHEDULE_WEEKDAY_NAMES.indexOf(name) < 0 || getCellLinkUrl_(cells[0])) return '';
+  if (layout.old) return name;
+  var others = cells.slice(1).some(function (c) { return getCellText_(c) || cellDropdown_(c); });
+  return !others && cellHasBold_(cells[0]) ? name : '';
+}
+
+function cellHasBold_(cell) {
+  return ((cell && cell.content) || []).some(function (se) {
+    return ((se.paragraph && se.paragraph.elements) || []).some(function (pe) {
+      return !!(pe.textRun && pe.textRun.textStyle && pe.textRun.textStyle.bold);
+    });
+  });
+}
+
+/** The text that carries a cell's first link: an assignment's title, without what's written after it. */
+function cellLinkText_(cell) {
+  var url = getCellLinkUrl_(cell);
+  var text = '';
+  ((cell && cell.content) || []).forEach(function (se) {
+    ((se.paragraph && se.paragraph.elements) || []).forEach(function (pe) {
+      var link = pe.textRun && pe.textRun.textStyle && pe.textRun.textStyle.link;
+      if (url && link && link.url === url) text += pe.textRun.content || '';
+    });
+  });
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/** The first dropdown chip in a cell, or null. */
+function cellDropdown_(cell) {
+  var found = null;
+  ((cell && cell.content) || []).forEach(function (se) {
+    ((se.paragraph && se.paragraph.elements) || []).forEach(function (pe) {
+      if (!found && pe.dropdown) found = pe.dropdown;
+    });
+  });
+  return found;
+}
+
+/**
+ * The Status in a cell: the chip's choice, or the text typed there (week tabs from before Status was
+ * a dropdown, or a cell whose chip staff deleted). Text beside a chip is ignored. '' means the cell
+ * says nothing; in the old layout an empty cell meant the first choice.
+ */
+function cellStatus_(cell, oldLayout) {
+  var chip = cellDropdown_(cell);
+  if (chip) {
+    var props = chip.dropdownProperties || {};
+    var option = statusOption_(props.selectedOptionId) || statusOption_(props.displayValue);
+    return option ? option.label : normalizeStatus_(props.displayValue);
+  }
+  return normalizeStatus_(getCellText_(cell)) || (oldLayout ? STATUS_DEFAULT : '');
+}
+
+/** The Status choice (see STATUS_OPTIONS) with this ID or this label in any case, or null. */
+function statusOption_(idOrLabel) {
+  var want = String(idOrLabel || '').toLowerCase();
+  return STATUS_OPTIONS.filter(function (o) { return o.id === idOrLabel || o.label.toLowerCase() === want; })[0] || null;
+}
+
+/**
+ * The weekday a few typed words mean, or '': "Tue", "tuesday", "TUES.", "Tue 11/17", "W", "by
+ * Friday". A single "T" or "S" could be two days, so it is none.
+ */
+function weekdayFromText_(text) {
+  var letters = String(text || '').toLowerCase().replace(/[^a-z]/g, '');
+  var names = SCHEDULE_WEEKDAY_NAMES.map(function (name) { return name.toLowerCase(); });
+  // It starts like a weekday ("tues", "wed", "thursday the 12th") or is the start of one ("th", "f").
+  var starts = SCHEDULE_WEEKDAY_NAMES.filter(function (name, i) {
+    return letters.indexOf(names[i].slice(0, 3)) === 0 || (letters && names[i].indexOf(letters) === 0);
+  });
+  if (starts.length === 1) return starts[0];
+  // Or a whole weekday name is somewhere in it ("by Friday").
+  return SCHEDULE_WEEKDAY_NAMES.filter(function (name, i) { return letters.indexOf(names[i]) >= 0; })[0] || '';
+}
+
+/** "8:00 AM" from "Tue 11/17, 8:00 am" or " (due 8:00 am)"; the usual 11:59 PM if no time is written. */
+function dueTimeFromText_(text) {
+  var m = /(\d{1,2}:\d{2})\s*([ap])m/i.exec(String(text || ''));
+  return m ? m[1] + ' ' + m[2].toUpperCase() + 'M' : END_OF_DAY_TIME;
+}
+var END_OF_DAY_TIME = '11:59 PM';
+
+/** '' for the usual 11:59 pm; any other due time the way the planner shows it ("8:00 am"). */
+function shownDueTime_(dueTime) {
+  var t = cellText_(dueTime);
+  return !t || scheduleTimeToMinutes_(t) === scheduleTimeToMinutes_(END_OF_DAY_TIME) ? '' : t.toLowerCase();
+}
+
+/**
+ * Status and Notes changed in a week tab between two reads of it: { status: {url}, notes: {url} }
+ * with the new values. Rows that weren't in the first read don't count, and neither does a Status
+ * cell that now says nothing. If both tables changed, By Class wins.
  */
 function changedSince_(beforeTab, nowTab) {
   var before = {};
@@ -1258,45 +1578,64 @@ function changedSince_(beforeTab, nowTab) {
   now.sort(function (a, b) { return (a.kind === 'day' ? 0 : 1) - (b.kind === 'day' ? 0 : 1); }).forEach(function (c) {
     var b = before[c.kind + ' ' + c.url];
     if (!b) return;
-    if (c.status !== b.status) out.status[c.url] = c.status;
+    if (c.status !== b.status && c.status !== '') out.status[c.url] = c.status;
     if (c.note !== b.note) out.notes[c.url] = c.note;
   });
   return out;
 }
 
 /** Puts changes from changedSince_ into `saved`; gives back how many values changed. */
+/** Puts changes from changedSince_ into `saved`; gives back how many values changed. */
 function applyChanges_(saved, changes) {
   var n = 0;
-  Object.keys(changes.status).forEach(function (u) { saved.status[u] = changes.status[u]; n++; });
   Object.keys(changes.notes).forEach(function (u) { saved.notes[u] = changes.notes[u]; n++; });
+  Object.keys(changes.status).forEach(function (u) {
+    var settled = settleStatus_(changes.status[u], saved.notes[u]);
+    saved.status[u] = settled.status;
+    saved.notes[u] = settled.note;
+    n++;
+  });
   return n;
 }
 
 /** Calls fn(url, 'class' | 'day', status, note) for every assignment row in a week tab. */
 function eachAssignmentCopy_(tabJson, fn) {
-  var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
-  content.forEach(function (el) {
-    if (!el.table || (el.table.columns || 0) < 6) return;
-    var rows = el.table.tableRows || [];
-    var isDay = rows.slice(0, 2).some(function (r) {
-      var c = r.tableCells || [];
-      return c.length > 1 && getCellText_(c[1]) === 'Course';
-    });
-    rows.forEach(function (row) {
-      var cells = row.tableCells || [];
-      if (cells.length < 6) return;
-      var url = getCellLinkUrl_(cells[0]);
-      if (!url) return;
-      fn(url, isDay ? 'day' : 'class', normalizeStatus_(getCellText_(cells[4])) || STATUS_DEFAULT, getCellText_(cells[5]));
-    });
-  });
+  eachAssignmentRow_(tabJson, function (row) { fn(row.url, row.kind, row.status, row.note); });
+}
+
+/**
+ * The Status a piece of text means: one of the three choices (see STATUS_OPTIONS) for their own
+ * names and for the words staff typed before Status was a dropdown ("Complete", "done"); any other
+ * text comes back as typed, without symbols in front. '' for nothing.
+ */
+function normalizeStatus_(text) {
+  var t = String(text || '').replace(/^[^A-Za-z0-9]+/, '').replace(/\s+/g, ' ').trim();
+  var option = statusOption_(t);
+  if (option) return option.label;
+  var word = t.toLowerCase();
+  return Object.prototype.hasOwnProperty.call(OLD_STATUS_WORDS, word) ? OLD_STATUS_WORDS[word] : t;
+}
+
+/**
+ * Status is one of three choices. Anything else staff typed in a Status cell before it was a
+ * dropdown isn't lost: it moves to the start of the row's note ("Status was: Waiting on teacher.")
+ * and the Status becomes the first choice. Gives back { status, note }.
+ */
+function settleStatus_(status, note) {
+  var text = String(note || '');
+  var option = statusOption_(status);
+  if (option || !status) return { status: option ? option.label : STATUS_DEFAULT, note: text };
+  var moved = OLD_STATUS_NOTE_PREFIX + status + '.';
+  if (text.indexOf(moved) === 0) return { status: STATUS_DEFAULT, note: text };
+  return { status: STATUS_DEFAULT, note: moved + (text ? ' ' + text : '') };
 }
 
 // ---- What AutoPlanner wrote last time, per Doc (one Script Property, "written.<docId>") ----------
 // { "<assignment id>": "<week yyyymmdd><Status><Notes fingerprint>" }, e.g. "20261005I1x9k2" for the
-// week of Oct 5, "In progress" and a note. The three usual Statuses are one letter (N, I, C); any
-// other text is kept between "|"s. About 28 characters per assignment. The record only covers the
-// current and upcoming weeks, so it doesn't grow over the year.
+// week of Oct 5, "In progress" and a note. The three Statuses are one letter (N, I, D). Records
+// written before Status was a dropdown are still read: C for "Complete", and any other text staff
+// typed, kept between "|"s. About 28 characters per assignment. The record only covers the current
+// and upcoming weeks, so it doesn't grow over the year.
 
 function assignmentKey_(url) {
   var m = /\/assignments\/(\d+)/.exec(String(url || ''));
@@ -1314,7 +1653,7 @@ function noteFingerprint_(note) {
   return s ? h.toString(36) : '';
 }
 
-var WRITTEN_STATUS_CODES = { 'Not started': 'N', 'In progress': 'I', Complete: 'C' };
+var WRITTEN_STATUS_CODES = { 'Need to Start': 'N', 'In progress': 'I', 'Done/Submitted': 'D' };
 
 /** "<week yyyymmdd><Status code><Notes fingerprint>" from { w, s, n }. */
 function encodeWritten_(record) {
@@ -1324,15 +1663,15 @@ function encodeWritten_(record) {
 
 /** { w, s, n } from an encoded record (or a record in the first, longer format). */
 function decodeWritten_(v) {
-  if (v && typeof v === 'object') return v;
+  if (v && typeof v === 'object') return { w: v.w, s: normalizeStatus_(v.s) || STATUS_DEFAULT, n: v.n };
   var str = String(v || '');
   var w = str.slice(0, 4) + '-' + str.slice(4, 6) + '-' + str.slice(6, 8);
   var rest = str.slice(8);
   if (rest.charAt(0) === '|') {
     var end = rest.indexOf('|', 1);
-    return { w: w, s: rest.slice(1, end), n: rest.slice(end + 1) };
+    return { w: w, s: normalizeStatus_(rest.slice(1, end)) || STATUS_DEFAULT, n: rest.slice(end + 1) };
   }
-  var names = { N: 'Not started', I: 'In progress', C: 'Complete' };
+  var names = { N: 'Need to Start', I: 'In progress', C: 'Done/Submitted', D: 'Done/Submitted' };
   return { w: w, s: names[rest.charAt(0)] || STATUS_DEFAULT, n: rest.slice(1) };
 }
 
@@ -1634,27 +1973,17 @@ function clearTabBodyDocsApi_(docId, tabId) {
 //      "N assignments this week · M due today or tomorrow." and "Open this week →" (a tab link)
 //      Class | This week | Next due table (full width: 288 | 80 | 100 pt at 468 pt)
 //   ── HOW THIS DOC WORKS (Heading 4 with a thin rule above), a numbered list of 3 lines
-//   PRIORITY COLORS (Heading 4): a swatch for each priority with its rule
 //   Footer (9 pt, #666666)
 var HOME_SUBTITLE = 'CLC PLANNER · SUPPORTED STUDY HALL';
 var HOME_FOOTER = 'Built by the Pomfret Civic AI Club · Questions: Cayden Auyang or Luke Ryan';
 var HOME_HOW_LINES = [
   'Each week has its own tab in the left sidebar.',
-  'Status: type Not started, In progress, or Complete. Notes: type anything. AutoPlanner never changes these two columns.',
+  'Click a Status to change it. To add your own to-do, type in the "' + ADD_TODO_TEXT + '" row under any day. Notes, your own to-dos and the Weekend plan are yours: AutoPlanner never changes them.',
   'It updates every day at about 7 pm and midnight. Edits anywhere else get replaced.',
-];
-// The priority rules from schedulePriority_ in Canvas.gs (days until the due date).
-var HOME_PRIORITY_RULES = [
-  ['Today', 'Today'],
-  ['Tomorrow', 'Tomorrow'],
-  ['Due Soon', 'Due Soon, 2–3 days'],
-  ['This Week', 'This Week, 4–7 days'],
-  ['Upcoming', 'Upcoming, 8+ days'],
 ];
 var HOME_CLASS_HEADERS = ['Class', 'This week', 'Next due'];
 var HOME_CLASS_WIDTHS = [288, 80, 100];
 var HOME_RULE_FG = '#BFBFBF'; // thin gray rules (the text color at about 25% on white)
-var HOME_SWATCH = '   '; // three no-break spaces, shaded with the priority color
 
 /**
  * Rebuilds the home tab. Runs after the week tabs, so "Open this week" can link to its tab. Uses
@@ -1803,7 +2132,7 @@ function buildHomeTabRequests_(tabId, summary, weekTabId, contentWidth, colorMap
       ? plural(summary.weekCount) + ' this week · ' + summary.soonCount + ' due today or tomorrow.'
       : 'Nothing is due this week. ' + summary.soonCount + ' due today or tomorrow.';
   }
-  // Rows staff typed into this week's "Added by staff" table, if any.
+  // The to-dos and Weekend plan rows staff added to this week, if any.
   if (summary.staffCount) summaryLine = summaryLine.replace(/\.$/, '') + ' · ' + summary.staffCount + ' added by staff.';
   var a = [summary.name, HOME_SUBTITLE];
   // The student's CLC teacher, if they have one (nothing for Unassigned).
@@ -1841,25 +2170,15 @@ function buildHomeTabRequests_(tabId, summary, weekTabId, contentWidth, colorMap
     next = at + 1;
   }
 
-  // 3. How this Doc works, priority colors, footer: written into the paragraph after the table.
-  var legend = [];
-  HOME_PRIORITY_RULES.forEach(function (r, i) { legend.push((i ? '   ' : '') + HOME_SWATCH + ' ' + r[1]); });
-  var b = ['HOW THIS DOC WORKS'].concat(HOME_HOW_LINES, ['PRIORITY COLORS', legend.join(''), HOME_FOOTER]);
+  // 3. How this Doc works and the footer: written into the paragraph after the table.
+  var b = ['HOW THIS DOC WORKS'].concat(HOME_HOW_LINES, [HOME_FOOTER]);
   var bStart = insertLines(next, b);
   var bEnd = function (i) { return bStart[i] + b[i].length; };
   para(bStart[0], bEnd(0) + 1, { namedStyleType: 'HEADING_4', borderTop: rule, spaceAbove: pt(18) }, 'namedStyleType,borderTop,spaceAbove');
   reqs.push({ createParagraphBullets: { range: range(bStart[1], bEnd(3) + 1), bulletPreset: 'NUMBERED_DECIMAL_ALPHA_ROMAN' } });
   text(bStart[1], bEnd(3), { foregroundColor: color(DATA_FG) }, 'foregroundColor');
-  para(bStart[4], bEnd(4) + 1, { namedStyleType: 'HEADING_4' }, 'namedStyleType');
-  text(bStart[5], bEnd(5), { fontSize: pt(10), foregroundColor: color(DATA_FG) }, 'fontSize,foregroundColor');
-  var pos = bStart[5];
-  HOME_PRIORITY_RULES.forEach(function (r, i) {
-    if (i) pos += 3;
-    text(pos, pos + HOME_SWATCH.length, { backgroundColor: color(PRIORITY_COLORS[r[0]]) }, 'backgroundColor');
-    pos += HOME_SWATCH.length + 1 + r[1].length;
-  });
-  para(bStart[6], bEnd(6) + 1, { spaceAbove: pt(28) }, 'spaceAbove');
-  text(bStart[6], bEnd(6), { fontSize: pt(9), foregroundColor: color(MUTED_FG) }, 'fontSize,foregroundColor');
+  para(bStart[4], bEnd(4) + 1, { spaceAbove: pt(28) }, 'spaceAbove');
+  text(bStart[4], bEnd(4), { fontSize: pt(9), foregroundColor: color(MUTED_FG) }, 'fontSize,foregroundColor');
   return reqs;
 }
 
@@ -1922,12 +2241,11 @@ function appendHomeClassTable_(reqs, tabId, at, rows, widths, colorMap, headers)
   // Header row, as in the week tables.
   reqs.push(cellStyleRequest_(tabId, tableStart, 0, 0, 1, C, { backgroundColor: optionalColorFromHex_(HEADER_BG) }, 'backgroundColor'));
   reqs.push(textStyleRequest_(range(start[0][0], cellEnd(0, C - 1)), { bold: true, foregroundColor: optionalColorFromHex_(HEADER_FG) }, 'bold,foregroundColor'));
-  // Class name on its class color; the two number columns centered.
+  // Class name on its class color; the two other columns centered.
   for (r = 0; r < R; r++) {
     reqs.push({ updateParagraphStyle: { range: range(start[r][1], cellEnd(r, C - 1) + 1), paragraphStyle: { alignment: 'CENTER' }, fields: 'alignment' } });
     if (r > 0) {
       reqs.push(cellStyleRequest_(tabId, tableStart, r, 0, 1, 1, { backgroundColor: optionalColorFromHex_(colorMap[rows[r - 1].course] || '#EAEDED') }, 'backgroundColor'));
-      reqs.push(cellStyleRequest_(tabId, tableStart, r, 1, 1, 2, { backgroundColor: optionalColorFromHex_(EDITABLE_BG) }, 'backgroundColor'));
     }
   }
   reqs.push({
@@ -1996,15 +2314,17 @@ function tabBodyHasHeavyContent_(tabJson) {
     if (content[i].table) return true;
   }
   if (content.length > 3) return true;
+  // A tab that already has the Status dropdown can't be given it again, so it's replaced too.
+  if (Object.keys(tabJson.documentTab.dropdownDefinitions || {}).length) return true;
   var plain = tabBodyPlainText_(tabJson.documentTab.body).replace(/\s/g, '');
   return plain.length > 60;
 }
 
 /**
- * Writes one week tab from scratch: a heading, the help line, one table per class, and the By Day
- * table. The tab has just been created or cleared, so it holds one empty paragraph at index 1.
+ * Writes one week tab from scratch: By Day, the Weekend plan and By Class (see weekTabBlocks_),
+ * with the Status and Notes in `saved` and everything staff added to the tab themselves.
  * If `out` is given, out.doc is a read of the Doc as it is afterwards (or null), so the next week
- * doesn't have to read it again.
+ * doesn't have to read it again. Returns how many to-dos and weekend rows staff have in the tab.
  */
 function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekData, courses, colorMap, saved, snapshot, readDoc, out) {
   if (out) out.doc = null;
@@ -2017,8 +2337,8 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
   var before = snapshot ? findTabJsonById_({ tabs: [snapshot] }, tabId) : null;
   if (before && tabProbe) applyChanges_(savedData, changedSince_(before, tabProbe));
   var width = tabContentWidth_(tabProbe);
-  // "Added by staff" rows, read from the tab now so they're written back exactly.
-  var staffRows = readStaffRows_(tabProbe);
+  // Staff's own to-dos and Weekend plan, read from the tab now so they're written back exactly.
+  var staff = readStaffWork_(tabProbe);
 
   var parentJson = findTabJsonById_(docProbe, parentTabId);
   var oldTabId = null;
@@ -2037,26 +2357,23 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
     sleepDocsChunkGap_();
   }
 
-  var requests = buildWeekTabRequests_(
-    tabId, weekKey, weekData, courses, colorMap, savedData, width, staffRows
-  );
-  batchUpdateChunked_(docId, requests);
+  batchUpdateChunked_(docId, buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, savedData, width, staff));
 
   if (oldTabId) {
-    // A last look at the old tab: if staff typed in it while the new one was being written (in
-    // Status, Notes or the "Added by staff" table), write the new one again with their edits
-    // (once; the window is only a few seconds).
+    // A last look at the old tab: if staff changed it while the new one was being written (a
+    // Status, a note, one of their own to-dos or its Status, the Weekend plan), write the new one
+    // again with their edits (once; the window is only a few seconds).
     var lastRead = docsGet_(docId);
     var oldNow = findTabJsonById_(lastRead, oldTabId);
-    var staffNow = oldNow ? readStaffRows_(oldNow) : staffRows;
-    var staffChanged = JSON.stringify(staffNow) !== JSON.stringify(staffRows);
-    if (staffChanged) staffRows = staffNow;
+    var staffNow = oldNow ? readStaffWork_(oldNow) : staff;
+    var staffChanged = JSON.stringify(staffNow) !== JSON.stringify(staff);
+    if (staffChanged) staff = staffNow;
     if (oldNow && (applyChanges_(savedData, changedSince_(tabProbe, oldNow)) || staffChanged)) {
       lastRead = null; // the tab is written again below, so this read is out of date
       docsBatchUpdate_(docId, [{ deleteTab: { tabId: tabId } }]);
       tabId = addWeekChildTab_(docId, parentTabId, tempTitle, at >= 0 ? at + 1 : nextChildTabInsertIndex_(parentJson));
       sleepDocsChunkGap_();
-      batchUpdateChunked_(docId, buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, savedData, width, staffRows));
+      batchUpdateChunked_(docId, buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, savedData, width, staff));
     }
     // One batch, all or nothing (checked live): the old tab goes, and the new one takes its title
     // and its place in the sidebar.
@@ -2066,7 +2383,7 @@ function fillWeekTabDocsApi_(docId, parentTabId, tabTitle, tabId, weekKey, weekD
     ]);
     if (out && lastRead) out.doc = swapInRead_(lastRead, parentTabId, oldTabId, tabId, tabTitle);
   }
-  return countStaffRows_(staffRows);
+  return countStaffWork_(staff);
 }
 
 /**
@@ -2120,194 +2437,477 @@ function cellText_(value) {
 
 /**
  * Every Docs API request for one week tab, in order. Pure: it reads nothing, so the whole tab is
- * written in a few batchUpdate calls. Positions follow from how Docs numbers a fresh table
- * (checked against the live API): a table inserted at index i starts at i + 1, cell (r, c) holds
- * an empty paragraph at i + 4 + r*(2C + 1) + 2c, and the empty paragraph Docs adds after the
- * table sits at i + 3 + R*(2C + 1). Merging cells doesn't move any index.
+ * written in a few batchUpdate calls. The tab has just been created or cleared, so it holds one
+ * empty paragraph at index 1 and no Status dropdown yet. `staff` is what readStaffWork_ found in
+ * the tab before; it's written back exactly.
  */
-function buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, saved, contentWidth, staffRows) {
-  var reqs = [];
-  var days = weekData.days || [];
+function buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, saved, contentWidth, staff) {
+  var reqs = [statusDropdownRequest_(tabId)];
   var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
-  var named = function (s, e, type) {
-    reqs.push({ updateParagraphStyle: { range: range(s, e), paragraphStyle: { namedStyleType: type }, fields: 'namedStyleType' } });
-  };
-
-  // 1. The text above the tables, typed into the tab's empty paragraph at index 1.
-  var lines = [
-    'Week of ' + (weekData.week_label || weekKey),
-    'Assignments in this week: ' + countAssignmentsInWeek_(days),
-    STATUS_HELP_LINE,
-    'By Class',
-  ];
-  reqs.push({ insertText: { text: lines.join('\n'), location: { tabId: tabId, index: 1 } } });
-  var starts = [];
-  var pos = 1;
-  lines.forEach(function (line) { starts.push(pos); pos += line.length + 1; });
-  named(starts[0], starts[0] + lines[0].length + 1, 'HEADING_2');
-  named(starts[1], starts[1] + lines[1].length + 1, 'NORMAL_TEXT');
-  named(starts[2], starts[2] + lines[2].length + 1, 'NORMAL_TEXT');
-  named(starts[3], starts[3] + lines[3].length + 1, 'HEADING_3');
-  reqs.push(textStyleRequest_(range(starts[1], starts[1] + lines[1].length), { italic: true, foregroundColor: optionalColorFromHex_(DATA_FG) }, 'italic,foregroundColor'));
-  reqs.push(textStyleRequest_(range(starts[2], starts[2] + lines[2].length), { fontSize: { magnitude: HELP_FONT_PT, unit: 'PT' }, foregroundColor: optionalColorFromHex_(HELP_FG) }, 'fontSize,foregroundColor'));
-  var at = pos - 1; // the "By Class" heading's newline: the first table goes right under it
-
-  // 2. One table per class, A to Z. Each is followed by exactly one empty paragraph, and the
-  //    next table is inserted at that paragraph, so the spacing is the same after every table.
-  var classWidths = scaledColumnWidths_(BY_CLASS_WIDTHS, contentWidth);
-  var groups = groupAssignmentsByCourse_(days, courses);
-  groups.forEach(function (g) {
-    var color = colorMap[g.course] || '#EAEDED';
-    var rows = [
-      { kind: 'title', cells: [g.course], bg: color },
-      { kind: 'header', cells: BY_CLASS_HEADERS.slice() },
-    ];
-    if (!g.assignments.length) rows.push({ kind: 'empty', cells: [NO_ASSIGNMENTS_TEXT] });
-    g.assignments.forEach(function (a) {
-      rows.push(assignmentRow_(a, a.day, color, saved));
+  var blocks = weekTabBlocks_(weekKey, weekData, courses, colorMap, saved, contentWidth, staff);
+  var at = 1; // the newline of the last paragraph written so far
+  var afterTable = false;
+  var i = 0;
+  while (i < blocks.length) {
+    if (blocks[i].table) {
+      // A table is followed by exactly one empty paragraph. The next table or line goes in at
+      // that paragraph, so the spacing is the same after every table.
+      at = appendTable_(reqs, tabId, at, blocks[i].table);
+      afterTable = true;
+      i++;
+      continue;
+    }
+    // Lines that follow each other are typed in one go: into the tab's empty first paragraph, or
+    // on new lines below the empty paragraph after a table.
+    var lines = [];
+    while (i < blocks.length && !blocks[i].table) lines.push(blocks[i++]);
+    var text = lines.map(function (l) { return l.line; }).join('\n');
+    reqs.push({ insertText: { text: (afterTable ? '\n' : '') + text, location: { tabId: tabId, index: at } } });
+    var pos = afterTable ? at + 1 : at;
+    lines.forEach(function (l) {
+      var look = LINE_LOOKS[l.look];
+      reqs.push({ updateParagraphStyle: { range: range(pos, pos + l.line.length + 1), paragraphStyle: { namedStyleType: look.named }, fields: 'namedStyleType' } });
+      if (look.style) reqs.push(textStyleRequest_(range(pos, pos + l.line.length), look.style(), look.fields));
+      pos += l.line.length + 1;
     });
-    at = appendTable_(reqs, tabId, at, rows, classWidths);
-  });
-
-  // 3. "By Day": a spacer paragraph, the heading, then one table grouped by day.
-  reqs.push({ insertText: { text: '\nBy Day', location: { tabId: tabId, index: at } } });
-  named(at + 1, at + 8, 'HEADING_3');
-  at += 7;
-  var dayRows = [{ kind: 'header', cells: BY_DAY_HEADERS.slice() }];
-  flattenAndGroupByDay_(days).forEach(function (g) {
-    dayRows.push({ kind: 'group', cells: [g.day], bg: DAY_ROW_BG });
-    g.assignments.forEach(function (a) {
-      dayRows.push(assignmentRow_(a, a.course, colorMap[a.course] || '#EAEDED', saved));
-    });
-  });
-  if (dayRows.length === 1) dayRows.push({ kind: 'empty', cells: [NO_ASSIGNMENTS_TEXT] });
-  at = appendTable_(reqs, tabId, at, dayRows, scaledColumnWidths_(BY_DAY_WIDTHS, contentWidth));
-
-  // 4. "Added by staff": a spacer paragraph, the heading, the help line, then the table.
-  reqs.push({ insertText: { text: '\n' + STAFF_TITLE + '\n' + STAFF_HELP_LINE, location: { tabId: tabId, index: at } } });
-  named(at + 1, at + 2 + STAFF_TITLE.length, 'HEADING_3');
-  var helpAt = at + 2 + STAFF_TITLE.length;
-  reqs.push(textStyleRequest_(range(helpAt, helpAt + STAFF_HELP_LINE.length), { fontSize: { magnitude: HELP_FONT_PT, unit: 'PT' }, foregroundColor: optionalColorFromHex_(HELP_FG) }, 'fontSize,foregroundColor'));
-  appendStaffTable_(reqs, tabId, helpAt + STAFF_HELP_LINE.length, staffRows, scaledColumnWidths_(STAFF_WIDTHS, contentWidth));
+    at = pos - 1;
+    afterTable = false;
+  }
   return reqs;
 }
 
-/**
- * The "Added by staff" table, inserted at `at` (a paragraph's newline): the header, then each row
- * exactly as it was read (readStaffRows_), or STAFF_EMPTY_ROWS empty rows for a new week. Same
- * position math as appendTable_, for 5 columns; a cell is { text, runs: [{ s, e, style }] } and
- * its text may hold paragraph breaks. Returns the index of the empty paragraph after the table.
- */
-function appendStaffTable_(reqs, tabId, at, staffRows, widths) {
-  var C = STAFF_HEADERS.length;
-  var blank = function () {
-    var r = [];
-    for (var c = 0; c < C; c++) r.push({ text: '', runs: [] });
-    return r;
-  };
-  var data = staffRows && staffRows.length ? staffRows : [];
-  if (!data.length) for (var k = 0; k < STAFF_EMPTY_ROWS; k++) data.push(blank());
-  var rows = [STAFF_HEADERS.map(function (h) { return { text: h, runs: [] }; })].concat(data);
-  var R = rows.length;
-  var tableStart = at + 1;
-  var emptyAfter = at + 3 + R * (2 * C + 1);
-  var emptyIndex = function (r, c) { return at + 4 + r * (2 * C + 1) + 2 * c; };
-  var cell = function (r, c) { return rows[r][c] || { text: '', runs: [] }; };
-  var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
-  var color = function (hex) { return optionalColorFromHex_(hex); };
+// How each kind of line outside the tables looks: its paragraph style and, for some, a text style.
+var LINE_LOOKS = {
+  h2: { named: 'HEADING_2' },
+  h3: { named: 'HEADING_3' },
+  count: {
+    named: 'NORMAL_TEXT',
+    style: function () { return { italic: true, foregroundColor: optionalColorFromHex_(DATA_FG) }; },
+    fields: 'italic,foregroundColor',
+  },
+  help: {
+    named: 'NORMAL_TEXT',
+    style: function () { return { fontSize: { magnitude: HELP_FONT_PT, unit: 'PT' }, foregroundColor: optionalColorFromHex_(HELP_FG) }; },
+    fields: 'fontSize,foregroundColor',
+  },
+  muted: {
+    named: 'NORMAL_TEXT',
+    style: function () { return { fontSize: { magnitude: HELP_FONT_PT, unit: 'PT' }, italic: true, foregroundColor: optionalColorFromHex_(MUTED_FG) }; },
+    fields: 'fontSize,italic,foregroundColor',
+  },
+};
 
-  reqs.push({ insertTable: { rows: R, columns: C, location: { tabId: tabId, index: at } } });
-  reqs.push({ updateParagraphStyle: { range: { tabId: tabId, startIndex: emptyAfter, endIndex: emptyAfter + 1 }, paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, fields: 'namedStyleType' } });
-  for (var r = R - 1; r >= 0; r--) {
-    for (var c = C - 1; c >= 0; c--) {
-      if (cell(r, c).text) reqs.push({ insertText: { text: cell(r, c).text, location: { tabId: tabId, index: emptyIndex(r, c) } } });
-    }
-  }
-  var start = [];
-  var shift = 0;
-  for (r = 0; r < R; r++) {
-    start.push([]);
-    for (c = 0; c < C; c++) {
-      start[r].push(emptyIndex(r, c) + shift);
-      shift += cell(r, c).text.length;
-    }
-  }
-  var cellEnd = function (r, c) { return start[r][c] + cell(r, c).text.length; };
-
-  reqs.push(cellStyleRequest_(tabId, tableStart, 0, 0, R, C, {
-    paddingTop: { magnitude: CELL_PAD_TOP_BOTTOM_PT, unit: 'PT' },
-    paddingBottom: { magnitude: CELL_PAD_TOP_BOTTOM_PT, unit: 'PT' },
-    paddingLeft: { magnitude: CELL_PAD_SIDE_PT, unit: 'PT' },
-    paddingRight: { magnitude: CELL_PAD_SIDE_PT, unit: 'PT' },
-    contentAlignment: 'MIDDLE',
-  }, 'paddingTop,paddingBottom,paddingLeft,paddingRight,contentAlignment'));
-  widths.forEach(function (w, i) {
-    reqs.push({
-      updateTableColumnProperties: {
-        tableStartLocation: { tabId: tabId, index: tableStart },
-        columnIndices: [i],
-        tableColumnProperties: { widthType: 'FIXED_WIDTH', width: { magnitude: w, unit: 'PT' } },
-        fields: 'widthType,width',
+/** Creates the Status dropdown (its three choices and their colors) in one tab. */
+function statusDropdownRequest_(tabId) {
+  return {
+    createDropdownDefinition: {
+      tabId: tabId,
+      dropdownDefinition: {
+        dropdownDefinitionId: STATUS_DROPDOWN_ID,
+        dropdownDefinitionProperties: {
+          title: STATUS_DROPDOWN_TITLE,
+          options: STATUS_OPTIONS.map(function (o) {
+            return {
+              optionId: o.id,
+              displayValue: o.label,
+              textStyle: { backgroundColor: optionalColorFromHex_(o.bg), foregroundColor: optionalColorFromHex_(o.fg) },
+            };
+          }),
+        },
       },
-    });
+    },
+  };
+}
+
+/**
+ * Everything a week tab shows, top to bottom, as a list of blocks:
+ *   { line, look }   one line of text; look is a key of LINE_LOOKS
+ *   { table }        a table (see appendTable_)
+ * buildWeekTabRequests_ turns the blocks into Docs requests. Keeping the two steps apart keeps the
+ * "what goes where" rules below free of position math.
+ */
+function weekTabBlocks_(weekKey, weekData, courses, colorMap, saved, contentWidth, staff) {
+  var days = weekData.days || [];
+  var work = staff || readStaffWork_(null);
+  var blocks = [
+    { line: 'Week of ' + (weekData.week_label || weekKey), look: 'h2' },
+    { line: 'Assignments in this week: ' + countAssignmentsInWeek_(days), look: 'count' },
+    { line: BY_DAY_TITLE, look: 'h3' },
+    { line: BY_DAY_HELP_LINE, look: 'help' },
+    { table: byDayTable_(days, colorMap, saved, contentWidth, work.days) },
+    { line: WEEKEND_TITLE, look: 'h3' },
+    { line: WEEKEND_HELP_LINE, look: 'help' },
+  ];
+  WEEKEND_TABLES.forEach(function (w) {
+    blocks.push({ table: weekendPlanTable_(w, work.weekend[w.day], contentWidth) });
   });
-  reqs.push(textStyleRequest_(range(start[0][0], cellEnd(R - 1, C - 1) + 1), {
-    fontSize: { magnitude: TABLE_FONT_PT, unit: 'PT' },
-    foregroundColor: color(DATA_FG),
-  }, 'fontSize,foregroundColor'));
-  reqs.push(cellStyleRequest_(tabId, tableStart, 0, 0, 1, C, { backgroundColor: color(HEADER_BG) }, 'backgroundColor'));
-  reqs.push(textStyleRequest_(range(start[0][0], cellEnd(0, C - 1)), { bold: true, foregroundColor: color(HEADER_FG) }, 'bold,foregroundColor'));
-  reqs.push({ updateParagraphStyle: { range: range(start[0][1], cellEnd(0, 3) + 1), paragraphStyle: { alignment: 'CENTER' }, fields: 'alignment' } });
-  reqs.push(cellStyleRequest_(tabId, tableStart, 1, 0, R - 1, C, { backgroundColor: color(EDITABLE_BG) }, 'backgroundColor'));
-  // Each row's own text styles, exactly as staff left them.
-  for (r = 1; r < R; r++) {
-    for (c = 0; c < C; c++) {
-      (cell(r, c).runs || []).forEach(function (run) {
-        var fields = Object.keys(run.style || {});
-        if (run.e > run.s && fields.length) {
-          reqs.push(textStyleRequest_(range(start[r][c] + run.s, start[r][c] + run.e), run.style, fields.join(',')));
-        }
+
+  // By Class: one table for each class with something due, A to Z, then one line naming the rest.
+  blocks.push({ line: BY_CLASS_TITLE, look: 'h3' });
+  var nothingDue = [];
+  var tables = 0;
+  groupAssignmentsByCourse_(days, courses).forEach(function (group) {
+    if (!group.assignments.length) return nothingDue.push(group.course);
+    blocks.push({ table: byClassTable_(group, colorMap, saved, contentWidth) });
+    tables++;
+  });
+  if (!tables) blocks.push({ line: NO_ASSIGNMENTS_TEXT, look: 'muted' });
+  else if (nothingDue.length) blocks.push({ line: NOTHING_DUE_PREFIX + nothingDue.join(', ') + '.', look: 'muted' });
+  return blocks;
+}
+
+/**
+ * The By Day table: the column names, then for each day its row, its Canvas work (by due time), the
+ * to-dos staff added (staffDays[day], in their order) and one blank row to type a new to-do in.
+ * Monday to Friday are always there. Saturday and Sunday are only listed when something is in them,
+ * and get no blank row: the Weekend plan is the place to plan those.
+ */
+function byDayTable_(days, colorMap, saved, contentWidth, staffDays) {
+  var columns = BY_DAY_HEADERS.length;
+  var canvas = assignmentsByDay_(days);
+  var rows = [headerRow_(BY_DAY_HEADERS, HEADER_BG)];
+  SCHEDULE_WEEKDAY_NAMES.forEach(function (day, i) {
+    var todos = (staffDays && staffDays[day]) || [];
+    var schoolDay = i < 5;
+    if (!schoolDay && !canvas[day].length && !todos.length) return;
+    rows.push(groupRow_(day, DAY_ROW_BG, columns));
+    canvas[day].forEach(function (a) {
+      var course = cellText_(a.course) || '(No Course)';
+      rows.push(canvasRow_(a, true, { text: course, bg: colorMap[course] || '#EAEDED' }, saved));
+    });
+    todos.forEach(function (todo) { rows.push(staffRow_(todo)); });
+    if (schoolDay) rows.push({ look: 'plain', cells: [richText_(ADD_TODO_TEXT, mutedStyle_()), richText_(''), richText_(''), richText_('')] });
+  });
+  return { rows: rows, widths: scaledColumnWidths_(BY_DAY_WIDTHS, contentWidth), center: [1, 2] };
+}
+
+/** One class's By Class table: its name in its color, the column names, then its assignments. */
+function byClassTable_(group, colorMap, saved, contentWidth) {
+  var rows = [
+    groupRow_(group.course, colorMap[group.course] || '#EAEDED', BY_CLASS_HEADERS.length),
+    headerRow_(BY_CLASS_HEADERS, HEADER_BG),
+  ];
+  group.assignments.forEach(function (a) {
+    rows.push(canvasRow_(a, false, { text: dueText_(a) }, saved));
+  });
+  return { rows: rows, widths: scaledColumnWidths_(BY_CLASS_WIDTHS, contentWidth), center: [1, 2] };
+}
+
+/**
+ * One Weekend plan table: "Saturday | Assignment | Notes" in the day's color, then the rows staff
+ * had there (`rows`, see readStaffWork_) exactly as read, or Morning, Afternoon, Evening.
+ */
+function weekendPlanTable_(weekendDay, rows, contentWidth) {
+  var half = Math.round((contentWidth - WEEKEND_LABEL_WIDTH_PT) * 50) / 100;
+  var last = Math.round((contentWidth - WEEKEND_LABEL_WIDTH_PT - half) * 100) / 100;
+  var out = [headerRow_([weekendDay.day].concat(WEEKEND_HEADERS), weekendDay.bg)];
+  (rows && rows.length ? rows : emptyWeekendRows_()).forEach(function (cells) {
+    out.push({ look: 'plain', cells: cells });
+  });
+  return { rows: out, widths: [WEEKEND_LABEL_WIDTH_PT, half, last], center: null };
+}
+
+function headerRow_(names, bg) {
+  return { look: 'header', bg: bg, cells: names.map(function (name) { return richText_(name); }) };
+}
+
+/** A class or day name on a row of its own, merged across all `columns`. */
+function groupRow_(name, bg, columns) {
+  var cells = [richText_(cellText_(name))];
+  while (cells.length < columns) cells.push(richText_(''));
+  return { look: 'group', bg: bg, cells: cells };
+}
+
+/**
+ * One Canvas assignment's row: Assignment, `second` (the Class cell in By Day, the Due cell in By
+ * Class), the Status chip and the note. Status and note come from `saved`, by the Canvas link.
+ */
+function canvasRow_(a, timeAfterTitle, second, saved) {
+  var url = a.url || '';
+  var note = cellText_((url && saved.notes[url]) || '');
+  return {
+    look: 'plain',
+    cells: [
+      assignmentCell_(a, timeAfterTitle),
+      second,
+      { chip: statusChip_((url && saved.status[url]) || STATUS_DEFAULT) },
+      richText_(note),
+    ],
+  };
+}
+
+/**
+ * The Assignment cell of a Canvas row: the title, linked to Canvas; in By Day, the time when it
+ * isn't due at 11:59 pm ("Lab report (due 8:00 am)"); and for a kept row (see keptAssignments_) a
+ * second line in gray italic that says why it's still here.
+ */
+function assignmentCell_(a, timeAfterTitle) {
+  var title = cellText_(a.assignment) || 'Untitled Assignment';
+  var time = timeAfterTitle ? shownDueTime_(a.due_time) : '';
+  var cell = richText_(title, a.url ? { link: { url: a.url }, foregroundColor: optionalColorFromHex_(LINK_FG) } : null);
+  if (time) cell = richJoin_(cell, richText_(' (due ' + time + ')'));
+  var reason = cellText_(a.kept_reason);
+  if (reason) cell = richJoin_(richJoin_(cell, richText_('\n')), richText_(reason, mutedStyle_()));
+  return cell;
+}
+
+/** "Tue 11/17" for an assignment's due date; "Tue 11/17, 8:00 am" when it isn't due at 11:59 pm. */
+function dueText_(a) {
+  var date = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(a.due_date || ''));
+  var day = cellText_(a.day);
+  var text = date ? day.slice(0, 3) + ' ' + Number(date[1]) + '/' + Number(date[2]) : day;
+  var time = shownDueTime_(a.due_time);
+  return time ? text + ', ' + time : text;
+}
+
+/**
+ * One of staff's own to-dos in By Day (see staffRowFromCells_), written back as it was read. An
+ * empty Class cell says "Added by staff" and an empty Assignment cell "+ Add a to-do", both in gray
+ * italic; every to-do has a Status chip.
+ */
+function staffRow_(todo) {
+  var words = function (cell, placeholder) {
+    return richHasText_(cell) ? cell : richText_(placeholder, mutedStyle_());
+  };
+  return {
+    look: 'plain',
+    cells: [
+      words(todo.cells[0], ADD_TODO_TEXT),
+      words(todo.cells[1], ADDED_BY_STAFF_TEXT),
+      { chip: statusChip_(todo.status) },
+      todo.cells[2],
+    ],
+  };
+}
+
+/** The ID of the Status choice with this label (the first choice if there's no such label). */
+function statusChip_(status) {
+  return (statusOption_(status) || STATUS_OPTIONS[0]).id;
+}
+
+/** The look of AutoPlanner's own words inside a table: "+ Add a to-do", "Added by staff", "Not on Canvas". */
+function mutedStyle_() {
+  return { italic: true, foregroundColor: optionalColorFromHex_(MUTED_FG) };
+}
+
+// ---- What staff typed ------------------------------------------------------------------------------
+// Staff's own to-dos (By Day) and the Weekend plan are read as "rich cells" and written back exactly:
+// { text, runs: [{ s, e, style }] } is a cell's text (paragraph breaks are "\n") and the text styles
+// on parts of it (see readRichCell_).
+
+/**
+ * Everything in a week tab that belongs to staff:
+ *   days:    { Monday: [row, ...], ... Sunday: [...] } the to-dos staff added under each day of By
+ *            Day, in their order. A row is { cells: [assignment, class, notes], status }.
+ *   weekend: { Saturday: [[label, assignment, notes], ...], Sunday: [...] } the rows under the header
+ *            row of each Weekend plan table. null = the tab has no such table.
+ * Week tabs from before November 2026 had an "Added by staff" table instead; its rows are moved in
+ * here (see moveOldStaffRows_).
+ */
+function readStaffWork_(tabJson) {
+  var work = { days: {}, weekend: {} };
+  SCHEDULE_WEEKDAY_NAMES.forEach(function (d) { work.days[d] = []; });
+  WEEKEND_TABLES.forEach(function (w) { work.weekend[w.day] = null; });
+  var tables = weekTabTables_(tabJson);
+  var fromClass = classTableRows_(tables);
+  tables.forEach(function (t) {
+    if (t.layout.kind === 'day' && !t.layout.old) {
+      eachDayTableRow_(t, fromClass, function () {}, function (cells, day) {
+        var row = staffRowFromCells_(cells);
+        if (row) work.days[day || SCHEDULE_WEEKDAY_NAMES[0]].push(row);
       });
     }
-  }
-  reqs.push({
-    updateTableRowStyle: {
-      tableStartLocation: { tabId: tabId, index: tableStart },
-      rowIndices: [0],
-      tableRowStyle: { minRowHeight: { magnitude: ROW_MIN_HEIGHT_PT, unit: 'PT' } },
-      fields: 'minRowHeight',
-    },
+    if (t.layout.kind === 'weekend') {
+      // A table whose first cell no longer names its day is the first weekend day without a table.
+      var free = WEEKEND_TABLES.filter(function (w) { return !work.weekend[w.day]; })[0];
+      var day = t.layout.day || (free ? free.day : WEEKEND_TABLES[WEEKEND_TABLES.length - 1].day);
+      var rows = t.rows.slice(1).map(function (row) {
+        var cells = row.tableCells || [];
+        return [0, 1, 2].map(function (c) { return readRichCell_(cells[c]); });
+      });
+      work.weekend[day] = (work.weekend[day] || []).concat(rows);
+    }
   });
-  return emptyAfter + shift;
+  moveOldStaffRows_(tabJson, work);
+  return work;
+}
+
+function richHasText_(cell) {
+  return cell.text.replace(/\s/g, '') !== '';
 }
 
 /**
- * The rows of a week tab's "Added by staff" table, exactly as typed (the header row isn't
- * included): [[cell, ...], ...], each cell { text, runs }. null when the tab has no such table.
- * The table is the one under the "Added by staff" heading or, if staff removed the heading, the
- * last 5-column table.
+ * The to-do in one By Day row that isn't Canvas work: { cells: [assignment, class, notes], status },
+ * or null for a blank row (nothing in it but AutoPlanner's own gray words).
  */
-function readStaffRows_(tabJson) {
-  var table = findStaffTable_(tabJson);
-  if (!table) return null;
-  return (table.tableRows || []).slice(1).map(function (row) {
-    var cells = row.tableCells || [];
-    var out = [];
-    for (var c = 0; c < STAFF_HEADERS.length; c++) out.push(readRichCell_(cells[c]));
-    return out;
+function staffRowFromCells_(cells) {
+  var assignment = withoutPlaceholder_(readRichCell_(cells[0]), ADD_TODO_TEXT);
+  var klass = withoutPlaceholder_(readRichCell_(cells[1]), ADDED_BY_STAFF_TEXT);
+  var notes = readRichCell_(cells[3]);
+  // Typing only a class or a note in the "+ Add a to-do" row still makes a to-do. Clearing the
+  // Assignment cell of a to-do removes it.
+  var besideWords = assignment.found && (richHasText_(klass.cell) || richHasText_(notes));
+  if (!richHasText_(assignment.cell) && !besideWords) return null;
+  var status = cellStatus_(cells[2], false);
+  if (status && !statusOption_(status)) {
+    // Typed in the Status cell instead of choosing: kept at the start of the note.
+    notes = richJoin_(richText_(OLD_STATUS_NOTE_PREFIX + status + '.' + (richHasText_(notes) ? ' ' : '')), notes);
+    status = '';
+  }
+  return {
+    cells: [withoutBorrowedLook_(assignment.cell), withoutBorrowedLook_(klass.cell), notes],
+    status: status || STATUS_DEFAULT,
+  };
+}
+
+/**
+ * Before November 2026 every week tab ended with an "Added by staff" table (Assignment, Class, Day,
+ * Status, Notes). Each of its rows moves into By Day under its day ("Tue", "tuesday", "TUES" ...),
+ * after the to-dos already there. A Saturday or Sunday row goes into that day's first Weekend plan
+ * row (Morning). A row with no day AutoPlanner can read goes under Monday, and what its Day cell
+ * said is kept at the start of its note. Nothing typed is lost.
+ */
+function moveOldStaffRows_(tabJson, work) {
+  var table = findOldStaffTable_(tabJson);
+  ((table && table.tableRows) || []).slice(1).forEach(function (row) {
+    var cells = [];
+    for (var c = 0; c < OLD_STAFF_COLUMNS; c++) cells.push(readRichCell_((row.tableCells || [])[c]));
+    if (!cells.some(richHasText_)) return;
+    var dayText = cellText_(cells[2].text);
+    var day = weekdayFromText_(dayText);
+    var statusText = cellText_(cells[3].text);
+    var status = normalizeStatus_(statusText);
+    var option = statusOption_(status);
+    var front = !day && dayText ? 'Day was: ' + dayText + '. ' : '';
+    var notesWith = function (words) {
+      return richJoin_(richText_(richHasText_(cells[4]) ? words : words.replace(/ $/, '')), cells[4]);
+    };
+    if (weekendTable_(day)) {
+      // The Weekend plan has no Status column: anything but the first choice is kept in Notes.
+      if (status && status !== STATUS_DEFAULT) front += OLD_STATUS_NOTE_PREFIX + statusText + '. ';
+      var rows = work.weekend[day] || (work.weekend[day] = emptyWeekendRows_());
+      if (!rows.length) rows.push(emptyWeekendRows_()[0]);
+      var what = richHasText_(cells[1]) ? richJoin_(richJoin_(cells[0], richText_(' (')), richJoin_(cells[1], richText_(')'))) : cells[0];
+      rows[0][1] = richAddParagraph_(rows[0][1], what);
+      rows[0][2] = richAddParagraph_(rows[0][2], notesWith(front));
+      return;
+    }
+    if (status && !option) front += OLD_STATUS_NOTE_PREFIX + status + '. ';
+    work.days[day || SCHEDULE_WEEKDAY_NAMES[0]].push({
+      cells: [cells[0], cells[1], notesWith(front)],
+      status: option ? option.label : STATUS_DEFAULT,
+    });
   });
 }
 
-function findStaffTable_(tabJson) {
+/** A Weekend plan table's rows when nothing has been typed yet: Morning, Afternoon, Evening. */
+function emptyWeekendRows_() {
+  return WEEKEND_ROWS.map(function (label) { return [richText_(label, { bold: true }), richText_(''), richText_('')]; });
+}
+
+/**
+ * The old "Added by staff" table of a week tab, or null: the table under the "Added by staff"
+ * heading or, if staff removed the heading from a tab in the old layout, its last 5-column table.
+ */
+function findOldStaffTable_(tabJson) {
   var content = (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
   var afterHeading = false;
+  var oldLayout = false;
+  var five = null;
   for (var i = 0; i < content.length; i++) {
     var el = content[i];
-    if (el.paragraph && paragraphPlainText_(el.paragraph).trim() === STAFF_TITLE) afterHeading = true;
-    else if (el.table && afterHeading) return el.table;
+    if (el.paragraph && paragraphPlainText_(el.paragraph).trim() === ADDED_BY_STAFF_TEXT) afterHeading = true;
+    if (!el.table) continue;
+    if (afterHeading) return el.table;
+    if ((el.table.columns || 0) >= 6) oldLayout = true;
+    if ((el.table.columns || 0) === OLD_STAFF_COLUMNS) five = el.table;
   }
-  var five = content.filter(function (e) { return e.table && (e.table.columns || 0) === STAFF_HEADERS.length; });
-  return five.length ? five[five.length - 1].table : null;
+  return oldLayout ? five : null;
+}
+
+/** How many to-dos and Weekend plan rows staff have filled in (for the home tab). */
+function countStaffWork_(work) {
+  var n = 0;
+  Object.keys((work && work.days) || {}).forEach(function (d) { n += work.days[d].length; });
+  Object.keys((work && work.weekend) || {}).forEach(function (d) {
+    (work.weekend[d] || []).forEach(function (row) {
+      if (richHasText_(row[1]) || richHasText_(row[2])) n++;
+    });
+  });
+  return n;
+}
+
+/** A rich cell of plain text, all in one style if one is given. */
+function richText_(text, style) {
+  var t = String(text || '');
+  return { text: t, runs: style && t ? [{ s: 0, e: t.length, style: style }] : [] };
+}
+
+/** Characters `from` up to `to` of a rich cell. */
+function richSlice_(cell, from, to) {
+  var runs = [];
+  cell.runs.forEach(function (r) {
+    var s = Math.max(r.s, from), e = Math.min(r.e, to);
+    if (e > s) runs.push({ s: s - from, e: e - from, style: r.style });
+  });
+  return { text: cell.text.slice(from, to), runs: runs };
+}
+
+/** Two rich cells, one straight after the other. */
+function richJoin_(a, b) {
+  var moved = b.runs.map(function (r) { return { s: r.s + a.text.length, e: r.e + a.text.length, style: r.style }; });
+  return { text: a.text + b.text, runs: a.runs.concat(moved) };
+}
+
+/** `more` as a new paragraph at the end of a rich cell (or on its own, if the cell is empty). */
+function richAddParagraph_(cell, more) {
+  if (!richHasText_(more)) return cell;
+  return richHasText_(cell) ? richJoin_(richJoin_(cell, richText_('\n')), more) : more;
+}
+
+/** A rich cell without the white space at its two ends. */
+function richTrim_(cell) {
+  var end = cell.text.replace(/\s+$/, '').length;
+  var start = Math.min(end, cell.text.length - cell.text.replace(/^\s+/, '').length);
+  return richSlice_(cell, start, end);
+}
+
+/**
+ * A cell without AutoPlanner's own gray words ("+ Add a to-do", "Added by staff"), for when staff
+ * typed next to them instead of over them: { cell, found }.
+ */
+function withoutPlaceholder_(cell, words) {
+  var i = cell.text.indexOf(words);
+  if (i < 0) return { cell: cell, found: false };
+  var rest = richJoin_(richSlice_(cell, 0, i), richSlice_(cell, i + words.length, cell.text.length));
+  return { cell: richTrim_(rest), found: true };
+}
+
+/**
+ * Text staff type can come out in a look they didn't choose. Typed over AutoPlanner's gray italic
+ * words, it's gray and italic as well. Typed in a row inserted below an assignment, it's blue and
+ * underlined, because a new row copies the look of the link above it (checked in a real Doc,
+ * 2026-11-10). This gives that text the table's usual look. A real link, and every other style
+ * staff chose, is kept.
+ */
+function withoutBorrowedLook_(cell) {
+  var colorIs = function (style, hex) {
+    var rgb = style.foregroundColor && style.foregroundColor.color.rgbColor;
+    var want = hexToRgbColor_(hex);
+    return !!rgb && ['red', 'green', 'blue'].every(function (k) { return Math.abs((rgb[k] || 0) - want[k]) < 0.01; });
+  };
+  var runs = [];
+  cell.runs.forEach(function (r) {
+    var borrowed = [];
+    if (r.style.italic && colorIs(r.style, MUTED_FG)) borrowed = ['italic', 'foregroundColor'];
+    var linkBlue = colorIs(r.style, LINK_FG) || colorIs(r.style, GOOGLE_LINK_FG);
+    if (r.style.underline && linkBlue && !r.style.link) borrowed = ['underline', 'foregroundColor'];
+    if (!borrowed.length) return runs.push(r);
+    var style = {};
+    Object.keys(r.style).forEach(function (k) { if (borrowed.indexOf(k) < 0) style[k] = r.style[k]; });
+    if (Object.keys(style).length) runs.push({ s: r.s, e: r.e, style: style });
+  });
+  return { text: cell.text, runs: runs };
 }
 
 function paragraphPlainText_(paragraph) {
@@ -2316,7 +2916,7 @@ function paragraphPlainText_(paragraph) {
 
 // Text styles carried over from a staff cell. Characters Docs would strip on insert are left out
 // here, so every position after them stays right.
-var STAFF_STYLE_FIELDS = ['bold', 'italic', 'underline', 'strikethrough'];
+var RICH_STYLE_FIELDS = ['bold', 'italic', 'underline', 'strikethrough'];
 var DOCS_STRIPPED_CHARS = /[\u0000-\u0008\u000c-\u001f\ue000-\uf8ff]/g;
 
 function readRichCell_(cell) {
@@ -2341,34 +2941,13 @@ function readRichCell_(cell) {
 function staffRunStyle_(ts) {
   if (!ts) return null;
   var out = {};
-  STAFF_STYLE_FIELDS.forEach(function (f) { if (ts[f]) out[f] = true; });
+  RICH_STYLE_FIELDS.forEach(function (f) { if (ts[f]) out[f] = true; });
   if (ts.link && (ts.link.url || ts.link.tabId)) out.link = ts.link.url ? { url: ts.link.url } : { tabId: ts.link.tabId };
   ['foregroundColor', 'backgroundColor'].forEach(function (f) {
     var rgb = ts[f] && ts[f].color && ts[f].color.rgbColor;
     if (rgb) out[f] = { color: { rgbColor: { red: rgb.red || 0, green: rgb.green || 0, blue: rgb.blue || 0 } } };
   });
   return Object.keys(out).length ? out : null;
-}
-
-/** Staff rows with anything typed in them (for the home tab's count). */
-function countStaffRows_(staffRows) {
-  return (staffRows || []).filter(function (row) {
-    return row.some(function (c) { return c.text.replace(/\s/g, ''); });
-  }).length;
-}
-
-/** One assignment's row. `middle` is the Day (By Class) or the Course (By Day). */
-function assignmentRow_(a, middle, color, saved) {
-  var url = a.url || '';
-  var status = (url && saved.status[url]) || STATUS_DEFAULT;
-  var note = (url && saved.notes[url]) || '';
-  return {
-    kind: 'item',
-    cells: [a.assignment, middle, a.due_time, a.priority, status, note],
-    bg: color,
-    priorityBg: PRIORITY_COLORS[a.priority] || '#EEEEEE',
-    url: url,
-  };
 }
 
 function textStyleRequest_(range, textStyle, fields) {
@@ -2390,31 +2969,46 @@ function cellStyleRequest_(tabId, tableStart, row, col, rowSpan, colSpan, style,
 }
 
 /**
- * Adds one 6-column table at index `at` (the newline of the paragraph it goes under), fills it,
- * styles it, and returns the index of the empty paragraph Docs puts after it.
- * Row kinds: 'title' (class name), 'group' (day name), 'header' (column names), 'empty'
- * ("No assignments due this week."), 'item' (an assignment).
+ * Adds one table at index `at` (the newline of the paragraph it goes under), fills it, styles it,
+ * and returns the index of the empty paragraph Docs puts after it.
+ *   table.rows:   [{ look, bg, cells }]. look is 'group' (a class or day name: one bold cell merged
+ *                 across the table), 'header' (column names) or 'plain'. bg colors the whole row.
+ *   a cell:       { text, runs, chip, bg }. text and runs are a rich cell (see readRichCell_): the
+ *                 text, with paragraph breaks as "\n", and the styles on parts of it. A Status cell
+ *                 has chip instead: the ID of the chosen option. bg colors just this cell.
+ *   table.widths: one width in pt for each column.
+ *   table.center: [first, last] column of the centered ones, or null to leave every column left.
+ * Positions follow from how Docs numbers a fresh table (checked against the live API): a table
+ * inserted at index i starts at i + 1, cell (r, c) holds an empty paragraph at
+ * i + 4 + r*(2C + 1) + 2c, and the empty paragraph Docs adds after the table sits at
+ * i + 3 + R*(2C + 1). Merging cells doesn't move any index. A chip takes up one index.
  */
-function appendTable_(reqs, tabId, at, rows, widths) {
-  var C = 6;
+function appendTable_(reqs, tabId, at, table) {
+  var rows = table.rows;
   var R = rows.length;
+  var C = table.widths.length;
   var tableStart = at + 1;
   var emptyAfter = at + 3 + R * (2 * C + 1);
-  var texts = rows.map(function (row) {
-    var t = [];
-    for (var c = 0; c < C; c++) t.push(cellText_(row.cells[c]));
-    return t;
-  });
   var emptyIndex = function (r, c) { return at + 4 + r * (2 * C + 1) + 2 * c; };
+  var cellAt = function (r, c) { return rows[r].cells[c] || {}; };
+  var size = function (r, c) { return cellAt(r, c).chip ? 1 : (cellAt(r, c).text || '').length; };
+  var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
+  var color = function (hex) { return optionalColorFromHex_(hex); };
 
   reqs.push({ insertTable: { rows: R, columns: C, location: { tabId: tabId, index: at } } });
   // The new paragraph after the table copies the heading above it; make it plain text.
-  reqs.push({ updateParagraphStyle: { range: { tabId: tabId, startIndex: emptyAfter, endIndex: emptyAfter + 1 }, paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, fields: 'namedStyleType' } });
+  reqs.push({ updateParagraphStyle: { range: range(emptyAfter, emptyAfter + 1), paragraphStyle: { namedStyleType: 'NORMAL_TEXT' }, fields: 'namedStyleType' } });
 
   // Fill from the last cell to the first, so each insert only shifts cells already filled.
   for (var r = R - 1; r >= 0; r--) {
     for (var c = C - 1; c >= 0; c--) {
-      if (texts[r][c]) reqs.push({ insertText: { text: texts[r][c], location: { tabId: tabId, index: emptyIndex(r, c) } } });
+      var cell = cellAt(r, c);
+      var where = { tabId: tabId, index: emptyIndex(r, c) };
+      if (cell.chip) {
+        reqs.push({ insertDropdown: { location: where, dropdownDefinitionId: STATUS_DROPDOWN_ID, selectedOptionId: cell.chip } });
+      } else if (cell.text) {
+        reqs.push({ insertText: { text: cell.text, location: where } });
+      }
     }
   }
 
@@ -2425,12 +3019,10 @@ function appendTable_(reqs, tabId, at, rows, widths) {
     start.push([]);
     for (c = 0; c < C; c++) {
       start[r].push(emptyIndex(r, c) + shift);
-      shift += texts[r][c].length;
+      shift += size(r, c);
     }
   }
-  var cellEnd = function (r, c) { return start[r][c] + texts[r][c].length; };
-  var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
-  var color = function (hex) { return optionalColorFromHex_(hex); };
+  var cellEnd = function (r, c) { return start[r][c] + size(r, c); };
 
   // Whole table: padding, vertical centering, column widths, font size and text color.
   reqs.push(cellStyleRequest_(tabId, tableStart, 0, 0, R, C, {
@@ -2440,7 +3032,7 @@ function appendTable_(reqs, tabId, at, rows, widths) {
     paddingRight: { magnitude: CELL_PAD_SIDE_PT, unit: 'PT' },
     contentAlignment: 'MIDDLE',
   }, 'paddingTop,paddingBottom,paddingLeft,paddingRight,contentAlignment'));
-  widths.forEach(function (w, i) {
+  table.widths.forEach(function (w, i) {
     reqs.push({
       updateTableColumnProperties: {
         tableStartLocation: { tabId: tabId, index: tableStart },
@@ -2457,17 +3049,9 @@ function appendTable_(reqs, tabId, at, rows, widths) {
 
   var tallRows = [];
   rows.forEach(function (row, r) {
-    var rowText = range(start[r][0], cellEnd(r, C - 1));
-    var centerCols = range(start[r][1], cellEnd(r, 4) + 1);
-    if (row.kind === 'title' || row.kind === 'group' || row.kind === 'empty') {
-      // A full-width row: merge it, color it, style its text.
-      var bg = row.kind === 'empty' ? EDITABLE_BG : row.bg;
-      reqs.push(cellStyleRequest_(tabId, tableStart, r, 0, 1, C, { backgroundColor: color(bg) }, 'backgroundColor'));
-      if (texts[r][0]) {
-        reqs.push(textStyleRequest_(range(start[r][0], cellEnd(r, 0)),
-          row.kind === 'empty' ? { italic: true, foregroundColor: color(MUTED_FG) } : { bold: true },
-          row.kind === 'empty' ? 'italic,foregroundColor' : 'bold'));
-      }
+    if (row.bg) reqs.push(cellStyleRequest_(tabId, tableStart, r, 0, 1, C, { backgroundColor: color(row.bg) }, 'backgroundColor'));
+    if (row.look === 'group') {
+      if (size(r, 0)) reqs.push(textStyleRequest_(range(start[r][0], cellEnd(r, 0)), { bold: true }, 'bold'));
       reqs.push({
         mergeTableCells: {
           tableRange: {
@@ -2477,24 +3061,24 @@ function appendTable_(reqs, tabId, at, rows, widths) {
           },
         },
       });
-      if (row.kind !== 'empty') tallRows.push(r);
-    } else if (row.kind === 'header') {
-      reqs.push(cellStyleRequest_(tabId, tableStart, r, 0, 1, C, { backgroundColor: color(HEADER_BG) }, 'backgroundColor'));
-      reqs.push(textStyleRequest_(rowText, { bold: true, foregroundColor: color(HEADER_FG) }, 'bold,foregroundColor'));
-      reqs.push({ updateParagraphStyle: { range: centerCols, paragraphStyle: { alignment: 'CENTER' }, fields: 'alignment' } });
       tallRows.push(r);
-    } else {
-      // Assignment: class color on the first three cells, priority color, white Status and Notes.
-      reqs.push(cellStyleRequest_(tabId, tableStart, r, 0, 1, 3, { backgroundColor: color(row.bg) }, 'backgroundColor'));
-      reqs.push(cellStyleRequest_(tabId, tableStart, r, 3, 1, 1, { backgroundColor: color(row.priorityBg) }, 'backgroundColor'));
-      reqs.push(cellStyleRequest_(tabId, tableStart, r, 4, 1, 2, { backgroundColor: color(EDITABLE_BG) }, 'backgroundColor'));
-      reqs.push({ updateParagraphStyle: { range: centerCols, paragraphStyle: { alignment: 'CENTER' }, fields: 'alignment' } });
-      if (row.url && texts[r][0]) {
-        reqs.push(textStyleRequest_(range(start[r][0], cellEnd(r, 0)), {
-          link: { url: row.url },
-          foregroundColor: color(LINK_FG),
-        }, 'link,foregroundColor'));
-      }
+      return;
+    }
+    if (row.look === 'header') {
+      reqs.push(textStyleRequest_(range(start[r][0], cellEnd(r, C - 1)), { bold: true, foregroundColor: color(HEADER_FG) }, 'bold,foregroundColor'));
+      tallRows.push(r);
+    }
+    if (table.center) {
+      var centered = range(start[r][table.center[0]], cellEnd(r, table.center[1]) + 1);
+      reqs.push({ updateParagraphStyle: { range: centered, paragraphStyle: { alignment: 'CENTER' }, fields: 'alignment' } });
+    }
+    if (row.look === 'header') return;
+    for (var c = 0; c < C; c++) {
+      var cell = cellAt(r, c);
+      if (cell.bg) reqs.push(cellStyleRequest_(tabId, tableStart, r, c, 1, 1, { backgroundColor: color(cell.bg) }, 'backgroundColor'));
+      (cell.chip ? [] : cell.runs || []).forEach(function (run) {
+        reqs.push(textStyleRequest_(range(start[r][c] + run.s, start[r][c] + run.e), run.style, Object.keys(run.style).join(',')));
+      });
     }
   });
   if (tallRows.length) {
@@ -2597,51 +3181,24 @@ function getCellLinkUrl_(cell) {
   return url;
 }
 
-/** Old Docs used "⬜ Not started", "🟡 In progress", "✅ Complete": keep the words, drop the symbols. */
-function normalizeStatus_(text) {
-  var s = String(text || '').replace(/^[^A-Za-z0-9]+/, '').replace(/\s+/g, ' ').trim();
-  var known = { 'not started': 'Not started', 'in progress': 'In progress', complete: 'Complete' };
-  return known[s.toLowerCase()] || s;
-}
-
 /**
- * Read all editable data (Notes, Status) from EVERY table in the tab, keyed by Canvas URL.
- * Every assignment appears twice (its class table and By Day). An untouched default in one table
- * must not overwrite a Status the teacher typed in the other.
- *
- * Column conventions (Notes = last column, Status = second-to-last):
- *   - Old 5-col table (Notes only): notes col = 4, no status
- *   - 6-col tables (Status + Notes): status col = 4, notes col = 5
- * Tables with < 5 columns are ignored. Rows without a Canvas link (headings) are skipped.
+ * Status and Notes from one week tab, by Canvas link: { notes: {url}, status: {url} }. Every
+ * assignment is in the tab twice (By Class and By Day): a chosen Status in one table beats the first
+ * choice in the other, and a Status cell that says nothing is skipped. Both layouts are read (see
+ * tableLayout_).
  */
 function readExistingDataFromTab_(tabJson) {
   var result = { notes: {}, status: {} };
-  try {
-    if (!tabJson || !tabJson.documentTab) return result;
-    var content = tabJson.documentTab.body.content || [];
-    content.forEach(function (el) {
-      if (!el.table) return;
-      var tableStruct = el.table;
-      var numCols = tableStruct.columns;
-      if (numCols < 5) return;
-      var notesColIdx = numCols - 1;
-      var statusColIdx = numCols >= 6 ? numCols - 2 : -1;
-      (tableStruct.tableRows || []).forEach(function (row) {
-        var cells = row.tableCells || [];
-        if (cells.length < numCols) return;
-        var url = getCellLinkUrl_(cells[0]);
-        if (!url) return; // header / heading row — no Canvas link
-        var note = getCellText_(cells[notesColIdx]);
-        if (note) result.notes[url] = note;
-        if (statusColIdx >= 0) {
-          var status = normalizeStatus_(getCellText_(cells[statusColIdx]));
-          if (status && (status !== STATUS_DEFAULT || !result.status[url])) {
-            result.status[url] = status;
-          }
-        }
-      });
-    });
-  } catch (e) {}
+  var raw = {};
+  eachAssignmentRow_(tabJson, function (row) {
+    if (row.note) result.notes[row.url] = row.note;
+    if (row.status && (row.status !== STATUS_DEFAULT || !raw[row.url])) raw[row.url] = row.status;
+  });
+  Object.keys(raw).forEach(function (url) {
+    var settled = settleStatus_(raw[url], result.notes[url]);
+    result.status[url] = settled.status;
+    if (settled.note) result.notes[url] = settled.note;
+  });
   return result;
 }
 
@@ -2674,22 +3231,26 @@ function groupAssignmentsByCourse_(days, courses) {
 }
 
 /**
- * Group assignments by day. Preserves the input day order (already chronological from the backend).
- * Within each day, sorts by due time (as a real time) then assignment title.
- * Skips days with zero assignments to keep the table tight.
+ * Canvas assignments by the day they're due: { Monday: [...], ... Sunday: [...] }. Within a day
+ * they're sorted by due time (as a real time), then title.
  */
-function flattenAndGroupByDay_(days) {
-  var groups = [];
+function assignmentsByDay_(days) {
+  var byDay = {};
+  SCHEDULE_WEEKDAY_NAMES.forEach(function (name) { byDay[name] = []; });
   (days || []).forEach(function (dayObj) {
-    var assignments = (dayObj.assignments || []).slice();
-    if (!assignments.length) return;
-    assignments.sort(function (a, b) {
+    (dayObj.assignments || []).forEach(function (a) {
+      var day = [dayObj.day, a.day].filter(function (d) { return scheduleHasKey_(byDay, d); })[0];
+      byDay[day || SCHEDULE_WEEKDAY_NAMES[0]].push(a);
+    });
+  });
+  SCHEDULE_WEEKDAY_NAMES.forEach(function (name) {
+    byDay[name].sort(function (a, b) {
       // Compare real times: as text, "10:25 AM" would come before "8:30 AM".
       var ta = scheduleTimeToMinutes_(a.due_time), tb = scheduleTimeToMinutes_(b.due_time);
       if (ta !== tb) return ta - tb;
-      return String(a.assignment || '').toLowerCase() < String(b.assignment || '').toLowerCase() ? -1 : 1;
+      var na = String(a.assignment || '').toLowerCase(), nb = String(b.assignment || '').toLowerCase();
+      return na < nb ? -1 : na > nb ? 1 : 0;
     });
-    groups.push({ day: dayObj.day || '', assignments: assignments });
   });
-  return groups;
+  return byDay;
 }
