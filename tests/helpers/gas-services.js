@@ -83,6 +83,7 @@ function fakeServices(options) {
     },
     WeekDay: { MONDAY: 'MONDAY', TUESDAY: 'TUESDAY', WEDNESDAY: 'WEDNESDAY', THURSDAY: 'THURSDAY', FRIDAY: 'FRIDAY', SATURDAY: 'SATURDAY', SUNDAY: 'SUNDAY' },
     getService: () => ({ getUrl: () => 'https://script.google.com/a/macros/pomfret.org/s/FAKE/exec' }),
+    getOAuthToken: () => 'fake-oauth-token',
   };
   // Mail AutoPlanner sends (the weekly health check): recorded, never sent.
   const mail = [];

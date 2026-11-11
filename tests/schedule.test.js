@@ -33,7 +33,8 @@ function allAssignments(schedule) {
 }
 
 // The golden file is the Python version's output, plus this week's past-due work (kept since the
-// final delivery so a week keeps all its assignments until it moves into Past weeks).
+// final delivery so a week keeps all its assignments until it moves into Past weeks), without the
+// priority label (taken out in November 2026 with the Priority column).
 test('matches the golden output exactly (including key order)', () => {
   const gs = loadSchedule();
   const input = JSON.parse(readFixture('schedule-input.json'));
@@ -57,36 +58,30 @@ test('generated_at is the local time in the school time zone, yyyy-MM-ddTHH:mm:s
   assert.equal(winter.generated_at, '2026-11-05T10:04:05'); // EST (UTC-5)
 });
 
-test('priority boundaries: earlier this week Past due, 0 Today, 1 Tomorrow, 2-3 Due Soon, 4-7 This Week, 8+ Upcoming', () => {
+test('days until due: work from earlier this week stays (negative), last week is dropped, and no priority label is made', () => {
   const gs = loadSchedule();
   // Noon New York time on each day from Oct 25 (last Sunday) to Nov 5 (8 days out). Today is Wed Oct 28.
   const days = [
-    ['2026-10-25T16:00:00Z', null], // -3: last week, dropped (that week is in Past weeks)
-    ['2026-10-26T16:00:00Z', 'Past due'], // -2: this Monday, kept until the week ends
-    ['2026-10-27T16:00:00Z', 'Past due'], // -1
-    ['2026-10-28T16:00:00Z', 'Today'], // 0
-    ['2026-10-29T16:00:00Z', 'Tomorrow'], // 1
-    ['2026-10-30T16:00:00Z', 'Due Soon'], // 2
-    ['2026-10-31T16:00:00Z', 'Due Soon'], // 3
-    ['2026-11-01T17:00:00Z', 'This Week'], // 4 (first day of EST)
-    ['2026-11-04T17:00:00Z', 'This Week'], // 7
-    ['2026-11-05T17:00:00Z', 'Upcoming'], // 8
+    '2026-10-25T16:00:00Z', // -3: last week, dropped (that week is in Past weeks)
+    '2026-10-26T16:00:00Z', // -2: this Monday, kept until the week ends
+    '2026-10-27T16:00:00Z', // -1
+    '2026-10-28T16:00:00Z', // 0
+    '2026-10-29T16:00:00Z', // 1
+    '2026-10-30T16:00:00Z', // 2
+    '2026-10-31T16:00:00Z', // 3
+    '2026-11-01T17:00:00Z', // 4 (first day of EST)
+    '2026-11-04T17:00:00Z', // 7
+    '2026-11-05T17:00:00Z', // 8
   ];
-  const pairs = days.map(([dueAt], i) => pair('Item ' + i, dueAt));
+  const pairs = days.map((dueAt, i) => pair('Item ' + i, dueAt));
   const result = toPlain(gs.buildWeeklySchedule_(pairs, TZ, 4, NOW));
 
-  const got = allAssignments(result).map((a) => [a.days_until_due, a.priority]);
-  assert.deepStrictEqual(got, [
-    [-2, 'Past due'], [-1, 'Past due'], [0, 'Today'], [1, 'Tomorrow'], [2, 'Due Soon'], [3, 'Due Soon'],
-    [4, 'This Week'], [7, 'This Week'], [8, 'Upcoming'],
-  ]);
+  assert.deepStrictEqual(allAssignments(result).map((a) => a.days_until_due), [-2, -1, 0, 1, 2, 3, 4, 7, 8]);
   assert.equal(result.total_assignments, 9);
 
-  // The priority helper on its own, at every boundary.
-  const labels = [-6, -1, 0, 1, 2, 3, 4, 7, 8, 30].map((d) => gs.schedulePriority_(d));
-  assert.deepStrictEqual(toPlain(labels), [
-    'Past due', 'Past due', 'Today', 'Tomorrow', 'Due Soon', 'Due Soon', 'This Week', 'This Week', 'Upcoming', 'Upcoming',
-  ]);
+  // The week tabs no longer show a Priority, so the schedule doesn't make one.
+  assert.ok(allAssignments(result).every((a) => !('priority' in a)));
+  assert.equal(typeof gs.schedulePriority_, 'undefined');
 });
 
 test('weeksAhead = 1 keeps work through this Sunday 11:59 PM, even across the DST change', () => {

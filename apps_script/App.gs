@@ -1575,7 +1575,7 @@ function finishTimeLimitProbe_() {
 }
 
 /**
- * The everyday case on its own (about 2 minutes): a Status and Note changed in By Class survive a
+ * The everyday case on its own (about 4 minutes): a Status and Note changed in By Class survive a
  * plain update, in both By Class and By Day. Uses your row's Doc and TEST_CANVAS_TOKEN (kept).
  */
 function selfTestEveryday() {
@@ -1599,11 +1599,9 @@ function selfTestEveryday() {
     var docId = row.docId;
     var target = findFirstAssignmentRow_(docId);
     if (!target) throw new Error('No assignments in the next ' + APP_WEEKS_AHEAD + ' weeks to test with.');
-    var before = findRowsByUrl_(docId, target.url);
-    var original = { status: normalizeStatus_(getCellText_(target.status)) || STATUS_DEFAULT, note: getCellText_(target.note) };
-    if (/^selfTest(Everyday)? note /.test(original.note)) original = { status: STATUS_DEFAULT, note: '' };
-    restore = { docId: docId, url: target.url, week: before.length ? before[0].weekKey : null, original: original };
-    var newStatus = original.status === 'Complete' ? 'In progress' : 'Complete';
+    var original = originalTestValues_(target);
+    restore = { docId: docId, url: target.url, original: original };
+    var newStatus = testStatusFor_(original.status);
     var newNote = 'selfTestEveryday note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
     writeStatusAndNote_(docId, target, newStatus, newNote);
     PropertiesService.getScriptProperties().setProperty('busy.' + row.id, String(Date.now()));
@@ -1635,34 +1633,20 @@ function selfTestEveryday() {
   }
 }
 
-/** The "Added by staff" rows of the week tab with this title (readStaffRows_), or null. */
-function staffRowsOfWeek_(docId, title) {
-  var w = weekTabsOf_(docsGet_(docId)).filter(function (x) { return x.title === title; })[0];
-  return w ? readStaffRows_(w.tab) : null;
+/**
+ * What a test assignment's Status and Note were before selfTest changed them, to put back at the
+ * end. A note left behind by an earlier selfTest counts as no note.
+ */
+function originalTestValues_(target) {
+  var original = { status: cellStatus_(target.status, target.old) || STATUS_DEFAULT, note: getCellText_(target.note) };
+  if (/^selfTest(Everyday)? note /.test(original.note)) original = { status: STATUS_DEFAULT, note: '' };
+  return original;
 }
 
-/** Types plain text into row `r` of a week tab's "Added by staff" table (replacing what's there). */
-function writeStaffRow_(docId, tabId, r, texts) {
-  var tab = findTabJsonById_(docsGet_(docId), tabId);
-  var table = findStaffTable_(tab);
-  var cells = table.tableRows[r + 1].tableCells;
-  var requests = [];
-  // Last cell first, so each edit leaves the earlier cells' positions alone.
-  for (var c = cells.length - 1; c >= 0; c--) {
-    var start = cellParagraphInsertIndex_(cells[c]);
-    var range = getCellTextRange_(cells[c]);
-    if (range && range.endIndex - 1 > start) {
-      requests.push({ deleteContentRange: { range: { tabId: tabId, startIndex: start, endIndex: range.endIndex - 1 } } });
-    }
-    if (texts[c]) requests.push({ insertText: { text: texts[c], location: { tabId: tabId, index: start } } });
-  }
-  docsBatchUpdate_(docId, requests);
-}
-
-/** Empties selfTest's row in "Added by staff" again. */
-function clearStaffTestRow_(docId, title, r) {
-  var w = weekTabsOf_(docsGet_(docId)).filter(function (x) { return x.title === title; })[0];
-  if (w) writeStaffRow_(docId, w.tab.tabProperties.tabId, r, ['', '', '', '', '']);
+/** The Status selfTest chooses: Done/Submitted, or In progress if the row is on Done/Submitted already. */
+function testStatusFor_(current) {
+  var done = STATUS_OPTIONS[STATUS_OPTIONS.length - 1].label;
+  return current === done ? STATUS_OPTIONS[1].label : done;
 }
 
 /** Puts a test assignment's Status and Note back in every row, and records them as written. */
@@ -1670,7 +1654,7 @@ function restoreTestValues_(docId, url, original) {
   // One row at a time, reading the Doc again each time (each edit moves the text after it).
   for (var n = 0; n < 8; n++) {
     var cells = rowCellsByUrl_(docId, url).filter(function (r) {
-      return getCellText_(r.status) !== original.status || getCellText_(r.note) !== original.note;
+      return r.statusNow !== original.status || getCellText_(r.note) !== original.note;
     })[0];
     if (!cells) break;
     writeStatusAndNote_(docId, cells, original.status, original.note);
@@ -1678,7 +1662,7 @@ function restoreTestValues_(docId, url, original) {
   var rows = findRowsByUrl_(docId, url);
   if (!rows.length) throw new Error('the test assignment is not in any week tab');
   rows.forEach(function (r) {
-    if (r.status !== original.status || r.note !== original.note) throw new Error(r.table + ' still has the test values');
+    if ((r.status || STATUS_DEFAULT) !== original.status || r.note !== original.note) throw new Error(r.table + ' still has the test values');
   });
   recordWritten_(docId, url, rows[0].weekKey, original.status, original.note);
   return rows.length;
@@ -1694,9 +1678,24 @@ function selfTestKeepToken() {
   runSelfTest_(true);
 }
 
+// What selfTest adds as staff. Every to-do starts with the same words, so the clean-up finds them.
+var SELFTEST_TODO_PREFIX = 'selfTest to-do';
+var SELFTEST_TODO_TYPED = {
+  text: 'selfTest to-do 1 (typed in the blank row)', klass: '', note: 'selfTest: kept through updates', status: 'Need to Start',
+};
+var SELFTEST_TODO_INSERTED = {
+  text: 'selfTest to-do 2 (in a row inserted below an assignment)', klass: 'Study hall',
+  note: 'selfTest: bring the signed form', bold: 'signed', status: 'In progress',
+};
+// A row of the "Added by staff" table week tabs had before November 2026: Assignment, Class, Day, Status, Notes.
+var SELFTEST_OLD_ROW = ['selfTest to-do 3 (from Added by staff)', 'Advisory', 'Wed', 'In progress', 'selfTest: belongs under Wednesday'];
+var SELFTEST_OLD_ROW_DAY = 'Wednesday';
+var SELFTEST_PLAN_TEXT = 'selfTest plan: library, 2 to 4';
+var SELFTEST_PLAN_DAY = 'Sunday';
+var SELFTEST_PLAN_PART = 'Afternoon';
 function runSelfTest_(keepToken) {
   requireOwner_();
-  Logger.log("NOTE selfTest edits your planner Doc for about 6 minutes. Don't open or edit that Doc " +
+  Logger.log("NOTE selfTest edits your planner Doc for about 7 minutes. Don't open or edit that Doc " +
     'until it finishes: an edit there can change the results.');
   var results = [];
   function check(name, fn) {
@@ -1729,22 +1728,34 @@ function runSelfTest_(keepToken) {
   }
   var token = cleanToken_(getScriptProperty_('TEST_CANVAS_TOKEN'));
   var schedule, docId, target, testStatus, testNote, doc, firstSeconds, selfStudent, movedTo, tabsBefore, original;
-  var staffWeekTitle = null;
-  var staffRowIndex = -1;
-  var staffTestRow = null;
+  var todoDay = null; // where selfTest's to-dos go: { title, day, others }
+  var chipLater = false; // the inserted to-do's row came without a Status chip
+  var planBefore = null; // what the Weekend plan cell said before selfTest typed in it
   var selfRow = null;
   var held = false;
   var selfTestStart = Date.now();
+  var noTodos = { skip: 'no to-dos were added' };
   // Keeps your row held (a hold lapses after APP_STUDENT_BUSY_MS) before each update selfTest runs.
   var keepHold = function () {
     if (held) PropertiesService.getScriptProperties().setProperty('busy.' + selfRow.id, String(Date.now()));
   };
   // Only the weeks AutoPlanner just wrote; tabs from earlier weeks are left as they were.
-  var currentWeeks = function () {
+  var currentWeeks = function (docJson) {
     var titles = Object.keys(schedule.weeks || {}).map(function (k) {
       return buildWeekTabTitle_(k, schedule.weeks[k].week_label);
     });
-    return weekTabsOf_(doc).filter(function (w) { return titles.indexOf(w.title) !== -1; });
+    return weekTabsOf_(docJson || doc).filter(function (w) { return titles.indexOf(w.title) !== -1; });
+  };
+  // One day's rows in By Day as words ("canvas canvas todo blank"); they must end todo, ..., blank.
+  var dayKinds = function (tab, day) {
+    return byDayRows_(tab).filter(function (r) { return r.day === day; }).map(function (r) { return r.kind; }).join(' ');
+  };
+  var assertDayOrder = function (tab, day) {
+    var kinds = dayKinds(tab, day);
+    if (!/^(canvas )*(todo )+blank$/.test(kinds)) {
+      throw new Error(day + ' should read assignments, then to-dos, then one blank row, but reads: ' + kinds);
+    }
+    return kinds;
   };
 
     step('token', [], 'TEST_CANVAS_TOKEN is set', function () {
@@ -1811,22 +1822,23 @@ function runSelfTest_(keepToken) {
       var row = selfRow;
       selfStudent = { id: row ? row.id : 'selftest', docId: row && row.docId ? row.docId : findReusableDoc_(schedule.student_full_name, null) };
       // An existing Doc isn't updated here: the "normal update" below is a full update, and the
-      // layout checks run after it. That keeps selfTest well inside Apps Script's 6-minute limit.
+      // layout checks run after it. That keeps selfTest short.
       if (selfStudent.docId) {
         docId = selfStudent.docId;
         assertDocIsInFolder_(docId, getDocsFolder_());
         doc = docsGet_(docId, { includeTabsContent: true });
         var which = (row && row.docId ? "your student row's Doc" : 'your Doc in the folder') +
           ': https://docs.google.com/document/d/' + docId + '/edit';
-        // A Doc last written by an older AutoPlanner has week tabs without "Added by staff". Update
-        // it first, so the checks below find the layout they test (and the week tabs' IDs they use).
-        var older = currentWeeks().filter(function (w) { return !readStaffRows_(w.tab); }).length;
+        // A Doc last written before November 2026 has week tabs in the old layout (a Priority column,
+        // a typed Status, an "Added by staff" table). Update it first, so the checks below find the
+        // layout they test.
+        var older = currentWeeks().filter(function (w) { return !isNewLayoutTab_(w.tab); }).length;
         if (!older) return which;
         keepHold();
         var t1 = Date.now();
         writeDocWithRecovery_(selfStudent, schedule, { noDeadline: true });
         doc = docsGet_(docId, { includeTabsContent: true });
-        return which + ' (' + older + ' week tab' + (older === 1 ? '' : 's') + ' had no "Added by staff" table yet, ' +
+        return which + ' (' + older + ' week tab' + (older === 1 ? '' : 's') + ' had the layout from before this version, ' +
           'so it was updated first, in ' + Math.round((Date.now() - t1) / 1000) + ' s)';
       }
       keepHold();
@@ -1837,33 +1849,45 @@ function runSelfTest_(keepToken) {
       doc = docsGet_(docId, { includeTabsContent: true }); // full read: the Past weeks check looks inside
       return 'created in ' + firstSeconds + ' s: https://docs.google.com/document/d/' + docId + '/edit';
     });
-    step('type', ['doc'], 'Doc: type a test Status and Note into a By Class table', function () {
+    step('type', ['doc'], 'Doc: choose a test Status and type a Note in a By Class table', function () {
       target = findFirstAssignmentRow_(docId);
       if (!target) throw new Error('No assignments in the next ' + APP_WEEKS_AHEAD + ' weeks to test with.');
-      // What to put back at the end. A note left by an earlier selfTest counts as no note.
-      original = { status: normalizeStatus_(getCellText_(target.status)) || STATUS_DEFAULT, note: getCellText_(target.note) };
-      if (/^selfTest note /.test(original.note)) original = { status: STATUS_DEFAULT, note: '' };
-      testStatus = original.status === 'In progress' ? 'Complete' : 'In progress';
+      original = originalTestValues_(target); // what to put back at the end
+      testStatus = testStatusFor_(original.status);
       testNote = 'selfTest note ' + Utilities.formatDate(new Date(), APP_TIME_ZONE, 'MMM d h:mm a');
       writeStatusAndNote_(docId, target, testStatus, testNote);
       return '"' + testStatus + '" and a note on "' + target.title + '"';
     });
-    step('staffrow', ['type'], 'Doc: type a row into "Added by staff" in that week', function () {
-      var week = weekTabsOf_(docsGet_(docId)).filter(function (w) { return w.tab.tabProperties.tabId === target.tabId; })[0];
-      if (!week) throw new Error("the test assignment's week tab wasn't found");
-      var rows = readStaffRows_(week.tab);
-      if (!rows) throw new Error('that week has no "Added by staff" table yet (run an update first)');
-      staffRowIndex = -1;
-      rows.forEach(function (r, i) { if (staffRowIndex < 0 && !countStaffRows_([r])) staffRowIndex = i; });
-      if (staffRowIndex < 0) return { skip: 'every row in that table has something in it; add an empty row to test this' };
-      staffTestRow = ['selfTest staff row', 'Study hall', 'Friday', 'Not started', 'selfTest: kept through updates'];
-      writeStaffRow_(docId, target.tabId, staffRowIndex, staffTestRow);
-      staffWeekTitle = week.title; // only once it's written, so the clean-up knows what to clear
-      return 'row ' + (staffRowIndex + 1) + ' of "' + week.title + '"';
+    step('todos', ['type'], 'Doc: add two to-dos under a day in By Day and a line in the Weekend plan', function () {
+      removeTestTodos_(docId); // anything an earlier selfTest that stopped midway left behind
+      todoDay = findTodoTestDay_(currentWeeks(docsGet_(docId)), target.url);
+      if (!todoDay) {
+        return { skip: 'no assignment is due on a school day in the next ' + APP_WEEKS_AHEAD + ' weeks, so there is no day to add a to-do under' };
+      }
+      var where = todoDay.day + ' in "' + todoDay.title + '"';
+      typeTodoInBlankRow_(docId, todoDay.title, todoDay.day, SELFTEST_TODO_TYPED.text, SELFTEST_TODO_TYPED.note);
+      var inserted = insertTodoRowBelow_(docId, todoDay.title, todoDay.day, SELFTEST_TODO_INSERTED);
+      // A row inserted below an assignment normally comes with its own Status chip. If it didn't,
+      // AutoPlanner gives it one at the next update, and selfTest sets it then.
+      chipLater = !setTodoStatus_(docId, todoDay.title, SELFTEST_TODO_INSERTED.text, SELFTEST_TODO_INSERTED.status);
+      planBefore = typeWeekendPlan_(docId, todoDay.title, SELFTEST_PLAN_DAY, SELFTEST_PLAN_PART, SELFTEST_PLAN_TEXT);
+      return 'under ' + where + ': one typed in the "' + ADD_TODO_TEXT + '" row, one in a row inserted ' +
+        (inserted.between ? 'between two assignments' : 'below the only assignment that day') +
+        (chipLater ? ' (the new row had no Status chip yet)' : ', set to "' + SELFTEST_TODO_INSERTED.status + '"') +
+        (planBefore === null
+          ? '; that week has no ' + SELFTEST_PLAN_DAY + ' ' + SELFTEST_PLAN_PART + ' row, so the Weekend plan is not tested'
+          : '; "' + SELFTEST_PLAN_TEXT + '" in ' + SELFTEST_PLAN_DAY + ' ' + SELFTEST_PLAN_PART);
+    });
+    step('oldstaff', ['todos'], 'Doc: put an "Added by staff" table from before this version at the end of that week tab', function () {
+      if (!todoDay) return noTodos;
+      var planted = plantOldStaffTable_(docId, todoDay.title, SELFTEST_OLD_ROW);
+      return planted
+        ? 'one row: "' + SELFTEST_OLD_ROW[0] + '", Day "' + SELFTEST_OLD_ROW[2] + '", Status "' + SELFTEST_OLD_ROW[3] + '"'
+        : 'one was there already (left by an earlier selfTest), so that one is used';
     });
     step('moved', ['type'], 'Doc: run an update with that assignment moved to another week (timed)', function () {
       keepHold();
-      var from = weekKeyOfTab_(docsGet_(docId), target.tabId);
+      var from = weekKeyFromTabTitle_(target.weekTitle);
       movedTo = Object.keys(schedule.weeks || {}).sort().filter(function (k) { return k !== from; })[0] || null;
       startUpdateStats_();
       writeDocWithRecovery_(selfStudent, movedTo ? scheduleWithMovedAssignment_(schedule, target.url, movedTo) : schedule, { noDeadline: true });
@@ -1881,6 +1905,29 @@ function runSelfTest_(keepToken) {
       });
       return movedTo ? 'By Class and By Day in the week of ' + movedTo : 'By Class and By Day both kept them';
     });
+    step('migrated', ['oldstaff', 'moved'], 'The "Added by staff" row moved under its day in By Day with a Status dropdown, and the old table is gone', function () {
+      if (!todoDay) return noTodos;
+      var tab = readWeekTab_(docId, todoDay.title);
+      if (findOldStaffTable_(tab)) throw new Error('the "Added by staff" table is still in "' + todoDay.title + '"');
+      var row = todoRow_(tab, SELFTEST_OLD_ROW[0]);
+      if (row && row.day !== SELFTEST_OLD_ROW_DAY) throw new Error('it is under ' + row.day + ', expected ' + SELFTEST_OLD_ROW_DAY);
+      assertTodo_(row, { text: SELFTEST_OLD_ROW[0], klass: SELFTEST_OLD_ROW[1], note: SELFTEST_OLD_ROW[4], status: SELFTEST_OLD_ROW[3] });
+      assertDayOrder(tab, SELFTEST_OLD_ROW_DAY);
+      return 'under ' + SELFTEST_OLD_ROW_DAY + ', "' + SELFTEST_OLD_ROW[3] + '", with its class and note';
+    });
+    step('todochips', ['todos', 'moved'], 'Every to-do has a Status dropdown after an update', function () {
+      if (!todoDay) return noTodos;
+      var tab = readWeekTab_(docId, todoDay.title);
+      var todos = byDayRows_(tab).filter(function (r) { return r.kind === 'todo'; });
+      todos.forEach(function (r) {
+        if (!cellDropdown_(r.cells[2])) throw new Error('"' + todoText_(r.cells) + '" has no Status dropdown');
+      });
+      if (chipLater && !setTodoStatus_(docId, todoDay.title, SELFTEST_TODO_INSERTED.text, SELFTEST_TODO_INSERTED.status)) {
+        throw new Error('the inserted to-do is not in "' + todoDay.title + '" any more');
+      }
+      return todos.length + ' to-do' + (todos.length === 1 ? '' : 's') + ' in "' + todoDay.title + '"' +
+        (chipLater ? '; the inserted one is set to "' + SELFTEST_TODO_INSERTED.status + '" now' : '');
+    });
     step('kept', ['followed'], 'An assignment removed from Canvas keeps its Status and Note in its week, marked "Not on Canvas" (timed)', function () {
       keepHold();
       startUpdateStats_();
@@ -1891,10 +1938,35 @@ function runSelfTest_(keepToken) {
       if (rows.length !== 2) throw new Error('Expected it in both tables, found ' + rows.length + '.');
       rows.forEach(function (r) {
         if (movedTo && r.weekKey !== movedTo) throw new Error('found in the week of ' + r.weekKey + ', expected ' + movedTo);
-        if (r.priority !== KEPT_NOT_ON_CANVAS) throw new Error(r.table + ' Priority says "' + r.priority + '"');
+        // The reason sits on its own line under the title.
+        if (r.text.split('\n').indexOf(KEPT_NOT_ON_CANVAS) === -1) throw new Error(r.table + ' Assignment cell says "' + r.text + '"');
         if (r.status !== testStatus || r.note !== testNote) throw new Error(r.table + ' lost the Status or Note');
       });
       return 'kept in By Class and By Day, with its Status and Note; ' + timing;
+    });
+    step('todoskept', ['todos', 'kept'], 'To-dos and the Weekend plan came through two updates exactly: below the assignments, each with its Status, one blank row at the end of the day', function () {
+      if (!todoDay) return noTodos;
+      var tab = readWeekTab_(docId, todoDay.title);
+      var kinds = assertDayOrder(tab, todoDay.day);
+      var mine = byDayRows_(tab).filter(function (r) {
+        var text = r.kind === 'todo' ? todoText_(r.cells) : '';
+        return r.day === todoDay.day && text.indexOf(SELFTEST_TODO_PREFIX) === 0 && text !== SELFTEST_OLD_ROW[0];
+      });
+      if (mine.length !== 2) throw new Error('expected 2 to-dos under ' + todoDay.day + ', found ' + mine.length);
+      // The inserted row sat higher up, so it comes first.
+      assertTodo_(mine[0], SELFTEST_TODO_INSERTED);
+      assertTodo_(mine[1], SELFTEST_TODO_TYPED);
+      if (planBefore !== null) {
+        var plan = weekendRow_(tab, SELFTEST_PLAN_DAY, SELFTEST_PLAN_PART);
+        var said = plan ? readRichCell_(plan[1]).text : null;
+        if (said !== weekendTestText_(planBefore)) throw new Error(SELFTEST_PLAN_DAY + ' ' + SELFTEST_PLAN_PART + ' reads ' + JSON.stringify(said));
+      }
+      return todoDay.day + ' reads: ' + kinds + (planBefore === null ? '' : '; ' + SELFTEST_PLAN_DAY + ' ' + SELFTEST_PLAN_PART + ' kept');
+    });
+    step('todoclear', ['todoskept'], 'Doc: clear the Assignment cell of one to-do', function () {
+      if (!todoDay) return noTodos;
+      clearTodoAssignment_(docId, todoDay.title, SELFTEST_TODO_TYPED.text);
+      return '"' + SELFTEST_TODO_TYPED.text + '"';
     });
     step('normal', ['doc'], 'Doc: run a normal update (the real due date again)', function () {
       keepHold();
@@ -1907,72 +1979,92 @@ function runSelfTest_(keepToken) {
       var limit = Number(getScriptProperty_('RUNTIME_LIMIT_SECONDS'));
       return timing + '. Time limit: ' + (limit >= 60 ? limit + ' s (measured)' : DEFAULT_RUNTIME_LIMIT_SECONDS + ' s (assumed; run measureTimeLimit)');
     });
-    step('classes', ['normal'], 'Every class has its own By Class table in every week', function () {
+    step('classes', ['normal'], 'By Class: a table for every class with work due, and one line naming the classes with nothing due', function () {
       var weeks = currentWeeks();
       if (weeks.length !== Object.keys(schedule.weeks || {}).length) {
         throw new Error('Found ' + weeks.length + ' week tabs for the ' + Object.keys(schedule.weeks || {}).length + ' weeks with work due.');
       }
       if (!weeks.length) throw new Error('No week tabs found.');
+      var all = plannerCourseList_(schedule);
+      var tablesSeen = 0;
+      var linesSeen = 0;
       weeks.forEach(function (w) {
-        var titles = tablesOfTab_(w).filter(function (t) { return t.kind === 'By Class'; }).map(function (t) { return t.title; });
-        var expected = plannerCourseList_(schedule);
-        if (titles.join('|') !== expected.join('|')) {
-          throw new Error('"' + w.title + '" has [' + titles.join('; ') + '], expected [' + expected.join('; ') + ']');
-        }
-      });
-      return weeks.length + ' week tabs × ' + plannerCourseList_(schedule).length + ' classes';
-    });
-    step('empty', ['normal'], 'A class with nothing due shows "' + NO_ASSIGNMENTS_TEXT + '"', function () {
-      var seen = 0;
-      currentWeeks().forEach(function (w) {
-        tablesOfTab_(w).forEach(function (t) {
-          if (t.kind !== 'By Class') return;
-          var empty = t.rows.length === 3 && t.rows[2].text === NO_ASSIGNMENTS_TEXT;
-          var hasItems = t.rows.some(function (r) { return r.url; });
-          if (!empty && !hasItems) throw new Error(t.title + ' in "' + w.title + '" has neither assignments nor the empty-week row');
-          if (empty) seen++;
+        var tables = tablesOfTab_(w).filter(function (t) { return t.kind === BY_CLASS_TITLE; });
+        var withWork = tables.map(function (t) { return t.title; });
+        tables.forEach(function (t) {
+          if (!t.rows.length) throw new Error(t.title + ' in "' + w.title + '" has a table but no assignments');
         });
+        var rest = all.filter(function (c) { return withWork.indexOf(c) === -1; });
+        var lines = tabBodyPlainText_(w.tab.documentTab.body).split('\n');
+        var want = !tables.length ? NO_ASSIGNMENTS_TEXT : rest.length ? NOTHING_DUE_PREFIX + rest.join(', ') + '.' : '';
+        if (want && lines.indexOf(want) === -1) throw new Error('"' + w.title + '" should say "' + want + '"');
+        if (!want && lines.some(function (l) { return l.indexOf(NOTHING_DUE_PREFIX) === 0; })) {
+          throw new Error('"' + w.title + '" names classes with nothing due, but every class has a table');
+        }
+        tablesSeen += tables.length;
+        if (want) linesSeen++;
       });
-      return seen ? seen + ' empty class tables, each with the single row' : { skip: 'every class had work due in every week' };
+      return weeks.length + ' week tabs, ' + all.length + ' classes: ' + tablesSeen + ' class tables, and ' + linesSeen +
+        ' week tab' + (linesSeen === 1 ? '' : 's') + ' with the one line for the rest';
     });
-    step('plain', ['normal'], 'Status is plain text (no symbols) everywhere', function () {
+    step('chips', ['normal'], 'Status is a dropdown on every assignment row, in By Day and By Class', function () {
       var n = 0;
-      currentWeeks().forEach(function (w) {
+      var weeks = currentWeeks();
+      if (!weeks.length) throw new Error('No week tabs found.');
+      weeks.forEach(function (w) {
+        var definitions = (w.tab.documentTab && w.tab.documentTab.dropdownDefinitions) || {};
+        if (!definitions[STATUS_DROPDOWN_ID]) throw new Error('"' + w.title + '" has no Status dropdown');
         tablesOfTab_(w).forEach(function (t) {
           t.rows.forEach(function (r) {
             if (!r.url) return;
             n++;
-            if (/[^\x20-\x7E]/.test(r.status) || !/^[A-Za-z0-9]/.test(r.status)) {
-              throw new Error('"' + r.status + '" in ' + t.title);
-            }
+            if (!r.chip) throw new Error('"' + r.text + '" in "' + w.title + '" has no Status dropdown');
+            if (!statusOption_(r.status)) throw new Error('"' + r.text + '" in "' + w.title + '" is on "' + r.status + '"');
           });
         });
       });
-      return n + ' Status cells checked';
+      return n + ' Status dropdowns on ' + weeks.length + ' week tabs. Dropdown requests went through ' +
+        (docsDropdownsViaRest_ ? 'the Docs REST API, because the Advanced Docs service refused them' : 'the Advanced Docs service');
     });
-    step('widths', ['normal'], 'All By Class tables share one set of column widths, By Day another, all full width', function () {
+    step('widths', ['normal'], 'By Day, By Class and Weekend plan tables each share one set of column widths, all full width', function () {
       var full = null;
-      var sets = { 'By Class': {}, 'By Day': {} };
+      var kinds = [BY_DAY_TITLE, BY_CLASS_TITLE, WEEKEND_TITLE];
+      var sets = {};
+      kinds.forEach(function (k) { sets[k] = {}; });
       currentWeeks().forEach(function (w) {
         if (full === null) full = tabContentWidth_(w.tab);
         tablesOfTab_(w).forEach(function (t) {
-          if (!sets[t.kind]) return;
           sets[t.kind][t.widths.join(',')] = true;
           var sum = t.widths.reduce(function (a, b) { return a + b; }, 0);
-          if (Math.abs(sum - full) > 1) throw new Error(t.title + ' is ' + sum + ' pt wide, page is ' + full + ' pt');
+          if (Math.abs(sum - full) > 1) throw new Error(t.kind + ' ' + t.title + ' is ' + sum + ' pt wide, page is ' + full + ' pt');
+          if (t.kind === WEEKEND_TITLE && Math.abs(t.widths[0] - WEEKEND_LABEL_WIDTH_PT) > 0.5) {
+            throw new Error(t.title + "'s first column is " + t.widths[0] + ' pt, expected ' + WEEKEND_LABEL_WIDTH_PT);
+          }
         });
       });
-      ['By Class', 'By Day'].forEach(function (k) {
+      return kinds.map(function (k) {
         var n = Object.keys(sets[k]).length;
-        if (n !== 1) throw new Error(k + ' tables have ' + n + ' different width sets');
-      });
-      return 'By Class ' + Object.keys(sets['By Class'])[0] + ' | By Day ' + Object.keys(sets['By Day'])[0] + ' (pt)';
+        // A student with nothing due at all has no By Class table.
+        if (n > 1 || (!n && k !== BY_CLASS_TITLE)) throw new Error(k + ' tables have ' + n + ' different width sets');
+        return k + ' ' + (n ? Object.keys(sets[k])[0] : 'none');
+      }).join(' | ') + ' (pt)';
     });
-    step('help', ['normal'], 'The Status/Notes help line is on every week tab', function () {
+    step('help', ['normal'], 'Every week tab reads By Day, Weekend plan, By Class, with the two help lines', function () {
       var tabs = currentWeeks();
+      if (!tabs.length) throw new Error('No week tabs found.');
+      var order = new RegExp('^' + BY_DAY_TITLE + ' > ' + WEEKEND_TITLE + ' > ' + WEEKEND_TITLE + '( > ' + BY_CLASS_TITLE + ')*$');
       tabs.forEach(function (w) {
         var body = w.tab && w.tab.documentTab && w.tab.documentTab.body;
-        if (!body || tabBodyPlainText_(body).indexOf(STATUS_HELP_LINE) === -1) throw new Error('missing on "' + w.title + '"');
+        var lines = body ? tabBodyPlainText_(body).split('\n') : [];
+        var last = -1;
+        [BY_DAY_TITLE, BY_DAY_HELP_LINE, WEEKEND_TITLE, WEEKEND_HELP_LINE, BY_CLASS_TITLE].forEach(function (line) {
+          var at = lines.indexOf(line);
+          if (at === -1) throw new Error('"' + line + '" is missing on "' + w.title + '"');
+          if (at < last) throw new Error('"' + line + '" is out of place on "' + w.title + '"');
+          last = at;
+        });
+        var tables = tablesOfTab_(w).map(function (t) { return t.kind; }).join(' > ');
+        if (!order.test(tables)) throw new Error('the tables on "' + w.title + '" read: ' + tables);
       });
       return tabs.length + ' tabs';
     });
@@ -2024,10 +2116,7 @@ function runSelfTest_(keepToken) {
         if (!k || k >= thisMonday) throw new Error('"' + past.childTabs[i].tabProperties.title + '" does not belong in Past weeks');
         if (i && k > keys[i - 1]) throw new Error('Past weeks are not newest first');
       });
-      var grayCells = 0;
-      (past.childTabs || []).forEach(function (t) { grayCells += assertPriorityGray_(t); });
-      return keys.length + ' past week' + (keys.length === 1 ? '' : 's') + ', newest first; ' +
-        grayCells + ' Priority cells gray';
+      return keys.length + ' past week' + (keys.length === 1 ? '' : 's') + ', newest first';
     });
     step('rebuilt', ['normal'], 'Existing week tabs were rebuilt in place: same titles and order, all titles unique, no "(updating)" tab left', function () {
       var now = docsGet_(docId);
@@ -2058,12 +2147,16 @@ function runSelfTest_(keepToken) {
       });
       return 'week of ' + rows[0].weekKey;
     });
-    step('staffkept', ['staffrow', 'normal'], 'The "Added by staff" row came through both updates exactly', function () {
-      if (!staffWeekTitle) return { skip: 'no staff row was typed' };
-      var rows = staffRowsOfWeek_(docId, staffWeekTitle);
-      var got = rows && rows[staffRowIndex] ? rows[staffRowIndex].map(function (c) { return c.text; }) : null;
-      if (!got || got.join('|') !== staffTestRow.join('|')) throw new Error('found ' + JSON.stringify(got));
-      return 'kept in "' + staffWeekTitle + '" (that tab was rebuilt by both updates)';
+    step('todogone', ['todoclear', 'normal'], 'The to-do whose Assignment cell was cleared is gone, and the other one is still there', function () {
+      if (!todoDay) return noTodos;
+      var tab = readWeekTab_(docId, todoDay.title);
+      if (todoRow_(tab, SELFTEST_TODO_TYPED.text)) throw new Error('"' + SELFTEST_TODO_TYPED.text + '" is still there');
+      var leftover = byDayRows_(tab).filter(function (r) {
+        return r.kind !== 'canvas' && getCellText_(r.cells[3]) === SELFTEST_TODO_TYPED.note;
+      });
+      if (leftover.length) throw new Error('the note of the cleared to-do is still in a row');
+      assertTodo_(todoRow_(tab, SELFTEST_TODO_INSERTED.text), SELFTEST_TODO_INSERTED);
+      return todoDay.day + ' reads: ' + assertDayOrder(tab, todoDay.day);
     });
     step('teachers', ['hold'], 'CLC teacher folders: assign, switch, a Drive drag-in, the folder lock, Unassigned', function () {
       var teachers = clcTeachers_();
@@ -2097,11 +2190,11 @@ function runSelfTest_(keepToken) {
       return 'your Doc went to ' + teachers[0].name + ', then ' + teachers[1].name + ', was adopted after a drag, ' +
         'then back to the shared folder; your row is ' + (startTeacher ? teacherByEmail_(startTeacher).name + "'s" : 'Unassigned') + ' again';
     });
-    step('cleanup', ['type'], "Clean-up: the test assignment's Status and Note are back to what they were", function () {
+    step('cleanup', ['type'], "Clean-up: the test assignment's Status and Note are back to what they were, and selfTest's to-dos are gone", function () {
       var n = restoreTestValues_(docId, target.url, original);
-      if (staffWeekTitle) clearStaffTestRow_(docId, staffWeekTitle, staffRowIndex);
-      return '"' + original.status + '"' + (original.note ? ' and its note' : ' and no note') + ' back in ' + n + ' rows' +
-        (staffWeekTitle ? '; the "Added by staff" test row cleared' : '');
+      var removed = removeTestTodos_(docId);
+      return '"' + original.status + '"' + (original.note ? ' and its note' : ' and no note') + ' back in ' + n + ' rows; ' +
+        removed + " of selfTest's own to-dos and Weekend plan lines removed";
     });
     step('trashed', ['folder'], 'A Doc in the trash is never written to (so the student gets a fresh Doc)', function () {
       // A throwaway Doc in your My Drive, trashed at once; Google empties the trash after 30 days.
@@ -2160,9 +2253,8 @@ function runSelfTest_(keepToken) {
       if (kids.some(function (t) { return t.documentTab; })) throw new Error('past weeks came back with their content');
       var answers = {
         'Status and Notes': readExistingDataFromTab_,
-        '"Added by staff" rows': readStaffRows_,
+        'to-dos and the Weekend plan': readStaffWork_,
         'page width': tabContentWidth_,
-        'Past weeks gray cells': pastPriorityGrayRequests_,
       };
       weeks.forEach(function (w) {
         var whole = findTabJsonById_(full, w.tabProperties.tabId);
@@ -2175,7 +2267,7 @@ function runSelfTest_(keepToken) {
       var kb = function (o) { return Math.round(JSON.stringify(o).length / 1024); };
       var sec = function (x) { return (x / 2000).toFixed(1) + ' s'; };
       return 'slim ' + kb(slim) + ' KB in ' + sec(ms.slim) + ', full ' + kb(full) + ' KB in ' + sec(ms.full) +
-        ' (each the average of 2); the same Status, Notes, staff rows and widths on ' + weeks.length + ' week tabs; ' +
+        ' (each the average of 2); the same Status, Notes, to-dos, Weekend plan and widths on ' + weeks.length + ' week tabs; ' +
         kids.length + ' past week' + (kids.length === 1 ? '' : 's') + ' left out';
     });
 
@@ -2193,28 +2285,8 @@ function runSelfTest_(keepToken) {
   );
 }
 
-/** Throws unless every Priority cell holding a priority in this past week is gray; returns how many. */
-function assertPriorityGray_(tab) {
-  var want = hexToRgbColor_(PAST_PRIORITY_BG);
-  var n = 0;
-  var tables = (tab.documentTab.body.content || []).filter(function (el) { return el.table; });
-  pastPriorityGrayRequests_(tab).forEach(function (req) {
-    var range = req.updateTableCellStyle.tableRange;
-    var loc = range.tableCellLocation;
-    var table = tables.filter(function (el) { return el.startIndex === loc.tableStartLocation.index; })[0].table;
-    for (var r = loc.rowIndex; r < loc.rowIndex + range.rowSpan; r++) {
-      var style = table.tableRows[r].tableCells[loc.columnIndex].tableCellStyle || {};
-      var rgb = (style.backgroundColor && style.backgroundColor.color && style.backgroundColor.color.rgbColor) || {};
-      ['red', 'green', 'blue'].forEach(function (k) {
-        if (Math.abs((rgb[k] || 0) - want[k]) > 0.01) {
-          throw new Error('a Priority cell in "' + tab.tabProperties.title + '" is not gray');
-        }
-      });
-      n++;
-    }
-  });
-  return n;
-}
+
+// ---- selfTest helpers: reading a week tab --------------------------------------------------------
 
 /** The week tabs (children of the CLC Planner tab): [{ title, tab }]. */
 function weekTabsOf_(docJson) {
@@ -2224,54 +2296,192 @@ function weekTabsOf_(docJson) {
   });
 }
 
-/** "By Class" (a Day column), "By Day" (a Course column) or "other", from the header row. */
-function tableKind_(table) {
-  var rows = table.tableRows || [];
-  for (var r = 0; r < Math.min(rows.length, 2); r++) {
-    var cells = rows[r].tableCells || [];
-    if (cells.length < 6) continue;
-    var name = getCellText_(cells[1]);
-    if (name === 'Day') return 'By Class';
-    if (name === 'Course') return 'By Day';
-  }
-  return 'other';
+/**
+ * One week tab, read fresh and found by its title. (An update gives a week tab a new ID, so selfTest
+ * never keeps a tab ID across an update. The title stays.)
+ */
+function readWeekTab_(docId, title) {
+  var week = weekTabsOf_(docsGet_(docId)).filter(function (w) { return w.title === title; })[0];
+  if (!week) throw new Error('no week tab called "' + title + '"');
+  return week.tab;
 }
 
-/** A week tab's tables, summarized: kind, title (first row), column widths, and each row. */
+/** True if a week tab has this version's layout (By Day with a Class column and Status dropdowns). */
+function isNewLayoutTab_(tab) {
+  return weekTabTables_(tab).some(function (t) { return t.layout.kind === 'day' && !t.layout.old; });
+}
+
+/** The By Day table of a week tab as it sits in the tab (so with its position), or null. */
+function byDayTableElement_(tab) {
+  var content = (tab.documentTab && tab.documentTab.body && tab.documentTab.body.content) || [];
+  var oldStaff = findOldStaffTable_(tab);
+  return content.filter(function (el) {
+    var layout = el.table && el.table !== oldStaff ? tableLayout_(el.table) : null;
+    return !!layout && layout.kind === 'day' && !layout.old;
+  })[0] || null;
+}
+
+/**
+ * The rows of a week tab's By Day table from top to bottom, without the column names and the day
+ * rows: [{ r, day, kind, cells }]. kind is 'canvas' (an assignment AutoPlanner wrote), 'todo' (a
+ * to-do staff added) or 'blank' (a "+ Add a to-do" row nobody typed in). r is the row's number in
+ * the table, counting from 0.
+ */
+function byDayRows_(tab) {
+  var tables = weekTabTables_(tab);
+  var fromClass = classTableRows_(tables);
+  var out = [];
+  tables.forEach(function (t) {
+    if (t.layout.kind !== 'day' || t.layout.old) return;
+    var rowNumber = function (cells) {
+      for (var r = 0; r < t.rows.length; r++) {
+        if (t.rows[r].tableCells === cells) return r;
+      }
+      return -1;
+    };
+    eachDayTableRow_(t, fromClass, function (cells, day) {
+      out.push({ r: rowNumber(cells), day: day, kind: 'canvas', cells: cells });
+    }, function (cells, day) {
+      out.push({ r: rowNumber(cells), day: day, kind: staffRowFromCells_(cells) ? 'todo' : 'blank', cells: cells });
+    });
+  });
+  return out;
+}
+
+/** The cells of one row of a Weekend plan table (say Sunday, Afternoon), or null. */
+function weekendRow_(tab, day, part) {
+  var found = null;
+  weekTabTables_(tab).forEach(function (t) {
+    if (t.layout.kind !== 'weekend' || t.layout.day !== day) return;
+    t.rows.slice(1).forEach(function (row) {
+      var cells = row.tableCells || [];
+      if (!found && cells.length >= 3 && getCellText_(cells[0]) === part) found = cells;
+    });
+  });
+  return found;
+}
+
+/** What a to-do's Assignment cell says, without AutoPlanner's own gray words. '' for a blank row. */
+function todoText_(cells) {
+  var todo = staffRowFromCells_(cells);
+  return todo ? todo.cells[0].text : '';
+}
+
+/** The to-do with this text in a week tab's By Day table (one of byDayRows_), or null. */
+function todoRow_(tab, text) {
+  return byDayRows_(tab).filter(function (r) { return r.kind === 'todo' && todoText_(r.cells) === text; })[0] || null;
+}
+
+/** The bold words in a cell read with readRichCell_. */
+function boldTextOf_(rich) {
+  return rich.runs
+    .filter(function (run) { return run.style.bold; })
+    .map(function (run) { return rich.text.slice(run.s, run.e); })
+    .join('');
+}
+
+/**
+ * Throws unless a to-do row (from todoRow_) reads exactly as wanted: { text, klass, note, status },
+ * and bold, the word in its note that must be bold. It must also have a Status dropdown.
+ */
+function assertTodo_(row, want) {
+  if (!row) throw new Error('"' + want.text + '" is not there');
+  var got = staffRowFromCells_(row.cells);
+  var wanted = [want.text, want.klass || '', want.note || ''];
+  ['Assignment', 'Class', 'Notes'].forEach(function (column, i) {
+    if (got.cells[i].text !== wanted[i]) {
+      throw new Error('"' + want.text + '": ' + column + ' reads "' + got.cells[i].text + '", expected "' + wanted[i] + '"');
+    }
+  });
+  if (want.bold && boldTextOf_(got.cells[2]) !== want.bold) {
+    throw new Error('"' + want.text + '": the bold part of its note is "' + boldTextOf_(got.cells[2]) + '", expected "' + want.bold + '"');
+  }
+  if (!cellDropdown_(row.cells[2])) throw new Error('"' + want.text + '" has no Status dropdown');
+  if (got.status !== want.status) throw new Error('"' + want.text + '" is on "' + got.status + '", expected "' + want.status + '"');
+}
+
+/** What the Weekend plan cell should say after selfTest typed in front of what was there. */
+function weekendTestText_(before) {
+  return before ? SELFTEST_PLAN_TEXT + ' ' + before : SELFTEST_PLAN_TEXT;
+}
+
+/**
+ * Where selfTest adds its to-dos: the school day with the most assignments besides the test
+ * assignment (so a row can go between two of them), as { title, day, others }. If the test
+ * assignment's day is the only school day with work, that day. null if no school day has any.
+ */
+function findTodoTestDay_(weeks, testUrl) {
+  var schoolDays = SCHEDULE_WEEKDAY_NAMES.slice(0, 5);
+  var best = null;
+  var own = null;
+  weeks.forEach(function (w) {
+    var count = {};
+    byDayRows_(w.tab).forEach(function (r) {
+      if (r.kind !== 'canvas' || schoolDays.indexOf(r.day) === -1) return;
+      if (getCellLinkUrl_(r.cells[0]) === testUrl) {
+        if (!own) own = { title: w.title, day: r.day, others: 0 };
+        return;
+      }
+      count[r.day] = (count[r.day] || 0) + 1;
+    });
+    schoolDays.forEach(function (d) {
+      if (count[d] && (!best || count[d] > best.others)) best = { title: w.title, day: d, others: count[d] };
+    });
+  });
+  return best || own;
+}
+
+/**
+ * A week tab's tables as selfTest checks them: [{ kind, title, rows, widths }]. kind is the heading
+ * the table sits under (By Day, Weekend plan or By Class) and title its first cell. rows are
+ * { text, url, chip, status } for each row (for a By Class table: the rows under the class name and
+ * the column names). widths are the column widths in points; only a full read has them.
+ */
 function tablesOfTab_(week) {
   var body = week.tab.documentTab && week.tab.documentTab.body;
-  return ((body && body.content) || []).filter(function (el) { return el.table; }).map(function (el) {
+  var oldStaff = findOldStaffTable_(week.tab);
+  var headings = { day: BY_DAY_TITLE, class: BY_CLASS_TITLE, weekend: WEEKEND_TITLE };
+  var out = [];
+  ((body && body.content) || []).forEach(function (el) {
+    var layout = el.table && el.table !== oldStaff ? tableLayout_(el.table) : null;
+    if (!layout) return;
     var rows = (el.table.tableRows || []).map(function (row) {
       var cells = row.tableCells || [];
+      var hasStatus = layout.kind !== 'weekend' && cells.length > layout.notes;
       return {
         text: cells.length ? getCellText_(cells[0]) : '',
-        url: cells.length >= 6 ? getCellLinkUrl_(cells[0]) : null,
-        status: cells.length >= 6 ? getCellText_(cells[4]) : '',
-        note: cells.length >= 6 ? getCellText_(cells[5]) : '',
+        url: hasStatus ? getCellLinkUrl_(cells[0]) : null,
+        chip: hasStatus ? cellDropdown_(cells[layout.status]) : null,
+        status: hasStatus ? cellStatus_(cells[layout.status], layout.old) : '',
       };
     });
     var props = (el.table.tableStyle && el.table.tableStyle.tableColumnProperties) || [];
-    return {
-      kind: tableKind_(el.table),
+    out.push({
+      kind: headings[layout.kind],
       title: rows.length ? rows[0].text : '',
-      rows: rows,
+      rows: layout.kind === 'class' ? rows.slice(2) : rows,
       widths: props.map(function (p) { return p.width && typeof p.width.magnitude === 'number' ? p.width.magnitude : 0; }),
-    };
+    });
   });
+  return out;
 }
 
-/** First assignment row in a By Class table: its tab, URL and cells. */
+/** The first assignment row in a By Class table of a current week: its tab, URL and cells. */
 function findFirstAssignmentRow_(docId) {
-  var doc = docsGet_(docId);
   var found = null;
-  eachTable_(doc, function (tabId, table) {
-    if (found || tableKind_(table) !== 'By Class') return;
-    (table.tableRows || []).some(function (row) {
-      var cells = row.tableCells || [];
-      var url = cells.length >= 6 ? getCellLinkUrl_(cells[0]) : null;
-      if (!url) return false;
-      found = { tabId: tabId, url: url, title: getCellText_(cells[0]), status: cells[4], note: cells[5] };
-      return true;
+  weekTabsOf_(docsGet_(docId)).forEach(function (w) {
+    if (found || !weekKeyFromTabTitle_(w.title)) return;
+    eachAssignmentRow_(w.tab, function (row) {
+      if (found || row.kind !== 'class') return;
+      found = {
+        tabId: w.tab.tabProperties.tabId,
+        weekTitle: w.title,
+        url: row.url,
+        title: row.title,
+        status: row.statusCell,
+        note: row.noteCell,
+        old: !isNewLayoutTab_(w.tab), // a week tab from before Status was a dropdown
+      };
     });
   });
   return found;
@@ -2282,15 +2492,14 @@ function findRowsByUrl_(docId, url) {
   var rows = [];
   weekTabsOf_(docsGet_(docId)).forEach(function (w) {
     var key = weekKeyFromTabTitle_(w.title);
-    var body = w.tab.documentTab && w.tab.documentTab.body;
-    ((body && body.content) || []).forEach(function (el) {
-      if (!el.table) return;
-      var kind = tableKind_(el.table);
-      (el.table.tableRows || []).forEach(function (row) {
-        var cells = row.tableCells || [];
-        if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
-          rows.push({ table: kind, weekKey: key, priority: getCellText_(cells[3]), status: getCellText_(cells[4]), note: getCellText_(cells[5]) });
-        }
+    eachAssignmentRow_(w.tab, function (row) {
+      if (row.url !== url) return;
+      rows.push({
+        table: row.kind === 'class' ? BY_CLASS_TITLE : BY_DAY_TITLE,
+        weekKey: key,
+        text: row.text,
+        status: row.status,
+        note: row.note,
       });
     });
   });
@@ -2302,24 +2511,19 @@ function rowCellsByUrl_(docId, url) {
   var rows = [];
   weekTabsOf_(docsGet_(docId)).forEach(function (w) {
     if (!weekKeyFromTabTitle_(w.title)) return;
-    var body = w.tab.documentTab && w.tab.documentTab.body;
-    ((body && body.content) || []).forEach(function (el) {
-      if (!el.table) return;
-      (el.table.tableRows || []).forEach(function (row) {
-        var cells = row.tableCells || [];
-        if (cells.length >= 6 && getCellLinkUrl_(cells[0]) === url) {
-          rows.push({ tabId: w.tab.tabProperties.tabId, url: url, kind: tableKind_(el.table), status: cells[4], note: cells[5] });
-        }
+    eachAssignmentRow_(w.tab, function (row) {
+      if (row.url !== url) return;
+      rows.push({
+        tabId: w.tab.tabProperties.tabId,
+        url: url,
+        kind: row.kind === 'class' ? BY_CLASS_TITLE : BY_DAY_TITLE,
+        status: row.statusCell,
+        note: row.noteCell,
+        statusNow: row.status || STATUS_DEFAULT,
       });
     });
   });
   return rows;
-}
-
-/** The week ('yyyy-MM-dd' Monday) of the week tab with this ID, or null. */
-function weekKeyOfTab_(docJson, tabId) {
-  var w = weekTabsOf_(docJson).filter(function (x) { return x.tab.tabProperties.tabId === tabId; })[0];
-  return w ? weekKeyFromTabTitle_(w.title) : null;
 }
 
 /** A copy of the schedule without one assignment, as if it were removed or unpublished in Canvas. */
@@ -2353,29 +2557,43 @@ function scheduleWithMovedAssignment_(schedule, url, toWeekKey) {
   moved.week_start = toWeekKey;
   var today = Utilities.formatDate(new Date(), APP_TIME_ZONE, 'yyyy-MM-dd');
   moved.days_until_due = scheduleDaysBetween_(today, moved.due_date);
-  moved.priority = schedulePriority_(moved.days_until_due);
   copy.weeks[toWeekKey].days[dayIndex].assignments.push(moved);
   return copy;
 }
 
-/** Calls fn(tabId, table) for every table in every tab. */
-function eachTable_(docJson, fn) {
-  function walk(tab) {
-    var tabId = tab.tabProperties && tab.tabProperties.tabId;
-    var body = tab.documentTab && tab.documentTab.body;
-    ((body && body.content) || []).forEach(function (el) {
-      if (el.table) fn(tabId, el.table);
-    });
-    (tab.childTabs || []).forEach(walk);
+// ---- selfTest helpers: editing the Doc the way staff do ------------------------------------------
+// Each one reads the Doc first, because every edit moves the text after it. When one batch holds
+// several edits, the one furthest down the tab comes first, so the others' positions stay right.
+
+/** Picks a choice in one Status dropdown. */
+function setStatusChip_(docId, tabId, dropdownId, status) {
+  var requests = [{
+    updateDropdownProperties: {
+      tabId: tabId,
+      dropdownId: dropdownId,
+      dropdownProperties: { selectedOptionId: statusChip_(status) },
+      fields: 'selectedOptionId',
+    },
+  }];
+  try {
+    docsBatchUpdate_(docId, requests);
+  } catch (e) {
+    if (docsDropdownsViaRest_ || docsApiIsQuotaError_(e)) throw e;
+    // The Advanced Docs service may not know dropdowns yet (see sendDocsBatch_). Picking the same
+    // choice twice changes nothing, so it's safe to send this again through the Docs REST API.
+    docsRestBatchUpdate_(docId, requests);
+    docsDropdownsViaRest_ = true;
   }
-  (docJson.tabs || []).forEach(walk);
 }
 
-/** Replaces the text of the Status and Notes cells (later cell first, so indexes stay valid). */
+/**
+ * Sets the Status and Notes of one assignment row. target is { tabId, status, note }, the last two
+ * being the row's cells (see findFirstAssignmentRow_). Notes is retyped. Status is picked in its
+ * dropdown, or retyped in a week tab from before Status was a dropdown.
+ */
 function writeStatusAndNote_(docId, target, status, note) {
   var requests = [];
-  [[target.note, note], [target.status, status]].forEach(function (pair) {
-    var cell = pair[0];
+  var retype = function (cell, text) {
     var start = cellParagraphInsertIndex_(cell);
     var range = getCellTextRange_(cell);
     if (range && range.endIndex - 1 > start) {
@@ -2386,7 +2604,192 @@ function writeStatusAndNote_(docId, target, status, note) {
       });
     }
     // An empty value only clears the cell (Docs refuses to insert nothing).
-    if (pair[1]) requests.push({ insertText: { text: pair[1], location: { tabId: target.tabId, index: start } } });
-  });
+    if (text) requests.push({ insertText: { text: text, location: { tabId: target.tabId, index: start } } });
+  };
+  var chip = cellDropdown_(target.status);
+  retype(target.note, note); // the later cell first
+  if (!chip) retype(target.status, status);
   docsBatchUpdate_(docId, requests);
+  if (chip) setStatusChip_(docId, target.tabId, chip.dropdownId, status);
+}
+
+/** Picks a Status for the to-do with this text. false if the to-do or its dropdown isn't there. */
+function setTodoStatus_(docId, weekTitle, text, status) {
+  var tab = readWeekTab_(docId, weekTitle);
+  var row = todoRow_(tab, text);
+  var chip = row ? cellDropdown_(row.cells[2]) : null;
+  if (!chip) return false;
+  setStatusChip_(docId, tab.tabProperties.tabId, chip.dropdownId, status);
+  return true;
+}
+
+/**
+ * Types a to-do in the "+ Add a to-do" row of a day, in front of those words (staff who click at
+ * the start of the cell and type leave them there too), and a note beside it.
+ */
+function typeTodoInBlankRow_(docId, weekTitle, day, text, note) {
+  var tab = readWeekTab_(docId, weekTitle);
+  var blank = byDayRows_(tab).filter(function (r) { return r.day === day && r.kind === 'blank'; })[0];
+  if (!blank) throw new Error(day + ' in "' + weekTitle + '" has no "' + ADD_TODO_TEXT + '" row');
+  var tabId = tab.tabProperties.tabId;
+  docsBatchUpdate_(docId, [
+    { insertText: { text: note, location: { tabId: tabId, index: cellParagraphInsertIndex_(blank.cells[3]) } } },
+    { insertText: { text: text + ' ', location: { tabId: tabId, index: cellParagraphInsertIndex_(blank.cells[0]) } } },
+  ]);
+}
+
+/**
+ * Does what "Insert row below" does on the first assignment of a day, then types a to-do in the new
+ * row: todo is { text, klass, note, bold } (bold: a word of the note to make bold). Returns
+ * { between, chip }: whether the new row sits between two assignments, and whether Google gave it a
+ * Status dropdown of its own.
+ */
+function insertTodoRowBelow_(docId, weekTitle, day, todo) {
+  var tab = readWeekTab_(docId, weekTitle);
+  var tabId = tab.tabProperties.tabId;
+  var assignments = byDayRows_(tab).filter(function (r) { return r.day === day && r.kind === 'canvas'; });
+  if (!assignments.length) throw new Error(day + ' in "' + weekTitle + '" has no assignment to insert a row below');
+  var above = assignments[0];
+  docsBatchUpdate_(docId, [{
+    insertTableRow: {
+      tableCellLocation: {
+        tableStartLocation: { tabId: tabId, index: byDayTableElement_(tab).startIndex },
+        rowIndex: above.r,
+        columnIndex: 0,
+      },
+      insertBelow: true,
+    },
+  }]);
+  tab = readWeekTab_(docId, weekTitle);
+  var cells = byDayTableElement_(tab).table.tableRows[above.r + 1].tableCells;
+  var noteAt = cellParagraphInsertIndex_(cells[3]);
+  var requests = [{ insertText: { text: todo.note, location: { tabId: tabId, index: noteAt } } }];
+  var boldAt = todo.bold ? String(todo.note || '').indexOf(todo.bold) : -1;
+  if (boldAt >= 0) {
+    requests.push({
+      updateTextStyle: {
+        range: { tabId: tabId, startIndex: noteAt + boldAt, endIndex: noteAt + boldAt + todo.bold.length },
+        textStyle: { bold: true },
+        fields: 'bold',
+      },
+    });
+  }
+  requests.push({ insertText: { text: todo.klass, location: { tabId: tabId, index: cellParagraphInsertIndex_(cells[1]) } } });
+  requests.push({ insertText: { text: todo.text, location: { tabId: tabId, index: cellParagraphInsertIndex_(cells[0]) } } });
+  docsBatchUpdate_(docId, requests);
+  return { between: assignments.length > 1, chip: !!cellDropdown_(cells[2]) };
+}
+
+/**
+ * Types a line at the start of one Weekend plan cell (the Assignment column of say Sunday,
+ * Afternoon). Returns what the cell said before, or null if that week tab has no such row.
+ */
+function typeWeekendPlan_(docId, weekTitle, day, part, text) {
+  var tab = readWeekTab_(docId, weekTitle);
+  var cells = weekendRow_(tab, day, part);
+  if (!cells) return null;
+  var before = readRichCell_(cells[1]).text;
+  docsBatchUpdate_(docId, [{
+    insertText: {
+      text: before ? text + ' ' : text,
+      location: { tabId: tab.tabProperties.tabId, index: cellParagraphInsertIndex_(cells[1]) },
+    },
+  }]);
+  return before;
+}
+
+/** Clears the Assignment cell of a to-do: how staff remove one without deleting its row. */
+function clearTodoAssignment_(docId, weekTitle, text) {
+  var tab = readWeekTab_(docId, weekTitle);
+  var row = todoRow_(tab, text);
+  if (!row) throw new Error('"' + text + '" is not in "' + weekTitle + '"');
+  var start = cellParagraphInsertIndex_(row.cells[0]);
+  var range = getCellTextRange_(row.cells[0]);
+  docsBatchUpdate_(docId, [{
+    deleteContentRange: { range: { tabId: tab.tabProperties.tabId, startIndex: start, endIndex: range.endIndex - 1 } },
+  }]);
+}
+
+/**
+ * Takes selfTest's own to-dos and Weekend plan line out of the current week tabs: everything that
+ * starts with "selfTest". A to-do row is deleted. A "+ Add a to-do" row selfTest typed in that no
+ * update has rewritten yet is only emptied, so the day keeps its blank row. Returns how many rows
+ * and lines were cleaned up.
+ */
+function removeTestTodos_(docId) {
+  var removed = 0;
+  weekTabsOf_(docsGet_(docId)).forEach(function (w) {
+    if (!weekKeyFromTabTitle_(w.title)) return;
+    var tabId = w.tab.tabProperties.tabId;
+    var edits = []; // { at: where in the tab, request }
+    var cut = function (start, length) {
+      if (length <= 0) return;
+      edits.push({ at: start, request: { deleteContentRange: { range: { tabId: tabId, startIndex: start, endIndex: start + length } } } });
+    };
+    weekTabTables_(w.tab).forEach(function (t) {
+      if (t.layout.kind !== 'weekend') return;
+      t.rows.forEach(function (row) {
+        var cell = (row.tableCells || [])[1];
+        var said = cell ? readRichCell_(cell).text : '';
+        if (said.indexOf(SELFTEST_PLAN_TEXT) !== 0) return;
+        var space = said.charAt(SELFTEST_PLAN_TEXT.length) === ' ' ? 1 : 0;
+        cut(cellParagraphInsertIndex_(cell), SELFTEST_PLAN_TEXT.length + space);
+        removed++;
+      });
+    });
+    var table = byDayTableElement_(w.tab);
+    byDayRows_(w.tab).forEach(function (r) {
+      if (r.kind === 'canvas') return;
+      var said = readRichCell_(r.cells[0]).text;
+      var note = readRichCell_(r.cells[3]).text;
+      if (said.indexOf('selfTest') !== 0 && note.indexOf('selfTest') !== 0) return;
+      removed++;
+      var placeholderAt = said.indexOf(ADD_TODO_TEXT);
+      if (placeholderAt >= 0) {
+        cut(cellParagraphInsertIndex_(r.cells[3]), note.length);
+        cut(cellParagraphInsertIndex_(r.cells[0]), placeholderAt);
+        return;
+      }
+      edits.push({
+        at: cellParagraphInsertIndex_(r.cells[0]),
+        request: {
+          deleteTableRow: {
+            tableCellLocation: { tableStartLocation: { tabId: tabId, index: table.startIndex }, rowIndex: r.r, columnIndex: 0 },
+          },
+        },
+      });
+    });
+    edits.sort(function (a, b) { return b.at - a.at; });
+    docsBatchUpdate_(docId, edits.map(function (e) { return e.request; }));
+  });
+  return removed;
+}
+
+/**
+ * Puts an "Added by staff" heading and table at the end of a week tab, the way week tabs had them
+ * before November 2026, with one row: [assignment, class, day, status, notes]. The next update must
+ * move that row into By Day. Returns false, and adds nothing, if the tab already has such a table.
+ */
+function plantOldStaffTable_(docId, weekTitle, row) {
+  var tab = readWeekTab_(docId, weekTitle);
+  if (findOldStaffTable_(tab)) return false;
+  var tabId = tab.tabProperties.tabId;
+  var content = tab.documentTab.body.content;
+  var end = content[content.length - 1].endIndex - 1; // just before the tab's last line break
+  docsBatchUpdate_(docId, [
+    { insertText: { text: '\n' + ADDED_BY_STAFF_TEXT, location: { tabId: tabId, index: end } } },
+    { insertTable: { rows: 2, columns: OLD_STAFF_COLUMNS, location: { tabId: tabId, index: end + 1 + ADDED_BY_STAFF_TEXT.length } } },
+  ]);
+  var table = findOldStaffTable_(readWeekTab_(docId, weekTitle));
+  if (!table) throw new Error('the "' + ADDED_BY_STAFF_TEXT + '" table did not appear in "' + weekTitle + '"');
+  var words = [['Assignment', 'Class', 'Day', 'Status', 'Notes'], row];
+  var requests = [];
+  for (var r = words.length - 1; r >= 0; r--) {
+    for (var c = OLD_STAFF_COLUMNS - 1; c >= 0; c--) {
+      var cell = table.tableRows[r].tableCells[c];
+      requests.push({ insertText: { text: words[r][c], location: { tabId: tabId, index: cellParagraphInsertIndex_(cell) } } });
+    }
+  }
+  docsBatchUpdate_(docId, requests);
+  return true;
 }

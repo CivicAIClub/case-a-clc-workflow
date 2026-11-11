@@ -1,5 +1,7 @@
 # Year simulation (pre-mortem)
 
+> **Not updated for the November 2026 week tabs.** This tool builds and checks the layout from before that change (a Priority column, a typed Status, an "Added by staff" table), so it doesn't run against the current `apps_script/` files. Its fake Doc (`lib/realistic.js`) and its checks in `year.js` need the new layout (Status dropdowns, to-dos under each day, Weekend plan tables) before the next run. The October 2026 results in `out/` and in the pre-mortem are from the old layout.
+
 Runs the real `apps_script/*.gs` for a whole school year, with 30 made-up students, a fake Canvas, a fake Docs API that returns what Google's reads really look like, and a simulated clock. It's how the numbers in [`docs/pre-mortem-2026-27.md`](../../docs/pre-mortem-2026-27.md) were made. It's a developer tool: nothing here is pasted into Apps Script.
 
 ```bash
