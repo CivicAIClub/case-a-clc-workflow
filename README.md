@@ -30,7 +30,7 @@ CLC staff open one web page, signed in with their Pomfret Google account. They a
 - **Status** is a dropdown staff click: Need to Start (red), In progress (yellow) or Done/Submitted (green). Staff type **Notes**. Both are kept across updates, keyed by the assignment's Canvas link, and follow an assignment whose due date moves to another week. By Day and By Class show the same Status; if they differ, the one staff changed last wins.
   - An assignment that leaves the planner after staff set a Status or typed a Note stays in its week with both. That covers removed, unpublished, undated, or moved outside the 4 weeks. A small gray line under its title says why: "Not on Canvas", "No due date" or "Now due Nov 30".
   - A renamed week tab gets its name back. A deleted one comes back with its Statuses, from AutoPlanner's record of what it last wrote; notes are never stored outside the Doc.
-- Work due earlier in the week stays in its week until the week ends. Then the tab moves into a **Past weeks** tab, newest first. After that AutoPlanner never edits, rebuilds or deletes past weeks, and its Doc reads leave their content out so updates stay fast all year.
+- Work due earlier in the week stays in its week until the week ends. Then the tab moves into a **Past weeks** tab, newest first. After that AutoPlanner never edits, rebuilds or deletes past weeks, and its Doc reads leave their content out so updates stay fast all year. (The one exception is `reformatPastWeeks`, below, which the owner runs once and which keeps every word.)
 - Staff's own to-dos (typed in a "+ Add a to-do" row under a day in By Day) and the Weekend plan are written back exactly, formatting included, on every update, and move into Past weeks with their week. A to-do goes away when staff delete its row or clear its Assignment cell. The CLC Planner tab counts them.
 - A Doc last written before November 2026 (Priority column, typed Status, an "Added by staff" table at the bottom) is brought to this layout by its next update: each typed Status becomes a dropdown, and each "Added by staff" row moves under its day in By Day, or into the Weekend plan for a Saturday or Sunday row. Nothing staff typed is lost.
 - **CLC teachers** (optional, the `CLC_TEACHERS` Script Property): each teacher gets a folder inside the shared folder, named with their full name. A student's CLC teacher, picked on the page, decides which folder their Doc is in. Moving it is the same Doc and link. A Doc dragged between folders in Drive changes the student's teacher at the next page load or update. The page has a **Show** filter, and a signed-in CLC teacher starts on their own students.
@@ -139,6 +139,11 @@ Other functions you can run from the editor (they only run for the owner):
 - **healthCheckNow** runs the weekly health check right away (it emails only if something needs attention).
 - **pauseAutomaticUpdates** and **resumeAutomaticUpdates** stop and restart the 7 pm and midnight updates and the health email, for example over the summer. The triggers stay installed.
 - **measureTimeLimit** finds this account's real Apps Script time limit. Run it once and leave it; it stops on its own (up to 31 minutes). Then run **checkSetup**, which saves the result in `RUNTIME_LIMIT_SECONDS`.
+- **Reformatting old Past weeks.** Weeks filed before November 2026 keep the old layout (Priority column, typed Status, "Added by staff" table). Run once, in this order:
+  - **reformatPastWeeksDryRun** changes nothing. For every student it logs each week in Past weeks as `WOULD CONVERT`, `ALREADY NEW` or `SKIP (reason)`, with counts: assignments, Status chips by choice, notes, staff rows, kept rows, Priority labels dropped, "Status was" notes, and comments on the tab.
+  - **reformatPastWeeks** rewrites each old week in the new layout using only what is written in that tab (never Canvas or saved Statuses). Every title, link, class, day, due time, Status, note and staff row stays as it was; only the tables and their look change. The Priority labels (Today, Past due, ...) are the one thing dropped. Each week is built as a copy, read back and compared row by row with the old one, and swapped in only if everything matches; otherwise the old tab stays exactly as it was and the log says `FAILED` with the first difference.
+  - It holds each student's row while it works, so no update writes that Doc at the same time, and it only touches Docs in `DOCS_FOLDER_ID`. If it stops before the time limit, run it again: weeks already done say `ALREADY NEW`.
+  - Comments on an old week lose their place in the text when the tab is replaced (Google keeps them in the comment list); the log counts them first.
 
 ## Tests
 
@@ -155,6 +160,7 @@ node --test tests/*.test.js
   - the shared-folder rules and Status preservation in `Code.gs`
   - Status dropdowns, staff to-dos, the Weekend plan, the move from the old "Added by staff" table, and CLC teacher folders (against a pretend Docs API that enforces Google's rules and numbers a Doc's content the way Google does)
   - `selfTest` itself, run from start to finish on that pretend Docs API
+  - rewriting old Past weeks (`reformatPastWeeks`), on old weeks built by the code that wrote them at the time (`tests/fixtures/old-past-weeks/`, made by `tools/old-week-fixtures/make-fixtures.js`)
   - the Canvas client
   - a week-grouping golden file: the original Python version's output without its priority label, plus this week's past-due work
 - CI runs them, plus a syntax check of every `.gs` file and of the script in `Index.html`, on every PR.

@@ -29,6 +29,8 @@ alwaysApply: true
 - Run `node --test tests/*.test.js` before every PR; add or update tests for any change in `apps_script/`. Tests use fake data only.
 - Docs API quota: batch writes (see `BATCH_CHUNK` in `Code.gs`) and reuse the existing `documentId` rather than creating new Docs.
 - Never commit secrets, tokens, real student data, staff email lists, or `.clasp.json` / `.clasprc.json`.
+- Preserve staff-added work and its formatting. Do not edit, rebuild, or delete archived Past weeks.
+  - The only exception is the owner-run `reformatPastWeeks`, which rewrites old weeks in the new layout and keeps every word.
 
 ## Definition of done (current phase)
 - Staff sign in with Pomfret accounts, add students, and every student's Doc updates automatically at about 7 pm and midnight; Status and Notes survive updates; `selfTest` passes in the live project.

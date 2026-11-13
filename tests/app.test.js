@@ -77,7 +77,8 @@ test('only the intended functions are callable from the page (no trailing unders
   }
   assert.deepStrictEqual(publicNames.sort(), [
     'addStudent', 'checkSetup', 'continueRun', 'doGet', 'editStudent', 'getAppState', 'getRunStatus', 'healthCheckNow', 'measureTimeLimit',
-    'pauseAutomaticUpdates', 'removeStudent', 'resumeAutomaticUpdates', 'scheduleTestRun', 'scheduledRun', 'selfTest', 'selfTestEveryday',
+    'pauseAutomaticUpdates', 'reformatPastWeeks', 'reformatPastWeeksDryRun', 'removeStudent', 'resumeAutomaticUpdates', 'scheduleTestRun',
+    'scheduledRun', 'selfTest', 'selfTestEveryday',
     'selfTestKeepToken', 'setStudentTeacher', 'setupTriggers', 'startUpdateAll', 'updateStudentNow', 'weeklyHealthCheck',
   ].sort());
 });
@@ -117,7 +118,8 @@ test('every page function refuses people who are not in ALLOWED_USERS', () => {
 test('editor-only functions refuse staff calling them from the page', () => {
   const t = setup();
   t.svc.setActive(STAFF);
-  for (const fn of ['setupTriggers', 'scheduleTestRun', 'checkSetup', 'selfTest', 'selfTestKeepToken', 'healthCheckNow', 'pauseAutomaticUpdates', 'resumeAutomaticUpdates']) {
+  for (const fn of ['setupTriggers', 'scheduleTestRun', 'checkSetup', 'selfTest', 'selfTestKeepToken', 'healthCheckNow', 'pauseAutomaticUpdates', 'resumeAutomaticUpdates',
+    'reformatPastWeeks', 'reformatPastWeeksDryRun']) {
     assert.throws(() => t.ctx[fn](), /Only the script owner/, fn);
   }
 });

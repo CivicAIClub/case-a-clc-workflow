@@ -26,6 +26,7 @@ AutoPlanner helps Pomfret's Supported Study Hall staff at the Center for Learnin
 - Only update Docs inside `DOCS_FOLDER_ID`. Batch Docs API writes using `BATCH_CHUNK` and reuse the existing `documentId` instead of creating extra Docs.
 - Never write to a deleted or trashed student Doc. Create a fresh Doc in the shared folder or the student's teacher folder and report this on the student's row.
 - Preserve staff-added work and its formatting. Do not edit, rebuild, or delete archived Past weeks.
+  - The only exception is the owner-run `reformatPastWeeks`, which rewrites old weeks in the new layout and keeps every word.
 - `Index.html` holds the staff page's HTML, CSS, and JavaScript. It talks to the server only through `google.script.run`. `frontend/index.html` is only the GitHub Pages "moved" page.
 - Apps Script pages can call any function without a final `_`. Every internal function must end in `_`. Every public function must start with `requireAllowedUser_()` for page calls, `requireOwner_()` for editor calls, or `requireTrigger_(e)` for trigger handlers.
 - `tests/app.test.js` lists allowed public functions. Update that list deliberately when changing public functions.
