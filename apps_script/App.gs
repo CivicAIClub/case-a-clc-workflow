@@ -1534,6 +1534,107 @@ function checkSetup() {
 }
 
 // =====================================================================================
+// Editor-only, run once: old Past weeks in the new layout (see reformatPastWeeksInDoc_ in Code.gs)
+// =====================================================================================
+
+/**
+ * Changes nothing. For every student's Doc, logs what reformatPastWeeks would do with each week in
+ * Past weeks (WOULD CONVERT, ALREADY NEW or SKIP and why), with what it would keep and drop.
+ */
+function reformatPastWeeksDryRun() {
+  requireOwner_();
+  return reformatPastWeeksRun_(true);
+}
+
+/**
+ * Rewrites every week in Past weeks that still has the layout from before November 2026, keeping
+ * every word staff and AutoPlanner wrote in it. Run reformatPastWeeksDryRun first. If it stops
+ * before the time limit, run it again: weeks already done are skipped.
+ */
+function reformatPastWeeks() {
+  requireOwner_();
+  return reformatPastWeeksRun_(false);
+}
+
+function reformatPastWeeksRun_(dryRun) {
+  var folder = getDocsFolder_();
+  if (!folder) throw new Error('DOCS_FOLDER_ID is not set. reformatPastWeeks only changes Docs in the shared folder.');
+  var lines = [];
+  var log = function (line) { lines.push(line); Logger.log(line); };
+  var totals = { CONVERTED: 0, 'WOULD CONVERT': 0, 'ALREADY NEW': 0, SKIP: 0, FAILED: 0 };
+  var docsSkipped = 0;
+  var stoppedAt = '';
+  var students = listStudents_().filter(function (s) { return s.docId; });
+  log((dryRun ? 'Dry run: nothing is changed. ' : '') + students.length + ' student Doc' + (students.length === 1 ? '' : 's') + '.');
+  for (var i = 0; i < students.length && !stoppedAt; i++) {
+    if (msLeftInExecution_() < REFORMAT_RESERVE_MS) {
+      stoppedAt = students[i].name || 'Student';
+      break;
+    }
+    var done = reformatStudentPastWeeks_(students[i], folder, dryRun);
+    done.lines.forEach(log);
+    done.results.forEach(function (r) { totals[r]++; });
+    if (done.skipped) docsSkipped++;
+    if (done.stopped) stoppedAt = students[i].name || 'Student';
+  }
+  log(dryRun
+    ? 'Dry run done: ' + totals['WOULD CONVERT'] + ' week(s) would be converted, ' + totals['ALREADY NEW'] + ' already new, ' +
+        totals.SKIP + ' skipped; ' + docsSkipped + ' Doc(s) skipped.'
+    : 'Done: ' + totals.CONVERTED + ' week(s) converted, ' + totals['ALREADY NEW'] + ' already new, ' + totals.SKIP + ' skipped, ' +
+        totals.FAILED + ' failed; ' + docsSkipped + ' Doc(s) skipped.');
+  if (stoppedAt) {
+    log('Stopped before the time limit, at ' + stoppedAt + '. Run ' + (dryRun ? 'reformatPastWeeksDryRun' : 'reformatPastWeeks') +
+      ' again to pick up where it stopped.');
+  }
+  return lines.join('\n');
+}
+
+/**
+ * One student's Doc: { lines, results, skipped, stopped }. Only a Doc inside DOCS_FOLDER_ID that
+ * isn't in the trash is read. For the real run the student's row is held, the way an update holds
+ * it, so no update writes the Doc at the same time.
+ */
+function reformatStudentPastWeeks_(student, folder, dryRun) {
+  var name = student.name || 'Student';
+  var out = { lines: [], results: [], skipped: false, stopped: false };
+  var skipDoc = function (why) {
+    out.lines.push('SKIP           ' + name + ': ' + why);
+    out.skipped = true;
+    return out;
+  };
+  try {
+    assertDocIsInFolder_(student.docId, folder);
+  } catch (err) {
+    return skipDoc(String(err.message || err));
+  }
+  if (!dryRun && !claimStudent_(student.id)) return skipDoc('being updated right now. Run reformatPastWeeks again in a few minutes.');
+  var props = PropertiesService.getScriptProperties();
+  try {
+    var res = reformatPastWeeksInDoc_(student.docId, {
+      dryRun: dryRun,
+      msLeft: msLeftInExecution_,
+      // An update treats a row held longer than APP_STUDENT_BUSY_MS as free, so keep it fresh.
+      beforeWeek: function () { props.setProperty('busy.' + student.id, String(Date.now())); },
+    });
+    out.lines.push(name + ': ' + (res.weeks.length ? res.weeks.length + ' week(s) in Past weeks' : 'no Past weeks yet') +
+      (res.leftovers ? '; ' + res.leftovers + ' copy(ies) left by a cut-off run ' + (dryRun ? 'would be deleted' : 'deleted') : ''));
+    res.weeks.forEach(function (w) {
+      var detail = w.detail ? ': ' + w.detail : '';
+      var counts = w.result === 'ALREADY NEW' ? '' : ' · ' + pastWeekStatsText_(w.stats, w.comments);
+      out.lines.push('  ' + (w.result + '              ').slice(0, 14) + ' ' + w.title + detail + counts);
+      out.results.push(w.result);
+    });
+    out.stopped = res.stopped;
+  } catch (err) {
+    out.lines.push('FAILED         ' + name + ': ' + String(err.message || err).slice(0, 300));
+    out.skipped = true;
+  } finally {
+    if (!dryRun) props.deleteProperty('busy.' + student.id);
+  }
+  return out;
+}
+
+// =====================================================================================
 // Editor-only: selfTest (runs entirely as you, with your own Canvas token)
 // =====================================================================================
 
