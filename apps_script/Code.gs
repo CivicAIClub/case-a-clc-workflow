@@ -54,6 +54,10 @@
  *              italic #666666; with nothing due at all it says "No assignments due this week."
  *   Spacing:   each heading sits directly on its help line or table; exactly one empty paragraph
  *              after every table. Help lines are 10 pt, #444444.
+ *   Past weeks: a week filed before November 2026 keeps its old layout until the owner runs
+ *              reformatPastWeeks (see readOldPastWeek_). It then has the same tables, colors and
+ *              widths, with only By Day (the days that have rows, no blank rows, no help line) and
+ *              By Class: no Weekend plan. Times stay as written ("8:00 AM").
  */
 var LAYOUT_BASE_WIDTH_PT = 468;
 var BY_DAY_WIDTHS = [160, 80, 116, 112];
@@ -1330,7 +1334,6 @@ function weekTabTables_(tabJson) {
   return out;
 }
 
-/** By Class in this layout: Canvas link -> day. It tells By Day which of its rows are Canvas work. */
 /**
  * What this layout's By Class tables say about the assignments in a week tab:
  *   days:     { assignment link: the weekday in its Due cell }
@@ -2442,9 +2445,17 @@ function cellText_(value) {
  * the tab before; it's written back exactly.
  */
 function buildWeekTabRequests_(tabId, weekKey, weekData, courses, colorMap, saved, contentWidth, staff) {
+  return weekTabRequestsFromBlocks_(tabId, weekTabBlocks_(weekKey, weekData, courses, colorMap, saved, contentWidth, staff));
+}
+
+/**
+ * The Docs requests that write `blocks` (see weekTabBlocks_) into a tab that has just been created
+ * or cleared, after its Status dropdown. Old Past weeks are rewritten with it too (see
+ * pastWeekBlocks_), so every week tab is written the same way.
+ */
+function weekTabRequestsFromBlocks_(tabId, blocks) {
   var reqs = [statusDropdownRequest_(tabId)];
   var range = function (s, e) { return { tabId: tabId, startIndex: s, endIndex: e }; };
-  var blocks = weekTabBlocks_(weekKey, weekData, courses, colorMap, saved, contentWidth, staff);
   var at = 1; // the newline of the last paragraph written so far
   var afterTable = false;
   var i = 0;
@@ -2531,7 +2542,7 @@ function weekTabBlocks_(weekKey, weekData, courses, colorMap, saved, contentWidt
   var work = staff || readStaffWork_(null);
   var blocks = [
     { line: 'Week of ' + (weekData.week_label || weekKey), look: 'h2' },
-    { line: 'Assignments in this week: ' + countAssignmentsInWeek_(days), look: 'count' },
+    { line: COUNT_LINE_PREFIX + countAssignmentsInWeek_(days), look: 'count' },
     { line: BY_DAY_TITLE, look: 'h3' },
     { line: BY_DAY_HELP_LINE, look: 'help' },
     { table: byDayTable_(days, colorMap, saved, contentWidth, work.days) },
@@ -2778,7 +2789,7 @@ function moveOldStaffRows_(tabJson, work) {
     var statusText = cellText_(cells[3].text);
     var status = normalizeStatus_(statusText);
     var option = statusOption_(status);
-    var front = !day && dayText ? 'Day was: ' + dayText + '. ' : '';
+    var front = !day && dayText ? DAY_WAS_PREFIX + dayText + '. ' : '';
     var notesWith = function (words) {
       return richJoin_(richText_(richHasText_(cells[4]) ? words : words.replace(/ $/, '')), cells[4]);
     };
@@ -3253,4 +3264,762 @@ function assignmentsByDay_(days) {
     });
   });
   return byDay;
+}
+
+// ---- Old Past weeks in this layout (reformatPastWeeks in App.gs, run once by the owner) ---------
+// Weeks filed before November 2026 keep the layout they were filed in: Priority and Due Time
+// columns, colored rows, typed Statuses, By Class before By Day and an "Added by staff" table.
+// reformatPastWeeks rewrites each of them in this layout using only what is written in that tab
+// (never Canvas, Script Properties or saved Statuses, which have all changed since): every title,
+// link, class, day, due time, Status, note and staff row stays as it was. Only the tables and their
+// look change. A new copy is built next to the old tab, read back and compared with the old one, and
+// it only takes the old tab's place if every row matches. A week AutoPlanner can't read with
+// confidence is left as it is and reported. Normal updates never touch Past weeks.
+//
+// A week is read into one plain record (see readOldPastWeek_ and readNewPastWeek_):
+//   heading, count:  the "Week of ..." heading and the "Assignments in this week: N" line, as written
+//   classes:         [{ name, color, rows }] the By Class tables that have rows, in their old order
+//   nothingDue:      the line naming the classes with nothing due ("Nothing due this week: Art."), or ''
+//   days:            { Monday: { rows, staff }, ... Sunday } By Day: the Canvas rows under each day,
+//                    in their old order, then the rows from "Added by staff"
+//   a Canvas row:    { title (the Assignment cell, rich), url, middle (By Class: the day it was due;
+//                    By Day: the class), time (only when not 11:59 PM, as the old cell had it),
+//                    reason (why a kept row stayed: "Not on Canvas"), status, note (rich) }
+//   a staff row:     { cells: [assignment, class, notes] (rich), status }, as staffRow_ takes it
+// Status and note are what the new tab shows: a Status typed by hand that isn't one of the old
+// choices is the first choice, and the note starts with "Status was: <text>. ".
+
+var OLD_BY_CLASS_HEADERS = ['Assignment', 'Day', 'Due Time', 'Priority', 'Status', 'Notes'];
+var OLD_BY_DAY_HEADERS = ['Assignment', 'Course', 'Due Time', 'Priority', 'Status', 'Notes'];
+var OLD_STAFF_HEADERS = ['Assignment', 'Class', 'Day', 'Status', 'Notes'];
+// What the Priority column said. It was a column label, not something anyone typed: the one piece of
+// text that goes away.
+var OLD_PRIORITY_LABELS = ['Past due', 'Today', 'Tomorrow', 'Due Soon', 'This Week', 'Upcoming'];
+// The lines above and inside the old tables, by AutoPlanner (not kept: the new layout has its own).
+var OLD_TAB_LINES = [
+  'Status: type Not started, In progress, or Complete. Notes: type anything you like. AutoPlanner never changes these two columns.',
+  BY_CLASS_TITLE,
+  BY_DAY_TITLE,
+  ADDED_BY_STAFF_TEXT,
+  'Add anything not on Canvas here. AutoPlanner never changes this table.',
+];
+var COUNT_LINE_PREFIX = 'Assignments in this week: ';
+var DAY_WAS_PREFIX = 'Day was: ';
+var OLD_DEFAULT_COLOR = '#EAEDED';
+var TIME_TEXT = /^\d{1,2}:\d{2}\s?[AaPp][Mm]$/;
+// A week is only started with at least this long left in the run (a week takes well under a minute).
+var REFORMAT_RESERVE_MS = 90 * 1000;
+
+function tabBodyContent_(tabJson) {
+  return (tabJson && tabJson.documentTab && tabJson.documentTab.body && tabJson.documentTab.body.content) || [];
+}
+
+function rowTexts_(row) {
+  return ((row && row.tableCells) || []).map(function (c) { return getCellText_(c); });
+}
+
+function sameList_(a, b) {
+  return a.length === b.length && a.every(function (x, i) { return x === b[i]; });
+}
+
+function emptyPastWeek_() {
+  var week = { heading: '', count: '', classes: [], nothingDue: '', days: {} };
+  SCHEDULE_WEEKDAY_NAMES.forEach(function (d) { week.days[d] = { rows: [], staff: [] }; });
+  return week;
+}
+
+/** '#RRGGBB' for a Docs color, or '' for none. */
+function colorHex_(optionalColor) {
+  var rgb = optionalColor && optionalColor.color && optionalColor.color.rgbColor;
+  if (!rgb) return '';
+  return '#' + ['red', 'green', 'blue'].map(function (k) {
+    var v = Math.round((rgb[k] || 0) * 255).toString(16).toUpperCase();
+    return v.length < 2 ? '0' + v : v;
+  }).join('');
+}
+
+function cellBackground_(cell) {
+  return colorHex_(cell && cell.tableCellStyle && cell.tableCellStyle.backgroundColor);
+}
+
+/** The first thing in a tab AutoPlanner can't copy cell by cell, said in words; '' if none. */
+function firstUncopyable_(content) {
+  var problem = '';
+  var stripped = new RegExp(DOCS_STRIPPED_CHARS.source); // without the "g", so test() keeps no state
+  var paragraphOk = function (p) {
+    // A list or checklist would lose its bullets and its ticks.
+    if (p.bullet) problem = 'it has a list or checklist';
+    (p.elements || []).forEach(function (pe) {
+      if (problem) return;
+      var link = pe.textRun && pe.textRun.textStyle && pe.textRun.textStyle.link;
+      if (!pe.textRun) problem = 'it holds something other than text (a chip, picture or smart link)';
+      else if (stripped.test(String(pe.textRun.content || ''))) problem = 'it holds characters AutoPlanner can\'t copy';
+      else if (link && !link.url && !link.tabId) problem = 'it has a link to a heading or bookmark';
+    });
+  };
+  content.forEach(function (el) {
+    if (problem) return;
+    if (el.paragraph) return paragraphOk(el.paragraph);
+    if (el.sectionBreak) return;
+    if (!el.table) { problem = 'it holds something other than text and tables'; return; }
+    (el.table.tableRows || []).forEach(function (row) {
+      (row.tableCells || []).forEach(function (cell) {
+        (cell.content || []).forEach(function (se) {
+          if (problem) return;
+          if (se.paragraph) paragraphOk(se.paragraph);
+          else problem = 'a cell holds a table or something else that isn\'t text';
+        });
+      });
+    });
+  });
+  return problem;
+}
+
+/** 'class', 'day' or 'staff' for a table AutoPlanner wrote before November 2026, or ''. */
+/** A table's first two rows in words, for a log line: "Art" / "Assignment | Day | ...". */
+function describeTable_(table) {
+  return (table.tableRows || []).slice(0, 2).map(function (row) {
+    return '"' + rowTexts_(row).filter(function (x) { return x; }).join(' | ') + '"';
+  }).filter(function (x) { return x !== '""'; }).join(' / ');
+}
+
+function oldTableKind_(table) {
+  var rows = table.tableRows || [];
+  if (table.columns === 6 && rows.length && sameList_(rowTexts_(rows[0]), OLD_BY_DAY_HEADERS)) return 'day';
+  if (table.columns === 6 && rows.length > 1 && sameList_(rowTexts_(rows[1]), OLD_BY_CLASS_HEADERS)) return 'class';
+  if (table.columns === OLD_STAFF_COLUMNS && rows.length && sameList_(rowTexts_(rows[0]), OLD_STAFF_HEADERS)) return 'staff';
+  return '';
+}
+
+function isKeptReason_(text) {
+  return text === KEPT_NOT_ON_CANVAS || text === KEPT_NO_DUE_DATE || /^Now due \S/.test(text);
+}
+
+/**
+ * What a Status cell typed by hand means now: { status, was }. Not started, In progress and
+ * Complete (in any case, with any spaces) and the other words in OLD_STATUS_WORDS become that
+ * choice; an empty cell is the first choice; anything else is the first choice and `was` keeps the
+ * text exactly, for the front of the note.
+ */
+function pastStatus_(text) {
+  var typed = String(text || '').trim();
+  var t = typed.replace(/\s+/g, ' ');
+  if (!t) return { status: STATUS_DEFAULT, was: '' };
+  var option = statusOption_(t);
+  if (option) return { status: option.label, was: '' };
+  var word = t.toLowerCase();
+  if (scheduleHasKey_(OLD_STATUS_WORDS, word)) return { status: OLD_STATUS_WORDS[word], was: '' };
+  return { status: STATUS_DEFAULT, was: typed };
+}
+
+/** `words` at the front of a note, with a space before what was there. */
+function noteWithFront_(words, note) {
+  if (!words) return note;
+  return richJoin_(richText_(richHasText_(note) ? words : words.replace(/ $/, '')), note);
+}
+
+/** A rich cell, or an empty one when it holds only spaces. */
+function wordsOrEmpty_(cell) {
+  return richHasText_(cell) ? cell : richText_('');
+}
+
+/**
+ * True when a typed day says just the day it means and no more: "Thu", "thurs.", "THURSDAY". Then
+ * the row goes under that day and nothing else needs keeping. Otherwise ("Thu after lunch") the
+ * words go in the note too, so none are lost.
+ */
+function plainDaySpelling_(text, day) {
+  var t = String(text || '').trim().toLowerCase().replace(/\.$/, '');
+  return t.length >= 2 && day.toLowerCase().indexOf(t) === 0;
+}
+
+/**
+ * One assignment row of an old By Class or By Day table: { row, priorityDropped, statusWas } or
+ * { problem } when a cell says something AutoPlanner never wrote there.
+ */
+function oldCanvasRow_(cells) {
+  var time = cellText_(getCellText_(cells[2]));
+  var priority = cellText_(getCellText_(cells[3]));
+  if (time && !TIME_TEXT.test(time)) return { problem: 'a Due Time cell says "' + time + '"' };
+  var reason = isKeptReason_(priority) ? priority : '';
+  if (priority && !reason && OLD_PRIORITY_LABELS.indexOf(priority) < 0) return { problem: 'a Priority cell says "' + priority + '"' };
+  var status = pastStatus_(readRichCell_(cells[4]).text);
+  var shown = time && time.replace(/\s+/g, '').toUpperCase() !== END_OF_DAY_TIME.replace(/\s+/g, '') ? time : '';
+  return {
+    row: {
+      title: readRichCell_(cells[0]),
+      url: getCellLinkUrl_(cells[0]) || '',
+      middle: cellText_(getCellText_(cells[1])),
+      time: shown,
+      reason: reason,
+      status: status.status,
+      note: noteWithFront_(status.was ? OLD_STATUS_NOTE_PREFIX + status.was + '. ' : '', readRichCell_(cells[5])),
+      color: cellBackground_(cells[1]),
+    },
+    priorityDropped: !!priority && !reason,
+    statusWas: !!status.was,
+  };
+}
+
+/**
+ * Reads a week in Past weeks:
+ *   { state: 'old', week, stats }   it has the layout from before November 2026 (see the record above)
+ *   { state: 'new' }                it already has this layout
+ *   { state: 'skip', reason }       AutoPlanner can't read it with confidence, so it isn't changed
+ * stats counts what the rewrite would do, for the log.
+ */
+function readOldPastWeek_(tabJson) {
+  var skip = function (reason) { return { state: 'skip', reason: reason }; };
+  var content = tabBodyContent_(tabJson);
+  var tables = content.filter(function (el) { return el.table; }).map(function (el) { return el.table; });
+  var lines = content.filter(function (el) { return el.paragraph; }).map(function (el) {
+    return paragraphPlainText_(el.paragraph).replace(/\n$/, '').trim();
+  }).filter(function (t) { return t; });
+  var kinds = tables.map(oldTableKind_);
+  var oldOnes = kinds.filter(function (k) { return k; }).length;
+  var staffHeading = lines.indexOf(ADDED_BY_STAFF_TEXT) >= 0;
+  if (!oldOnes && !staffHeading && tables.some(function (t) { return t.columns >= 5; })) {
+    var unknown = tables.filter(function (t) { return t.columns >= 5; })[0];
+    return skip('it has a table AutoPlanner doesn\'t know (first rows: ' + describeTable_(unknown) + ')');
+  }
+  if (!oldOnes && !staffHeading) {
+    // This layout with nothing due at all has no tables, just "By Day" and "By Class" lines.
+    var bothHeadings = lines.indexOf(BY_DAY_TITLE) >= 0 && lines.indexOf(BY_CLASS_TITLE) >= 0 && lines.indexOf(OLD_TAB_LINES[0]) < 0;
+    var known = tables.length ? tables.every(function (t) { return tableLayout_(t); }) : bothHeadings;
+    return known ? { state: 'new' } : skip(tables.length ? 'AutoPlanner can\'t tell which layout it has' : 'it has no tables');
+  }
+  if (oldOnes < tables.length) {
+    var odd = tables[kinds.indexOf('')];
+    return skip(odd.columns <= 4 ? 'it has tables in both layouts' : 'it has a table AutoPlanner doesn\'t know (first rows: ' + describeTable_(odd) + ')');
+  }
+  var uncopyable = firstUncopyable_(content);
+  if (uncopyable) return skip(uncopyable);
+  if (kinds.filter(function (k) { return k === 'day'; }).length !== 1) return skip('it doesn\'t have exactly one By Day table');
+  if (kinds.filter(function (k) { return k === 'staff'; }).length > 1) return skip('it has two "Added by staff" tables');
+
+  var week = emptyPastWeek_();
+  var stats = { assignments: 0, chips: {}, notes: 0, staffRows: 0, kept: {}, priorityDropped: 0, statusWas: 0, dayWas: 0, emptyRows: 0 };
+  week.heading = lines[0] || '';
+  if (week.heading.indexOf('Week of ') !== 0) return skip('it has no "Week of" heading at the top');
+  var rest = lines.slice(1);
+  if (rest.length && rest[0].indexOf(COUNT_LINE_PREFIX) === 0) week.count = rest.shift();
+  for (var i = 0; i < rest.length; i++) {
+    if (OLD_TAB_LINES.indexOf(rest[i]) < 0) return skip('it has text outside the tables: "' + rest[i].slice(0, 60) + '"');
+  }
+
+  var problem = '';
+  var count = function (row, result) {
+    stats.chips[row.status] = (stats.chips[row.status] || 0) + 1;
+    if (richHasText_(row.note)) stats.notes++;
+    if (result && result.priorityDropped) stats.priorityDropped++;
+    if (result && result.statusWas) stats.statusWas++;
+  };
+  var nothingDue = [];
+  var classLinks = [];
+  var dayLinks = [];
+  tables.forEach(function (table, t) {
+    if (problem) return;
+    var rows = table.tableRows || [];
+    var kind = kinds[t];
+    if (kind === 'class') {
+      var head = rows[0].tableCells || [];
+      var name = cellText_(getCellText_(head[0]));
+      if (!name || getCellLinkUrl_(head[0]) || rowTexts_(rows[0]).slice(1).some(function (x) { return x; })) {
+        problem = 'a By Class table doesn\'t start with its class name';
+        return;
+      }
+      var group = { name: name, color: cellBackground_(head[0]) || OLD_DEFAULT_COLOR, rows: [] };
+      rows.slice(2).forEach(function (row) {
+        if (problem) return;
+        var texts = rowTexts_(row);
+        if (texts.every(function (x) { return !x; })) { stats.emptyRows++; return; }
+        if (texts[0] === NO_ASSIGNMENTS_TEXT && !texts.slice(1).some(function (x) { return x; })) return;
+        var read = oldCanvasRow_(row.tableCells);
+        if (read.problem) { problem = read.problem; return; }
+        group.rows.push(read.row);
+        classLinks.push(read.row.url || '\u0000' + cellText_(read.row.title.text));
+        stats.assignments++;
+        if (read.row.reason) stats.kept[read.row.reason] = (stats.kept[read.row.reason] || 0) + 1;
+        count(read.row, read);
+      });
+      if (group.rows.length) week.classes.push(group);
+      else nothingDue.push(name);
+      return;
+    }
+    if (kind === 'day') {
+      var day = '';
+      rows.slice(1).forEach(function (row) {
+        if (problem) return;
+        var cells = row.tableCells || [];
+        var texts = rowTexts_(row);
+        if (texts.every(function (x) { return !x; })) { stats.emptyRows++; return; }
+        var others = texts.slice(1).some(function (x) { return x; });
+        if (!others && SCHEDULE_WEEKDAY_NAMES.indexOf(texts[0]) >= 0 && !getCellLinkUrl_(cells[0])) { day = texts[0]; return; }
+        if (texts[0] === NO_ASSIGNMENTS_TEXT && !others) return;
+        if (!day) { problem = 'By Day has a row above its first day'; return; }
+        var read = oldCanvasRow_(cells);
+        if (read.problem) { problem = read.problem; return; }
+        week.days[day].rows.push(read.row);
+        dayLinks.push(read.row.url || '\u0000' + cellText_(read.row.title.text));
+        count(read.row, read);
+      });
+      return;
+    }
+    // "Added by staff": each row goes under its day in By Day, as moveOldStaffRows_ places it.
+    rows.slice(1).forEach(function (row) {
+      var cells = [];
+      for (var c = 0; c < OLD_STAFF_COLUMNS; c++) cells.push(wordsOrEmpty_(readRichCell_((row.tableCells || [])[c])));
+      if (!cells.some(richHasText_)) { stats.emptyRows++; return; }
+      var dayText = cells[2].text.trim();
+      var day = weekdayFromText_(dayText);
+      var front = dayText && !(day && plainDaySpelling_(dayText, day)) ? DAY_WAS_PREFIX + dayText + '. ' : '';
+      if (front) stats.dayWas++;
+      var status = pastStatus_(cells[3].text);
+      if (status.was) front += OLD_STATUS_NOTE_PREFIX + status.was + '. ';
+      var staffRow = { cells: [cells[0], cells[1], noteWithFront_(front, cells[4])], status: status.status };
+      week.days[day || SCHEDULE_WEEKDAY_NAMES[0]].staff.push(staffRow);
+      stats.staffRows++;
+      count({ status: staffRow.status, note: staffRow.cells[2] }, { statusWas: !!status.was });
+    });
+  });
+  if (problem) return skip(problem);
+  if (classLinks.slice().sort().join('\n') !== dayLinks.slice().sort().join('\n')) {
+    return skip('By Class and By Day don\'t list the same assignments');
+  }
+  if (nothingDue.length) week.nothingDue = NOTHING_DUE_PREFIX + nothingDue.join(', ') + '.';
+  return { state: 'old', week: week, stats: stats };
+}
+
+/**
+ * The Assignment cell of a Canvas row in a rewritten past week (see assignmentCell_): the old title
+ * with its link and look, the time as the old cell had it ("8:00 AM"), and the kept row's reason.
+ */
+function pastAssignmentCell_(row, timeAfterTitle) {
+  var cell = row.title;
+  if (timeAfterTitle && row.time) cell = richJoin_(cell, richText_(' (due ' + row.time + ')'));
+  if (row.reason) cell = richJoin_(richJoin_(cell, richText_('\n')), richText_(row.reason, mutedStyle_()));
+  return cell;
+}
+
+function pastDueText_(row) {
+  return [row.middle, row.time].filter(function (x) { return x; }).join(', ');
+}
+
+/**
+ * A past week in this layout, from its record (see readOldPastWeek_): the heading and count line as
+ * written, By Day with only the days that have rows (no "+ Add a to-do" rows and no help line: the
+ * week is over), then By Class. No Weekend plan: those weeks never had one, and an empty one would
+ * be new content.
+ */
+function pastWeekBlocks_(week, contentWidth) {
+  var colors = {};
+  week.classes.forEach(function (g) { colors[g.name] = g.color; });
+  var blocks = [{ line: week.heading, look: 'h2' }];
+  if (week.count) blocks.push({ line: week.count, look: 'count' });
+  blocks.push({ line: BY_DAY_TITLE, look: 'h3' });
+  var rows = [headerRow_(BY_DAY_HEADERS, HEADER_BG)];
+  SCHEDULE_WEEKDAY_NAMES.forEach(function (day) {
+    var d = week.days[day];
+    if (!d.rows.length && !d.staff.length) return;
+    rows.push(groupRow_(day, DAY_ROW_BG, BY_DAY_HEADERS.length));
+    d.rows.forEach(function (r) {
+      var cls = { text: r.middle, runs: [], bg: colors[r.middle] || r.color || OLD_DEFAULT_COLOR };
+      rows.push({ look: 'plain', cells: [pastAssignmentCell_(r, true), cls, { chip: statusChip_(r.status) }, r.note] });
+    });
+    d.staff.forEach(function (s) {
+      var row = staffRow_(s);
+      // The week is over: an empty Assignment cell stays empty instead of saying "+ Add a to-do".
+      if (!richHasText_(s.cells[0])) row.cells[0] = richText_('');
+      rows.push(row);
+    });
+  });
+  if (rows.length > 1) blocks.push({ table: { rows: rows, widths: scaledColumnWidths_(BY_DAY_WIDTHS, contentWidth), center: [1, 2] } });
+  else blocks.push({ line: NO_ASSIGNMENTS_TEXT, look: 'muted' });
+
+  blocks.push({ line: BY_CLASS_TITLE, look: 'h3' });
+  week.classes.forEach(function (g) {
+    var table = [groupRow_(g.name, g.color, BY_CLASS_HEADERS.length), headerRow_(BY_CLASS_HEADERS, HEADER_BG)];
+    g.rows.forEach(function (r) {
+      table.push({ look: 'plain', cells: [pastAssignmentCell_(r, false), richText_(pastDueText_(r)), { chip: statusChip_(r.status) }, r.note] });
+    });
+    blocks.push({ table: { rows: table, widths: scaledColumnWidths_(BY_CLASS_WIDTHS, contentWidth), center: [1, 2] } });
+  });
+  if (week.nothingDue) blocks.push({ line: week.nothingDue, look: 'muted' });
+  else if (!week.classes.length) blocks.push({ line: NO_ASSIGNMENTS_TEXT, look: 'muted' });
+  return blocks;
+}
+
+/** True when every character of a rich cell is in AutoPlanner's gray italic (mutedStyle_). */
+function richIsMuted_(cell) {
+  if (!cell.text) return false;
+  var covered = 0;
+  cell.runs.forEach(function (r) {
+    if (r.style.italic && colorHex_(r.style.foregroundColor) === MUTED_FG) covered += r.e - r.s;
+  });
+  return covered >= cell.text.length;
+}
+
+/** A rewritten Assignment cell taken apart again: { title, time, reason } (see pastAssignmentCell_). */
+function splitPastAssignmentCell_(cell, timeAfterTitle) {
+  var out = { title: cell, time: '', reason: '' };
+  var cut = cell.text.lastIndexOf('\n');
+  if (cut >= 0) {
+    var last = richSlice_(cell, cut + 1, cell.text.length);
+    if (isKeptReason_(last.text) && richIsMuted_(last)) {
+      out.reason = last.text;
+      out.title = richSlice_(cell, 0, cut);
+    }
+  }
+  var m = timeAfterTitle ? / \(due ([^)]*)\)$/.exec(out.title.text) : null;
+  if (m && TIME_TEXT.test(m[1])) {
+    var at = out.title.text.length - m[0].length;
+    var suffixLinked = out.title.runs.some(function (r) { return r.e > at && r.style.link; });
+    if (!suffixLinked) {
+      out.time = m[1];
+      out.title = richSlice_(out.title, 0, at);
+    }
+  }
+  return out;
+}
+
+/** A Canvas row of a rewritten past week, read back into the record's form. */
+function newPastCanvasRow_(cells, inByDay) {
+  var parts = splitPastAssignmentCell_(readRichCell_(cells[0]), inByDay);
+  var second = cellText_(getCellText_(cells[1]));
+  var row = {
+    title: parts.title,
+    url: getCellLinkUrl_(cells[0]) || '',
+    middle: second,
+    time: parts.time,
+    reason: parts.reason,
+    status: cellStatus_(cells[2], false),
+    note: readRichCell_(cells[3]),
+  };
+  if (!inByDay) {
+    // "Tuesday, 8:00 AM": the day as it was written, then the time.
+    var m = /^(.*), (\d{1,2}:\d{2}\s?[AaPp][Mm])$/.exec(second);
+    if (m) { row.middle = m[1]; row.time = m[2]; } else if (TIME_TEXT.test(second)) { row.middle = ''; row.time = second; }
+  }
+  return row;
+}
+
+/**
+ * Reads a week in this layout back into the record readOldPastWeek_ makes, so the two can be
+ * compared: { week } or { problem }. In By Day, the Canvas rows are found the way updates find
+ * them (see eachDayTableRow_): for each By Class row, the By Day row with its link, best under its
+ * own day and with its title. Every other row is a staff row.
+ */
+function readNewPastWeek_(tabJson) {
+  var week = emptyPastWeek_();
+  var content = tabBodyContent_(tabJson);
+  var lines = [];
+  var dayRows = null;
+  var problem = '';
+  content.forEach(function (el) {
+    if (el.paragraph) {
+      var text = paragraphPlainText_(el.paragraph).replace(/\n$/, '').trim();
+      if (text) lines.push(text);
+      return;
+    }
+    if (!el.table || problem) return;
+    var rows = el.table.tableRows || [];
+    if (rows.length && sameList_(rowTexts_(rows[0]), BY_DAY_HEADERS)) {
+      if (dayRows) problem = 'it has two By Day tables';
+      dayRows = rows;
+      return;
+    }
+    if (rows.length > 1 && sameList_(rowTexts_(rows[1]), BY_CLASS_HEADERS)) {
+      var group = { name: cellText_(getCellText_(rows[0].tableCells[0])), color: cellBackground_(rows[0].tableCells[0]), rows: [] };
+      rows.slice(2).forEach(function (row) { group.rows.push(newPastCanvasRow_(row.tableCells || [], false)); });
+      week.classes.push(group);
+      return;
+    }
+    problem = 'it has a table that isn\'t By Day or By Class';
+  });
+  if (problem) return { problem: problem };
+  week.heading = lines[0] || '';
+  if (lines[1] && lines[1].indexOf(COUNT_LINE_PREFIX) === 0) week.count = lines[1];
+  week.nothingDue = lines.filter(function (l) { return l.indexOf(NOTHING_DUE_PREFIX) === 0; })[0] || '';
+
+  var found = [];
+  var day = '';
+  (dayRows || []).slice(1).forEach(function (row) {
+    var cells = row.tableCells || [];
+    var name = dayRowName_(cells, { old: false });
+    if (name) { day = name; return; }
+    var canvas = newPastCanvasRow_(cells, true);
+    found.push({ day: day || SCHEDULE_WEEKDAY_NAMES[0], cells: cells, canvas: canvas, claimed: false });
+  });
+  week.classes.forEach(function (g) {
+    g.rows.forEach(function (cr) {
+      var best = null;
+      var bestFit = -1;
+      found.forEach(function (f) {
+        var same = cr.url ? f.canvas.url === cr.url : !f.canvas.url && f.canvas.title.text === cr.title.text;
+        if (f.claimed || !same) return;
+        var fit = (f.day === weekdayFromText_(cr.middle) ? 2 : 0) + (f.canvas.title.text === cr.title.text ? 1 : 0);
+        if (fit > bestFit) { best = f; bestFit = fit; }
+      });
+      if (best) best.claimed = true;
+    });
+  });
+  found.forEach(function (f) {
+    if (f.claimed) return week.days[f.day].rows.push(f.canvas);
+    week.days[f.day].staff.push({
+      cells: [
+        withoutPlaceholder_(readRichCell_(f.cells[0]), ADD_TODO_TEXT).cell,
+        withoutPlaceholder_(readRichCell_(f.cells[1]), ADDED_BY_STAFF_TEXT).cell,
+        readRichCell_(f.cells[3]),
+      ],
+      status: cellStatus_(f.cells[2], false),
+    });
+  });
+  return { week: week };
+}
+
+/**
+ * A rich cell as one string: its text, then the look of each stretch. The table's own text color is
+ * left out (Docs may or may not store it on each run), so only what someone could see differs.
+ */
+function richKey_(cell) {
+  var marks = [];
+  for (var i = 0; i < cell.text.length; i++) marks.push('');
+  cell.runs.forEach(function (r) {
+    var st = r.style;
+    var parts = [];
+    RICH_STYLE_FIELDS.forEach(function (f) { if (st[f]) parts.push(f); });
+    if (st.link) parts.push('link ' + (st.link.url || ('tab ' + st.link.tabId)));
+    var fg = colorHex_(st.foregroundColor);
+    if (fg && fg !== DATA_FG) parts.push('color ' + fg);
+    var bg = colorHex_(st.backgroundColor);
+    if (bg) parts.push('highlight ' + bg);
+    for (var k = r.s; k < r.e && k < marks.length; k++) marks[k] = parts.join(',');
+  });
+  var out = [];
+  marks.forEach(function (m, k) {
+    if (k === 0 || m !== marks[k - 1]) out.push(k + ':' + (m || 'plain'));
+  });
+  return cell.text + ' [' + out.join(' ') + ']';
+}
+
+/**
+ * The first difference between two week records, in words ('' when they match): every title, link,
+ * class, day, due time, kept-row reason, Status, note (with its look) and staff row, in order.
+ */
+function pastWeekDifference_(want, got) {
+  var diff = '';
+  var check = function (where, a, b) {
+    if (!diff && a !== b) diff = where + ': "' + String(a).slice(0, 80) + '" became "' + String(b).slice(0, 80) + '"';
+  };
+  var rich = function (where, a, b) { check(where, richKey_(a), richKey_(b)); };
+  var rows = function (where, a, b) {
+    check(where + ', number of rows', a.length, b.length);
+    a.forEach(function (r, i) {
+      if (diff || !b[i]) return;
+      var at = where + ', row ' + (i + 1) + ' ("' + cellText_(r.title.text).slice(0, 40) + '")';
+      rich(at + ', title', r.title, b[i].title);
+      check(at + ', link', r.url, b[i].url);
+      check(at + ', ' + (where.indexOf('By Day') === 0 ? 'class' : 'day'), r.middle, b[i].middle);
+      check(at + ', due time', r.time, b[i].time);
+      check(at + ', why it was kept', r.reason, b[i].reason);
+      check(at + ', Status', r.status, b[i].status);
+      rich(at + ', note', r.note, b[i].note);
+    });
+  };
+  check('heading', want.heading, got.heading);
+  check('count line', want.count, got.count);
+  check('number of By Class tables', want.classes.length, got.classes.length);
+  want.classes.forEach(function (g, i) {
+    if (diff || !got.classes[i]) return;
+    check('By Class table ' + (i + 1) + ', class', g.name, got.classes[i].name);
+    rows('By Class, ' + g.name, g.rows, got.classes[i].rows);
+  });
+  check('the line naming classes with nothing due', want.nothingDue, got.nothingDue);
+  SCHEDULE_WEEKDAY_NAMES.forEach(function (day) {
+    var a = want.days[day];
+    var b = got.days[day];
+    rows('By Day, ' + day, a.rows, b.rows);
+    check('By Day, ' + day + ', number of staff rows', a.staff.length, b.staff.length);
+    a.staff.forEach(function (s, i) {
+      if (diff || !b.staff[i]) return;
+      var at = 'By Day, ' + day + ', staff row ' + (i + 1) + ' ("' + cellText_(s.cells[0].text).slice(0, 40) + '")';
+      ['assignment', 'class', 'note'].forEach(function (what, c) { rich(at + ', ' + what, s.cells[c], b.staff[i].cells[c]); });
+      check(at + ', Status', s.status, b.staff[i].status);
+    });
+  });
+  return diff;
+}
+
+/**
+ * Rewrites one old week in Past weeks: builds the new copy next to it under a temporary title, reads
+ * the Doc back in full, and compares the copy with `week` (the record read from the old tab before).
+ * Only if they match does the copy take the old tab's title and place, in one batch. Otherwise the
+ * copy is deleted and the old tab stays exactly as it was. Gives back { ok, problem, read } where
+ * `read` is the Doc as it is afterwards (null if unknown).
+ */
+function reformatPastWeekTab_(docId, docJson, pastTabId, weekTabId, week) {
+  var past = findTabJsonById_(docJson, pastTabId);
+  var weekTab = findTabJsonById_(docJson, weekTabId);
+  var title = weekTab.tabProperties.title;
+  var temp = title + UPDATING_SUFFIX;
+  var at = (past.childTabs || []).map(function (t) { return t.tabProperties.tabId; }).indexOf(weekTabId);
+  var stale = findTabByTitleAnywhere_(docJson, temp);
+  if (stale) docsBatchUpdate_(docId, [{ deleteTab: { tabId: stale.tabProperties.tabId } }]);
+  var newId = addWeekChildTab_(docId, pastTabId, temp, at + 1);
+  var problem = '';
+  var read = null;
+  try {
+    sleepDocsChunkGap_();
+    batchUpdateChunked_(docId, weekTabRequestsFromBlocks_(newId, pastWeekBlocks_(week, tabContentWidth_(weekTab))));
+    read = docsGet_(docId, { includeTabsContent: true });
+    // The old tab once more: if someone typed in it meanwhile, the copy is out of date.
+    var oldNow = readOldPastWeek_(findTabJsonById_(read, weekTabId));
+    if (oldNow.state !== 'old' || pastWeekDifference_(week, oldNow.week)) {
+      problem = 'the week changed while it was being rewritten (run reformatPastWeeks again)';
+    } else {
+      var built = readNewPastWeek_(findTabJsonById_(read, newId));
+      problem = built.problem || pastWeekDifference_(week, built.week);
+    }
+  } catch (err) {
+    problem = String((err && err.message) || err);
+  }
+  if (problem) {
+    try {
+      docsBatchUpdate_(docId, [{ deleteTab: { tabId: newId } }]);
+    } catch (err2) {
+      problem += '. The copy "' + temp + '" could not be deleted; the next reformatPastWeeks run deletes it';
+    }
+    return { ok: false, problem: problem, read: null };
+  }
+  docsBatchUpdate_(docId, [
+    { deleteTab: { tabId: weekTabId } },
+    { updateDocumentTabProperties: { tabProperties: { tabId: newId, title: title }, fields: 'title' } },
+  ]);
+  return { ok: true, problem: '', read: swapInRead_(read, pastTabId, weekTabId, newId, title) };
+}
+
+/**
+ * The text quoted by each comment in a Doc (Drive keeps comments, not the Docs API), or null if
+ * Drive didn't say. A tab that is replaced loses its comments' places in the text; they stay in
+ * the Doc's comment list. Counted for the log, so it's known whether any existed.
+ */
+function docCommentQuotes_(docId) {
+  var quotes = [];
+  var page = '';
+  try {
+    do {
+      var url = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(docId) +
+        '/comments?pageSize=100&includeDeleted=false&fields=nextPageToken,comments(quotedFileContent(value))' +
+        (page ? '&pageToken=' + encodeURIComponent(page) : '');
+      var res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+      if (res.getResponseCode() !== 200) return null;
+      var body = JSON.parse(res.getContentText());
+      (body.comments || []).forEach(function (c) { quotes.push(String((c.quotedFileContent && c.quotedFileContent.value) || '')); });
+      page = body.nextPageToken || '';
+    } while (page);
+  } catch (err) {
+    return null;
+  }
+  return quotes;
+}
+
+/** All the text in a tab, tables included. */
+function tabAllText_(tabJson) {
+  var parts = [];
+  var paragraph = function (p) { parts.push(paragraphPlainText_(p)); };
+  tabBodyContent_(tabJson).forEach(function (el) {
+    if (el.paragraph) paragraph(el.paragraph);
+    (el.table ? el.table.tableRows || [] : []).forEach(function (row) {
+      (row.tableCells || []).forEach(function (cell) {
+        (cell.content || []).forEach(function (se) { if (se.paragraph) paragraph(se.paragraph); });
+      });
+    });
+  });
+  return parts.join(' ');
+}
+
+/** How many of `quotes` quote text that is in this tab (null if the comments aren't known). */
+function commentsInTab_(quotes, tabJson) {
+  if (!quotes) return null;
+  var squash = function (t) {
+    return String(t).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+  };
+  var text = squash(tabAllText_(tabJson));
+  return quotes.filter(function (q) { var t = squash(q); return t && text.indexOf(t) >= 0; }).length;
+}
+
+/**
+ * Every week in one Doc's Past weeks, newest first: [{ title, result, detail, stats, comments }],
+ * where result is 'WOULD CONVERT' or 'CONVERTED', 'ALREADY NEW', 'SKIP' or 'FAILED'. opts:
+ *   dryRun:      change nothing
+ *   msLeft():    how long the run may still take; it stops between weeks when that's under
+ *                REFORMAT_RESERVE_MS, and says so with { stopped: true }
+ *   beforeWeek(): called before a week is written (App.gs keeps the student's row held with it)
+ * Copies left by a run that was cut off are deleted first (their week is still there, untouched).
+ */
+function reformatPastWeeksInDoc_(docId, opts) {
+  var o = opts || {};
+  var out = { weeks: [], stopped: false, leftovers: 0 };
+  var read = docsGet_(docId, { includeTabsContent: true });
+  var past = findTabByTitleAnywhere_(read, PAST_WEEKS_TITLE);
+  if (!past) return out;
+  var pastId = past.tabProperties.tabId;
+  var isLeftover = function (t) {
+    var title = t.tabProperties.title || '';
+    var base = title.slice(0, -UPDATING_SUFFIX.length);
+    return title.slice(-UPDATING_SUFFIX.length) === UPDATING_SUFFIX && !!findChildTabIdByTitle_(past, base);
+  };
+  var leftovers = (past.childTabs || []).filter(isLeftover);
+  out.leftovers = leftovers.length;
+  if (leftovers.length && !o.dryRun) {
+    docsBatchUpdate_(docId, leftovers.map(function (t) { return { deleteTab: { tabId: t.tabProperties.tabId } }; }));
+    read = docsGet_(docId, { includeTabsContent: true });
+    past = findTabJsonById_(read, pastId);
+  }
+  var quotes = docCommentQuotes_(docId);
+  var ids = (past.childTabs || []).filter(function (t) { return o.dryRun ? !isLeftover(t) : true; })
+    .map(function (t) { return t.tabProperties.tabId; });
+  for (var i = 0; i < ids.length; i++) {
+    var tab = findTabJsonById_(read, ids[i]);
+    if (!tab) continue;
+    var found = readOldPastWeek_(tab);
+    var entry = { title: tab.tabProperties.title, result: '', detail: '', stats: found.stats || null, comments: commentsInTab_(quotes, tab) };
+    out.weeks.push(entry);
+    if (found.state === 'new') { entry.result = 'ALREADY NEW'; continue; }
+    if (found.state === 'skip') { entry.result = 'SKIP'; entry.detail = found.reason; continue; }
+    if (o.dryRun) { entry.result = 'WOULD CONVERT'; continue; }
+    if (o.msLeft && o.msLeft() < REFORMAT_RESERVE_MS) {
+      out.weeks.pop();
+      out.stopped = true;
+      break;
+    }
+    if (o.beforeWeek) o.beforeWeek();
+    var done = reformatPastWeekTab_(docId, read, pastId, ids[i], found.week);
+    entry.result = done.ok ? 'CONVERTED' : 'FAILED';
+    entry.detail = done.problem;
+    read = done.read || docsGet_(docId, { includeTabsContent: true });
+  }
+  return out;
+}
+
+/** What one week's log line says after its result: "6 assignments, Statuses: ...". */
+function pastWeekStatsText_(stats, comments) {
+  var parts = [];
+  if (stats) {
+    var list = function (counts) {
+      return Object.keys(counts).map(function (k) { return counts[k] + ' ' + k; }).join(', ') || 'none';
+    };
+    parts.push(stats.assignments + ' assignment' + (stats.assignments === 1 ? '' : 's'));
+    parts.push('Status chips: ' + list(stats.chips));
+    parts.push(stats.notes + ' row' + (stats.notes === 1 ? '' : 's') + ' with a note');
+    parts.push(stats.staffRows + ' staff row' + (stats.staffRows === 1 ? '' : 's'));
+    parts.push('kept rows: ' + list(stats.kept));
+    parts.push(stats.priorityDropped + ' Priority label' + (stats.priorityDropped === 1 ? '' : 's') + ' dropped');
+    parts.push(stats.statusWas + ' "Status was" note' + (stats.statusWas === 1 ? '' : 's'));
+    if (stats.dayWas) parts.push(stats.dayWas + ' "Day was" note' + (stats.dayWas === 1 ? '' : 's'));
+    if (stats.emptyRows) parts.push(stats.emptyRows + ' empty row' + (stats.emptyRows === 1 ? '' : 's') + ' left out');
+  }
+  parts.push('comments: ' + (comments === null || comments === undefined ? 'unknown (Drive did not list them)' : comments));
+  return parts.join(' · ');
 }

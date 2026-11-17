@@ -7,14 +7,17 @@
 // and staff edits. Every read numbers the content the way Google does (see numberTab), and inside
 // asStaff(fn) the requests that edit by position (type, delete, insert or delete a table row, add a
 // table, pick a Status) really change the laid-out tab, so code that edits a Doc the way a person
-// would can run here unchanged. All data is made up.
+// would can run here unchanged. fakeDocs(tabs, { execute: true }) goes one step further: every
+// request is carried out by position, the way Google would (text, chips, text and cell styles,
+// merged cells, column widths), so a tab the real writer builds can be read back and checked. All
+// data is made up.
 
 const { applyFieldMask } = require('./field-mask');
 
 const tcell = (text, link) => ({ content: [{ paragraph: { elements: [{ textRun: { content: text + '\n', textStyle: link ? { link: { url: link } } : {} } }] } }] });
 
-function fakeDocs(tabs) {
-  const st = { tabs, written: {}, batches: [], n: 0, chips: 0, failOnFill: false, staff: 0 };
+function fakeDocs(tabs, options) {
+  const st = { tabs, written: {}, batches: [], n: 0, chips: 0, failOnFill: false, staff: 0, execute: !!(options && options.execute) };
   const all = () => { const out = []; const walk = (ts) => ts.forEach((t) => { out.push(t); walk(t.childTabs || []); }); walk(st.tabs); return out; };
   const find = (id) => all().find((t) => t.tabProperties.tabId === id);
   const kidsOf = (parentId) => (parentId ? (find(parentId).childTabs = find(parentId).childTabs || []) : st.tabs);
@@ -62,6 +65,7 @@ function fakeDocs(tabs) {
       const option = def.dropdownDefinitionProperties.options.find((o) => o.optionId === d.selectedOptionId);
       if (!option) throw new Error('Invalid requests[0].insertDropdown: no option ' + d.selectedOptionId);
       (st.written[d.location.tabId] = st.written[d.location.tabId] || []).push(option.displayValue);
+      if (st.execute) return applyEdit(find, r);
       return { insertDropdown: { dropdownId: 'kix.chip' + (++st.chips) } };
     }
     if (r.updateDropdownProperties) {
@@ -76,6 +80,14 @@ function fakeDocs(tabs) {
       if (done) return done;
     }
     const loc = r.insertText && r.insertText.location;
+    if (st.execute) {
+      if (loc && find(loc.tabId) && st.failOnFill && /\(updating\)$/.test(find(loc.tabId).tabProperties.title)) throw new Error('Exceeded maximum execution time');
+      const done = applyEdit(find, r);
+      if (done) {
+        if (loc) (st.written[loc.tabId] = st.written[loc.tabId] || []).push(r.insertText.text);
+        return done;
+      }
+    }
     if (loc) {
       if (!find(loc.tabId)) throw new Error('No tab ' + loc.tabId);
       if (st.failOnFill && /\(updating\)$/.test(find(loc.tabId).tabProperties.title)) throw new Error('Exceeded maximum execution time');
@@ -287,16 +299,20 @@ function copiedCell(cell) {
 
 /**
  * Applies one request that edits a laid-out tab by position, the way a real Doc would: insertText,
- * deleteContentRange and updateTextStyle (inside one paragraph), insertTableRow, deleteTableRow and
- * insertTable. Returns the reply, or null for any other request. Errors use Google's own words where
+ * deleteContentRange (inside one paragraph), updateTextStyle, insertTableRow, deleteTableRow and
+ * insertTable; and, for the execute mode, insertDropdown, updateParagraphStyle and the table style
+ * requests. Returns the reply, or null for any other request. Errors use Google's own words where
  * a test depends on them.
  */
 function applyEdit(find, r) {
   const kind = Object.keys(r)[0];
   const q = r[kind];
+  const tableStart = (x) => x.tableStartLocation || x.tableRange.tableCellLocation.tableStartLocation;
   const place = { insertText: (x) => x.location, insertTable: (x) => x.location, deleteContentRange: (x) => x.range,
     updateTextStyle: (x) => x.range, insertTableRow: (x) => x.tableCellLocation.tableStartLocation,
-    deleteTableRow: (x) => x.tableCellLocation.tableStartLocation }[kind];
+    deleteTableRow: (x) => x.tableCellLocation.tableStartLocation, insertDropdown: (x) => x.location,
+    updateParagraphStyle: (x) => x.range, updateTableCellStyle: tableStart, mergeTableCells: tableStart,
+    updateTableColumnProperties: tableStart, updateTableRowStyle: tableStart }[kind];
   if (!place) return null;
   const tab = find(place(q).tabId);
   if (!tab) throw new Error('No tab ' + place(q).tabId);
@@ -310,9 +326,97 @@ function applyEdit(find, r) {
   const tableAt = (location) => {
     const el = body.content.find((x) => x.table && x.startIndex === location.tableStartLocation.index);
     if (!el) throw new Error('Invalid requests[0].' + kind + ': Invalid table start location. Must specify the start index of the table.');
-    if (!el.table.tableRows[location.rowIndex]) throw new Error('Invalid requests[0].' + kind + ': the table has no row ' + location.rowIndex);
+    if (location.rowIndex !== undefined && !el.table.tableRows[location.rowIndex]) throw new Error('Invalid requests[0].' + kind + ': the table has no row ' + location.rowIndex);
     return el.table;
   };
+  const pick = (style, fields) => {
+    const out = {};
+    String(fields).split(',').forEach((f) => { if (style[f] !== undefined) out[f] = style[f]; });
+    return out;
+  };
+  // Every paragraph that overlaps [startIndex, endIndex), for the requests that may span several.
+  const paragraphsOver = (range) => paragraphsIn(body).filter((p) => p.el.startIndex < range.endIndex && range.startIndex < p.el.endIndex);
+
+  if (kind === 'insertDropdown') {
+    const index = q.location.index;
+    const p = paragraphAt(index);
+    const els = p.el.paragraph.elements;
+    const k = els.findIndex((e) => e.startIndex <= index && index < e.endIndex);
+    const def = (tab.documentTab.dropdownDefinitions || {})[q.dropdownDefinitionId];
+    const option = def.dropdownDefinitionProperties.options.find((o) => o.optionId === q.selectedOptionId);
+    const chip = { dropdown: { dropdownId: 'kix.chip' + (++chipCount), dropdownProperties: {
+      dropdownDefinitionId: q.dropdownDefinitionId, selectedOptionId: q.selectedOptionId, displayValue: option.displayValue } } };
+    const e = els[k];
+    const offset = index - e.startIndex;
+    if (e.textRun && offset > 0) {
+      const after = { textRun: { content: e.textRun.content.slice(offset), textStyle: Object.assign({}, e.textRun.textStyle) } };
+      e.textRun.content = e.textRun.content.slice(0, offset);
+      els.splice(k + 1, 0, chip, after);
+    } else {
+      els.splice(k, 0, chip);
+    }
+    return { insertDropdown: { dropdownId: chip.dropdown.dropdownId } };
+  }
+
+  if (kind === 'updateParagraphStyle') {
+    paragraphsOver(q.range).forEach((p) => {
+      p.el.paragraph.paragraphStyle = Object.assign({}, p.el.paragraph.paragraphStyle || {}, pick(q.paragraphStyle, q.fields));
+    });
+    return {};
+  }
+
+  if (kind === 'updateTableCellStyle' || kind === 'mergeTableCells') {
+    const where = q.tableRange.tableCellLocation;
+    const table = tableAt(where);
+    const { rowSpan, columnSpan } = q.tableRange;
+    for (let row = where.rowIndex; row < where.rowIndex + rowSpan; row++) {
+      for (let col = where.columnIndex; col < where.columnIndex + columnSpan; col++) {
+        const cell = table.tableRows[row].tableCells[col];
+        const now = cell.tableCellStyle || { rowSpan: 1, columnSpan: 1 };
+        cell.tableCellStyle = kind === 'mergeTableCells'
+          ? Object.assign({}, now, { columnSpan: col === where.columnIndex ? columnSpan : 1 })
+          : Object.assign({}, now, pick(q.tableCellStyle, q.fields));
+      }
+    }
+    return {};
+  }
+
+  if (kind === 'updateTableColumnProperties') {
+    const table = tableAt({ tableStartLocation: q.tableStartLocation });
+    const columns = ((table.tableStyle = table.tableStyle || {}).tableColumnProperties = table.tableStyle.tableColumnProperties || []);
+    q.columnIndices.forEach((i) => { columns[i] = Object.assign({}, columns[i] || {}, pick(q.tableColumnProperties, q.fields)); });
+    return {};
+  }
+
+  if (kind === 'updateTableRowStyle') {
+    const table = tableAt({ tableStartLocation: q.tableStartLocation });
+    q.rowIndices.forEach((i) => { table.tableRows[i].tableRowStyle = Object.assign({}, table.tableRows[i].tableRowStyle || {}, pick(q.tableRowStyle, q.fields)); });
+    return {};
+  }
+
+  if (kind === 'updateTextStyle') {
+    if (!(q.range.endIndex > q.range.startIndex)) throw new Error('Invalid requests[0].updateTextStyle: The range should not be empty.');
+    const fields = String(q.fields).split(',');
+    paragraphsOver(q.range).forEach((p) => {
+      const out = [];
+      p.el.paragraph.elements.forEach((e) => {
+        const from = Math.max(q.range.startIndex, e.startIndex);
+        const to = Math.min(q.range.endIndex, e.endIndex);
+        if (from >= to || !e.textRun) return out.push(e);
+        const piece = (a, b, inRange) => {
+          if (a >= b) return;
+          const textStyle = Object.assign({}, e.textRun.textStyle);
+          if (inRange) fields.forEach((f) => { if (q.textStyle[f] === undefined) delete textStyle[f]; else textStyle[f] = q.textStyle[f]; });
+          out.push({ textRun: { content: e.textRun.content.slice(a - e.startIndex, b - e.startIndex), textStyle } });
+        };
+        piece(e.startIndex, from, false);
+        piece(from, to, true);
+        piece(to, e.endIndex, false);
+      });
+      p.el.paragraph.elements = out;
+    });
+    return {};
+  }
 
   if (kind === 'insertText') {
     const index = q.location.index;
@@ -329,7 +433,7 @@ function applyEdit(find, r) {
     return {};
   }
 
-  if (kind === 'deleteContentRange' || kind === 'updateTextStyle') {
+  if (kind === 'deleteContentRange') {
     const { startIndex, endIndex } = q.range;
     if (!(endIndex > startIndex)) throw new Error('Invalid requests[0].' + kind + ': The range should not be empty.');
     const p = paragraphAt(startIndex);

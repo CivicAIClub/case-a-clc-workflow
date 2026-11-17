@@ -105,7 +105,7 @@ Canvas work due on a Saturday or Sunday is listed in By Day under that day.
 
 ### If a Doc still has the old layout
 
-Until November 2026, week tabs had a Priority column, a Status you typed, and an **Added by staff** table at the bottom. The next update changes each current week tab to the layout above. A typed Status becomes the matching dropdown choice. Each Added by staff row moves under its day in By Day, or into the Weekend plan if its day was Saturday or Sunday. Nothing you typed is lost. Weeks already in **Past weeks** stay as they were.
+Until November 2026, week tabs had a Priority column, a Status you typed, and an **Added by staff** table at the bottom. The next update changes each current week tab to the layout above. A typed Status becomes the matching dropdown choice. Each Added by staff row moves under its day in By Day, or into the Weekend plan if its day was Saturday or Sunday. Nothing you typed is lost. Weeks already in **Past weeks** stay as they were until the owner runs a one-time tool that gives them the new look too, keeping every word: the Priority column is the only thing that goes.
 
 ## 7. Change or remove a student
 
